@@ -12,6 +12,7 @@ fn prices(tickers: usize, hostile: bool) -> Prices {
         hostile,
         ..PricesOptions::default()
     })
+    .unwrap()
 }
 
 #[test]
@@ -57,7 +58,7 @@ fn golden_rows_are_stable() {
 }
 
 const GOLDEN_CALM: u64 = 10_600_207_667_285_220_552;
-const GOLDEN_HOSTILE: u64 = 17_049_446_282_210_177_676;
+const GOLDEN_HOSTILE: u64 = 14_734_069_032_027_083_984;
 
 #[test]
 fn bars_are_internally_consistent() {
@@ -124,13 +125,58 @@ fn hostile_rows_cover_every_category() {
     assert!(close.iter().flatten().any(|c| c.is_nan()), "NaN close");
     assert!(close.contains(&Some(0.0)), "zero close");
     assert!(returns.contains(&Some(f64::INFINITY)), "infinite return");
+    let volume = i64s(&batch, "volume");
+    let high = f64s(&batch, "high");
+    let low = f64s(&batch, "low");
     assert!(
-        returns
-            .iter()
-            .flatten()
-            .any(|r| r.to_bits() == (-0.0f64).to_bits()),
-        "negative-zero return"
+        (0..batch.num_rows()).any(|i| volume[i] == Some(0) && high[i] == low[i]),
+        "halted day"
     );
     assert!(i64s(&batch, "volume").contains(&None), "null volume");
     assert!(f64s(&batch, "vwap").contains(&None), "null vwap");
+}
+
+#[test]
+fn returns_follow_reported_closes_even_in_hostile_rows() {
+    let dataset = prices(10, true);
+    let batch = dataset.batch(0..dataset.num_rows());
+    let close: Vec<f64> = f64s(&batch, "close")
+        .into_iter()
+        .map(Option::unwrap)
+        .collect();
+    let returns = f64s(&batch, "return_1d");
+    let per = dataset.days().len();
+    let mut infinite = 0;
+    for i in 0..batch.num_rows() {
+        if i % per == 0 {
+            assert_eq!(returns[i], None);
+            continue;
+        }
+        let expected = close[i] / close[i - 1] - 1.0;
+        let actual = returns[i].unwrap();
+        if expected.is_nan() {
+            assert!(actual.is_nan(), "row {i}: {actual} should be NaN");
+        } else {
+            assert_eq!(actual.to_bits(), expected.to_bits(), "row {i}");
+        }
+        if close[i - 1] == 0.0 && close[i] > 0.0 {
+            assert_eq!(actual, f64::INFINITY, "row {i}: the bar after a zero close");
+            infinite += 1;
+        }
+    }
+    assert!(infinite > 0, "no zero close was followed by a priced bar");
+}
+
+#[test]
+fn rejects_more_tickers_than_equities() {
+    let err = Prices::new(PricesOptions {
+        tickers: 500,
+        securities: 100,
+        ..PricesOptions::default()
+    })
+    .unwrap_err();
+    assert!(
+        err.to_string().contains("asked for prices of 500 equities"),
+        "{err}"
+    );
 }

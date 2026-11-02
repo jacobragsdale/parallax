@@ -7,11 +7,11 @@ use std::collections::HashSet;
 use common::{decimals, f64s, hash, i32s, i64s, strings};
 use jiff::civil::date;
 use jiff::tz::TimeZone;
-use parallax_datagen::Dataset;
 use parallax_datagen::calendar::{epoch_days, from_epoch_days, is_trading_day};
 use parallax_datagen::decimal::mul_round;
 use parallax_datagen::positions::{DST_INSTANTS_MICROS, Positions, PositionsOptions, schema};
 use parallax_datagen::universe::COUNTRIES;
+use parallax_datagen::{Dataset, OptionsError};
 
 fn positions(rows: u64, hostile: bool) -> Positions {
     Positions::new(PositionsOptions {
@@ -20,6 +20,7 @@ fn positions(rows: u64, hostile: bool) -> Positions {
         hostile,
         ..PositionsOptions::default()
     })
+    .unwrap()
 }
 
 #[test]
@@ -38,7 +39,8 @@ fn same_options_give_same_rows_and_seeds_differ() {
         seed: 43,
         rows: 5_000,
         ..PositionsOptions::default()
-    });
+    })
+    .unwrap();
     assert_ne!(hash(&a), hash(&other_seed.batch(0..5_000)));
 }
 
@@ -63,8 +65,8 @@ fn golden_rows_are_stable() {
     );
 }
 
-const GOLDEN_CALM: u64 = 1_454_154_819_229_986_924;
-const GOLDEN_HOSTILE: u64 = 7_980_928_233_513_634_774;
+const GOLDEN_CALM: u64 = 8_110_764_695_908_192_369;
+const GOLDEN_HOSTILE: u64 = 9_263_514_958_236_493_211;
 
 /// The decimal identities hold in every row, hostile or not, because hostile
 /// quantities are re-derived rather than patched.
@@ -243,7 +245,8 @@ fn duplicate_keys_only_when_asked() {
         rows: 20_000,
         duplicate_key_rate: 0.01,
         ..PositionsOptions::default()
-    });
+    })
+    .unwrap();
     let ids: Vec<i64> = i64s(&with_duplicates.batch(0..20_000), "position_id")
         .into_iter()
         .flatten()
@@ -265,10 +268,41 @@ fn duplicate_keys_only_when_asked() {
 }
 
 #[test]
-#[should_panic(expected = "is not a trading day")]
-fn rejects_a_non_trading_as_of_date() {
-    let _ = Positions::new(PositionsOptions {
-        as_of: date(2026, 11, 1),
+fn rejects_options_that_cannot_produce_data() {
+    let sunday = date(2026, 11, 1);
+    let err = Positions::new(PositionsOptions {
+        as_of: sunday,
         ..PositionsOptions::default()
-    });
+    })
+    .unwrap_err();
+    assert_eq!(err, OptionsError::NotATradingDay(sunday));
+    assert!(
+        Positions::new(PositionsOptions {
+            duplicate_key_rate: 1.5,
+            ..PositionsOptions::default()
+        })
+        .is_err()
+    );
+    assert_eq!(
+        Positions::new(PositionsOptions {
+            securities: 0,
+            ..PositionsOptions::default()
+        })
+        .unwrap_err(),
+        OptionsError::EmptyUniverse
+    );
+}
+
+#[test]
+fn contracts_held_have_not_expired() {
+    let options = PositionsOptions::default();
+    let batch = positions(20_000, false).batch(0..20_000);
+    let as_of = epoch_days(options.as_of);
+    for maturity in i32s(&batch, "maturity_date").into_iter().flatten() {
+        assert!(
+            maturity > as_of,
+            "maturity {} is not after the as-of date",
+            from_epoch_days(maturity)
+        );
+    }
 }

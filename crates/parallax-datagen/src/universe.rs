@@ -9,6 +9,7 @@ use jiff::civil::{Date, date};
 
 use crate::decimal::from_f64;
 use crate::dist::{Weighted, log_normal, standard_normal};
+use crate::error::OptionsError;
 use crate::rng::{Rng, Stream};
 
 /// The kind of instrument a security is.
@@ -293,18 +294,30 @@ const HOSTILE_RANKS: [usize; 15] = [
 ];
 
 impl Universe {
-    /// Builds a universe of `securities` securities.
+    /// Builds a universe of `securities` securities. Bond maturities and contract
+    /// expiries fall after `reference`, the as-of date or last trade date of the
+    /// dataset that uses the universe.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if `securities` is zero.
-    #[must_use]
-    pub fn new(seed: u64, securities: usize, hostile: bool) -> Self {
-        assert!(securities > 0, "a universe needs at least one security");
+    /// Returns [`OptionsError::EmptyUniverse`] if `securities` is zero.
+    pub fn new(
+        seed: u64,
+        securities: usize,
+        hostile: bool,
+        reference: Date,
+    ) -> Result<Self, OptionsError> {
+        if securities == 0 {
+            return Err(OptionsError::EmptyUniverse);
+        }
         let mut rng = Rng::for_key(seed, Stream::Universe, 0);
         let country_frequency = Weighted::new(&COUNTRIES.map(|c| c.4));
         let rating_frequency = Weighted::new(&RATINGS.map(|r| r.1));
-        let mut used_tickers = HashSet::new();
+        // Reserving the hostile tickers in both modes keeps generated roots from
+        // colliding with them, and keeps calm and hostile universes identical apart
+        // from the renamed securities.
+        let mut used_tickers: HashSet<String> =
+            HOSTILE_TICKERS.iter().map(|&t| t.to_owned()).collect();
         let mut list: Vec<Security> = (0..securities)
             .map(|_| {
                 new_security(
@@ -312,6 +325,7 @@ impl Universe {
                     &country_frequency,
                     &rating_frequency,
                     &mut used_tickers,
+                    reference,
                 )
             })
             .collect();
@@ -368,7 +382,7 @@ impl Universe {
             }
         }
 
-        Self {
+        Ok(Self {
             security_frequency: Weighted::zipf(list.len(), 1.07),
             securities: list,
             funds,
@@ -376,7 +390,7 @@ impl Universe {
             book_frequency: Weighted::new(&book_weights),
             books,
             traders,
-        }
+        })
     }
 
     /// Returns the fund that `book` belongs to.
@@ -391,6 +405,7 @@ fn new_security(
     country_frequency: &Weighted,
     rating_frequency: &Weighted,
     used_tickers: &mut HashSet<String>,
+    reference: Date,
 ) -> Security {
     let asset_class = match rng.below(100) {
         0..75 => AssetClass::Equity,
@@ -409,9 +424,9 @@ fn new_security(
         NAME_SUFFIXES[rng.index(NAME_SUFFIXES.len())]
     );
     // Prices are typical USD prices converted to the local currency, so a Korean
-    // stock trades in tens of thousands of won.
+    // stock trades in tens of thousands of won. Bonds are quoted per 100 of face
+    // value in any currency.
     let fx = fx_rate_to_usd as f64 / 1e8;
-    let base_date = date(2026, 1, 1);
     let mut security = Security {
         ticker: root.clone(),
         name,
@@ -442,7 +457,7 @@ fn new_security(
         AssetClass::Bond => {
             let coupon_rate = (rng.uniform(0.5, 8.0) * 8.0).round() / 8.0;
             let years = 1 + rng.below(30) as i16;
-            let maturity = date(base_date.year() + years, 1 + rng.below(12) as i8, 15);
+            let maturity = date(reference.year() + years, 1 + rng.below(12) as i8, 15);
             let duration = f64::from(years) * rng.uniform(0.6, 0.9);
             let yield_to_maturity = (coupon_rate + 1.5 * standard_normal(rng)).max(0.05);
             security.ticker = format!("{root} {coupon_rate:.3} {}", maturity.year());
@@ -461,23 +476,25 @@ fn new_security(
             });
         }
         AssetClass::Future => {
-            let quarter = rng.index(FUTURE_MONTH_CODES.len());
-            let year = 2026 + rng.below(2) as i16;
-            security.ticker = format!("{root}{}{}", FUTURE_MONTH_CODES[quarter], year % 10);
+            let expiry = quarterly_expiries_after(reference)[rng.index(4)];
+            let code = FUTURE_MONTH_CODES[(expiry.month() / 3 - 1) as usize];
+            security.ticker = format!("{root}{code}{}", expiry.year() % 10);
             security.sector = None;
             security.industry = None;
-            security.base_price = log_normal(rng, libm::log(2_000.0), 1.0);
+            security.base_price = log_normal(rng, libm::log(2_000.0), 1.0) / fx;
             security.multiplier = FUTURE_MULTIPLIERS[rng.index(FUTURE_MULTIPLIERS.len())];
             security.volatility = log_normal(rng, libm::log(0.18), 0.3);
             security.average_daily_volume = log_normal(rng, libm::log(1.0e5), 1.0);
-            security.expiry = Some(date(year, 3 * (quarter as i8 + 1), 18));
+            security.expiry = Some(expiry);
         }
         AssetClass::Option => {
-            let expiry = date(2026 + rng.below(2) as i16, 1 + rng.below(12) as i8, 18);
+            let expiry = reference
+                .checked_add(jiff::Span::new().days(7 + rng.below(724) as i64))
+                .expect("in range");
             let strike = (log_normal(rng, libm::log(100.0), 0.6) / 5.0).round() * 5.0;
             let kind = if rng.chance(0.5) { 'C' } else { 'P' };
             security.ticker = format!("{root} {expiry} {kind}{strike:.0}");
-            security.base_price = log_normal(rng, libm::log(8.0), 1.0);
+            security.base_price = log_normal(rng, libm::log(8.0), 1.0) / fx;
             security.multiplier = 10_000;
             security.beta = 1.0 + 0.5 * standard_normal(rng);
             security.volatility = log_normal(rng, libm::log(0.6), 0.3);
@@ -488,6 +505,30 @@ fn new_security(
     debug_assert!(security.base_price > 0.0);
     debug_assert!(from_f64(security.base_price, 6) > 0);
     security
+}
+
+/// Returns the next four quarterly expiries (the 18th of March, June, September and
+/// December) strictly after `reference`.
+fn quarterly_expiries_after(reference: Date) -> [Date; 4] {
+    let mut expiries = [reference; 4];
+    let mut year = reference.year();
+    let mut month = 3 * ((reference.month() - 1) / 3 + 1);
+    for expiry in &mut expiries {
+        loop {
+            let candidate = date(year, month, 18);
+            if month == 12 {
+                year += 1;
+                month = 3;
+            } else {
+                month += 3;
+            }
+            if candidate > reference {
+                *expiry = candidate;
+                break;
+            }
+        }
+    }
+    expiries
 }
 
 /// Draws a ticker root of one to five letters that no earlier security uses.
@@ -513,10 +554,74 @@ fn unique_root(rng: &mut Rng, used: &mut HashSet<String>) -> String {
 mod tests {
     use super::*;
 
+    const REFERENCE: Date = date(2026, 10, 30);
+
+    #[test]
+    fn generated_tickers_never_collide_with_hostile_ones() {
+        for seed in 0..20 {
+            let u = Universe::new(seed, 10_000, true, REFERENCE).unwrap();
+            let mut seen = HashSet::new();
+            for s in &u.securities {
+                assert!(
+                    seen.insert(s.ticker.as_str()),
+                    "seed {seed}: {:?} twice",
+                    s.ticker
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn maturities_and_expiries_follow_the_reference_date() {
+        let u = Universe::new(9, 10_000, false, REFERENCE).unwrap();
+        for s in &u.securities {
+            if let Some(expiry) = s.expiry {
+                assert!(expiry > REFERENCE, "{} expires {expiry}", s.ticker);
+            }
+            if let Some(bond) = &s.bond {
+                assert!(
+                    bond.maturity > REFERENCE,
+                    "{} matures {}",
+                    s.ticker,
+                    bond.maturity
+                );
+            }
+        }
+        assert_eq!(
+            quarterly_expiries_after(date(2026, 12, 18)),
+            [
+                date(2027, 3, 18),
+                date(2027, 6, 18),
+                date(2027, 9, 18),
+                date(2027, 12, 18)
+            ]
+        );
+        assert_eq!(
+            quarterly_expiries_after(date(2026, 1, 2))[0],
+            date(2026, 3, 18)
+        );
+    }
+
+    #[test]
+    fn derivative_prices_are_in_local_currency() {
+        let u = Universe::new(10, 10_000, false, REFERENCE).unwrap();
+        for s in &u.securities {
+            let usd = s.base_price * s.fx_rate_to_usd as f64 / 1e8;
+            if s.asset_class != AssetClass::Bond {
+                assert!(usd > 0.0001 && usd < 1e7, "{} is worth {usd} USD", s.ticker);
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_an_empty_universe() {
+        assert!(Universe::new(1, 0, false, REFERENCE).is_err());
+    }
+
     #[test]
     fn is_reproducible() {
-        let a = Universe::new(5, 500, false);
-        let b = Universe::new(5, 500, false);
+        let a = Universe::new(5, 500, false, REFERENCE).unwrap();
+        let b = Universe::new(5, 500, false, REFERENCE).unwrap();
         let tickers = |u: &Universe| {
             u.securities
                 .iter()
@@ -529,15 +634,15 @@ mod tests {
 
     #[test]
     fn tickers_are_unique() {
-        let u = Universe::new(6, 10_000, true);
+        let u = Universe::new(6, 10_000, true, REFERENCE).unwrap();
         let distinct: HashSet<&str> = u.securities.iter().map(|s| s.ticker.as_str()).collect();
         assert_eq!(distinct.len(), u.securities.len());
     }
 
     #[test]
     fn hostile_universe_differs_only_in_tickers() {
-        let calm = Universe::new(7, 2_000, false);
-        let hostile = Universe::new(7, 2_000, true);
+        let calm = Universe::new(7, 2_000, false, REFERENCE).unwrap();
+        let hostile = Universe::new(7, 2_000, true, REFERENCE).unwrap();
         let renamed = calm
             .securities
             .iter()
@@ -556,7 +661,7 @@ mod tests {
 
     #[test]
     fn asset_class_terms_are_consistent() {
-        let u = Universe::new(8, 5_000, false);
+        let u = Universe::new(8, 5_000, false, REFERENCE).unwrap();
         for s in &u.securities {
             assert!(s.base_price > 0.0);
             match s.asset_class {

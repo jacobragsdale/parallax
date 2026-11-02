@@ -4,7 +4,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use arrow_array::{
-    ArrayRef, Date32Array, Decimal128Array, Float64Array, Int64Array, RecordBatch, StringArray,
+    ArrayRef, Date32Array, Float64Array, Int64Array, RecordBatch, StringArray,
     TimestampMicrosecondArray,
 };
 use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
@@ -14,7 +14,9 @@ use jiff::tz::TimeZone;
 use crate::calendar::{epoch_days, is_trading_day, trading_days};
 use crate::decimal::{from_f64, mul_round, to_f64};
 use crate::dist::{log_normal, standard_normal, student_t_unit_variance};
+use crate::error::{OptionsError, check_rate};
 use crate::rng::{Rng, Stream};
+use crate::shared::{decimal_array, duplicate_of, extreme_quantity, quote};
 use crate::universe::{AssetClass, Universe};
 use crate::write::Dataset;
 
@@ -109,29 +111,33 @@ struct Lot {
 impl Positions {
     /// Builds the dataset description. Rows are generated on demand.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if `as_of` is not a trading day or the universe is empty.
-    #[must_use]
-    pub fn new(options: PositionsOptions) -> Self {
-        assert!(
-            is_trading_day(options.as_of),
-            "{} is not a trading day",
-            options.as_of
-        );
-        let universe = Universe::new(options.seed, options.securities, options.hostile);
+    /// Returns an error if `as_of` is not a trading day, the universe is empty, or
+    /// the duplicate-key rate is not a probability.
+    pub fn new(options: PositionsOptions) -> Result<Self, OptionsError> {
+        if !is_trading_day(options.as_of) {
+            return Err(OptionsError::NotATradingDay(options.as_of));
+        }
+        check_rate("duplicate_key_rate", options.duplicate_key_rate)?;
+        let universe = Universe::new(
+            options.seed,
+            options.securities,
+            options.hostile,
+            options.as_of,
+        )?;
         let three_years_back = date(options.as_of.year() - 3, options.as_of.month(), 1);
         let lot_open_days = trading_days(three_years_back, options.as_of)
             .into_iter()
             .map(epoch_days)
             .collect();
-        Self {
+        Ok(Self {
             options,
             universe,
             schema: Arc::new(schema()),
             lot_open_days,
             new_york: TimeZone::get("America/New_York").expect("bundled time-zone database"),
-        }
+        })
     }
 
     /// The universe the rows refer to.
@@ -168,9 +174,10 @@ impl Positions {
         if short {
             quantity = -quantity;
         }
-        let quoted = (security.base_price * (1.0 + 0.02 * standard_normal(&mut rng))).max(0.01);
-        let price =
-            from_f64(quoted, security.price_decimals) * 10i128.pow(6 - security.price_decimals);
+        let price = quote(
+            security,
+            security.base_price * (1.0 + 0.02 * standard_normal(&mut rng)),
+        );
         let total_return = (0.04 + 0.3 * standard_normal(&mut rng)).clamp(-0.95, 5.0);
         let cost_factor = from_f64(1.0 / (1.0 + total_return), 8);
         let daily_sigma = security.volatility / libm::sqrt(252.0);
@@ -230,12 +237,8 @@ impl Positions {
         if options.hostile {
             self.inject_hostile(row, &mut lot, cost_factor, daily_return);
         }
-        if options.duplicate_key_rate > 0.0 && row > 0 {
-            let mut keys = Rng::for_key(options.seed, Stream::Keys, row);
-            if keys.chance(options.duplicate_key_rate) {
-                let back = 1 + keys.below(row.min(1_000));
-                lot.position_id = (row - back) as i64 + 1;
-            }
+        if let Some(earlier) = duplicate_of(options.seed, row, options.duplicate_key_rate) {
+            lot.position_id = earlier as i64 + 1;
         }
         lot
     }
@@ -299,14 +302,10 @@ impl Positions {
             }
             3 => *float_slot(lot, rng.index(6)) = Some(-0.0),
             4 => {
-                // A position worth about 10^15 USD, capped so that the quantity still
-                // fits Decimal128(20, 4).
+                // A position worth about 10^15 USD.
                 let security = &self.universe.securities[lot.security];
-                let unit_value_usd = to_f64(lot.price, 6)
-                    * to_f64(security.multiplier, 2)
-                    * to_f64(security.fx_rate_to_usd, 8);
-                let units = (1e15 / unit_value_usd).min(9.0e15).round();
-                lot.quantity = from_f64(units, 0) * 10_000 * if lot.short { -1 } else { 1 };
+                let sign = if lot.short { -1 } else { 1 };
+                lot.quantity = sign * extreme_quantity(security, lot.price);
                 self.derive_values(lot, cost_factor, daily_return);
             }
             5 => lot.weight_in_fund = Some(1e-12),
@@ -384,14 +383,6 @@ pub fn schema() -> Schema {
     ])
 }
 
-fn decimal(values: impl Iterator<Item = i128>, precision: u8, scale: i8) -> ArrayRef {
-    Arc::new(
-        Decimal128Array::from_iter_values(values)
-            .with_precision_and_scale(precision, scale)
-            .expect("valid decimal type"),
-    )
-}
-
 fn floats(values: impl Iterator<Item = Option<f64>>) -> ArrayRef {
     Arc::new(values.collect::<Float64Array>())
 }
@@ -452,16 +443,16 @@ impl Dataset for Positions {
             Arc::new(StringArray::from_iter_values(
                 lots.iter().map(|l| if l.short { "Short" } else { "Long" }),
             )),
-            decimal(lots.iter().map(|l| l.quantity), 20, 4),
-            decimal(lots.iter().map(|l| l.price), 18, 6),
-            decimal(lots.iter().map(|l| sec(l).multiplier), 10, 2),
-            decimal(lots.iter().map(|l| sec(l).fx_rate_to_usd), 18, 8),
-            decimal(lots.iter().map(|l| l.market_value_local), 22, 2),
-            decimal(lots.iter().map(|l| l.market_value_usd), 22, 2),
-            decimal(lots.iter().map(|l| l.cost_basis_usd), 22, 2),
-            decimal(lots.iter().map(|l| l.unrealized_pnl_usd), 22, 2),
-            decimal(lots.iter().map(|l| l.daily_pnl_usd), 22, 2),
-            decimal(lots.iter().map(|l| l.notional_usd), 24, 2),
+            decimal_array(lots.iter().map(|l| l.quantity), 20, 4),
+            decimal_array(lots.iter().map(|l| l.price), 18, 6),
+            decimal_array(lots.iter().map(|l| sec(l).multiplier), 10, 2),
+            decimal_array(lots.iter().map(|l| sec(l).fx_rate_to_usd), 18, 8),
+            decimal_array(lots.iter().map(|l| l.market_value_local), 22, 2),
+            decimal_array(lots.iter().map(|l| l.market_value_usd), 22, 2),
+            decimal_array(lots.iter().map(|l| l.cost_basis_usd), 22, 2),
+            decimal_array(lots.iter().map(|l| l.unrealized_pnl_usd), 22, 2),
+            decimal_array(lots.iter().map(|l| l.daily_pnl_usd), 22, 2),
+            decimal_array(lots.iter().map(|l| l.notional_usd), 24, 2),
             floats(lots.iter().map(|l| l.weight_in_fund)),
             floats(lots.iter().map(|l| l.beta)),
             floats(lots.iter().map(|l| l.delta)),

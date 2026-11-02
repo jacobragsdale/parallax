@@ -33,7 +33,8 @@ fn files_read_back_identically_whatever_the_batch_size() {
         rows: 10_000,
         hostile: true,
         ..PositionsOptions::default()
-    });
+    })
+    .unwrap();
     let mut expected = RowHasher::default();
     expected.update(&dataset.batch(0..10_000));
 
@@ -52,7 +53,8 @@ fn price_files_round_trip() {
         tickers: 5,
         hostile: true,
         ..PricesOptions::default()
-    });
+    })
+    .unwrap();
     let mut expected = RowHasher::default();
     expected.update(&dataset.batch(0..dataset.num_rows()));
     let path = temp_path("prices.arrow");
@@ -61,4 +63,31 @@ fn price_files_round_trip() {
         file_hash(&path),
         (expected.finish(), dataset.num_rows() as usize)
     );
+}
+
+#[test]
+fn a_rejected_write_leaves_no_file_behind() {
+    let dataset = Positions::new(PositionsOptions {
+        rows: 10,
+        ..PositionsOptions::default()
+    })
+    .unwrap();
+    let path = temp_path("zero-batch.arrow");
+    let _ = std::fs::remove_file(&path);
+    assert!(write_ipc_file(&dataset, &path, 0).is_err());
+    assert!(!path.exists());
+    assert!(!temp_path("zero-batch.arrow.partial").exists());
+}
+
+#[test]
+fn a_finished_write_leaves_no_partial_file() {
+    let dataset = Positions::new(PositionsOptions {
+        rows: 100,
+        ..PositionsOptions::default()
+    })
+    .unwrap();
+    let path = temp_path("complete.arrow");
+    write_ipc_file(&dataset, &path, 64).unwrap();
+    assert!(path.exists());
+    assert!(!temp_path("complete.arrow.partial").exists());
 }

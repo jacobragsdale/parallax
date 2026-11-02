@@ -613,13 +613,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "arrow-array",
- "arrow-buffer",
  "arrow-ipc",
  "arrow-schema",
  "clap",
  "jiff",
  "libm",
  "rayon",
+ "thiserror",
 ]
 
 [[package]]

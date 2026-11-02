@@ -3,7 +3,7 @@
 use std::fs::File;
 use std::io::BufWriter;
 use std::ops::Range;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use arrow_array::RecordBatch;
@@ -51,14 +51,39 @@ pub fn batch_ranges(total: u64, size: u64) -> Vec<Range<u64>> {
 /// Writes the whole dataset to an Arrow IPC file, generating batches in parallel and
 /// writing them in order. At most one batch per Rayon thread is held in memory.
 ///
+/// The data goes to a temporary file next to `path`, which is renamed over `path`
+/// only after the file is complete. A failure part-way therefore never leaves a
+/// truncated file, or replaces a good one.
+///
 /// # Errors
 ///
-/// Returns an error if the file cannot be created or written.
+/// Returns an error if `batch_rows` is zero, or the file cannot be written or
+/// renamed.
 pub fn write_ipc_file(
     dataset: &dyn Dataset,
     path: &Path,
     batch_rows: u64,
 ) -> anyhow::Result<WriteSummary> {
+    anyhow::ensure!(batch_rows > 0, "batch_rows must be at least 1");
+    let mut partial = path.as_os_str().to_owned();
+    partial.push(".partial");
+    let partial = PathBuf::from(partial);
+    let result = write_to(dataset, &partial, batch_rows);
+    if result.is_err() {
+        // Best effort: the original error matters more than a failed cleanup.
+        let _ = std::fs::remove_file(&partial);
+    }
+    let batches = result?;
+    std::fs::rename(&partial, path)
+        .with_context(|| format!("renaming {} to {}", partial.display(), path.display()))?;
+    Ok(WriteSummary {
+        rows: dataset.num_rows(),
+        batches,
+        bytes: std::fs::metadata(path)?.len(),
+    })
+}
+
+fn write_to(dataset: &dyn Dataset, path: &Path, batch_rows: u64) -> anyhow::Result<u64> {
     let file = File::create(path).with_context(|| format!("creating {}", path.display()))?;
     let schema = dataset.schema();
     let mut writer = FileWriter::try_new(BufWriter::new(file), &schema)?;
@@ -76,12 +101,8 @@ pub fn write_ipc_file(
         }
     }
     writer.finish()?;
-    drop(writer);
-    Ok(WriteSummary {
-        rows: dataset.num_rows(),
-        batches,
-        bytes: std::fs::metadata(path)?.len(),
-    })
+    writer.into_inner()?.into_inner()?.sync_all()?;
+    Ok(batches)
 }
 
 #[cfg(test)]

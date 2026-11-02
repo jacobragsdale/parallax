@@ -104,7 +104,7 @@ fn main() -> anyhow::Result<()> {
                 securities: common.securities,
                 hostile: common.hostile,
                 duplicate_key_rate,
-            })),
+            })?),
             common,
         ),
         Command::Trades {
@@ -122,7 +122,7 @@ fn main() -> anyhow::Result<()> {
                 securities: common.securities,
                 hostile: common.hostile,
                 duplicate_key_rate,
-            })),
+            })?),
             common,
         ),
         Command::Prices {
@@ -138,7 +138,7 @@ fn main() -> anyhow::Result<()> {
                 end,
                 securities: common.securities,
                 hostile: common.hostile,
-            })),
+            })?),
             common,
         ),
     };

@@ -12,6 +12,7 @@ use jiff::civil::{Date, date};
 
 use crate::calendar::{epoch_days, trading_days};
 use crate::dist::{log_normal, standard_normal, student_t_unit_variance};
+use crate::error::OptionsError;
 use crate::positions::HOSTILE_RATE;
 use crate::rng::{Rng, Stream};
 use crate::universe::{AssetClass, Universe};
@@ -76,43 +77,49 @@ fn round4(x: f64) -> f64 {
 impl Prices {
     /// Builds the dataset description. Rows are generated on demand.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the universe has fewer equities than `tickers`, or if there is no
-    /// trading day between `start` and `end`.
-    #[must_use]
-    pub fn new(options: PricesOptions) -> Self {
-        let universe = Universe::new(options.seed, options.securities, options.hostile);
-        let equities: Vec<usize> = universe
+    /// Returns an error if the universe is empty or has fewer equities than
+    /// `tickers`, or if there is no trading day between `start` and `end`.
+    pub fn new(options: PricesOptions) -> Result<Self, OptionsError> {
+        let universe = Universe::new(
+            options.seed,
+            options.securities,
+            options.hostile,
+            options.end,
+        )?;
+        let all_equities: Vec<usize> = universe
             .securities
             .iter()
             .enumerate()
             .filter(|(_, s)| s.asset_class == AssetClass::Equity)
             .map(|(i, _)| i)
-            .take(options.tickers)
             .collect();
-        assert_eq!(
-            equities.len(),
-            options.tickers,
-            "not enough equities in the universe"
-        );
+        if all_equities.len() < options.tickers {
+            return Err(OptionsError::NotEnoughEquities {
+                wanted: options.tickers,
+                available: all_equities.len(),
+                securities: options.securities,
+            });
+        }
+        let equities = all_equities[..options.tickers].to_vec();
         let days: Vec<i32> = trading_days(options.start, options.end)
             .into_iter()
             .map(epoch_days)
             .collect();
-        assert!(
-            !days.is_empty(),
-            "no trading days in {}..={}",
-            options.start,
-            options.end
-        );
-        Self {
+        if days.is_empty() {
+            return Err(OptionsError::NoTradingDays {
+                start: options.start,
+                end: options.end,
+            });
+        }
+        Ok(Self {
             options,
             universe,
             schema: Arc::new(schema()),
             equities,
             days,
-        }
+        })
     }
 
     /// The trading days covered, as days since the Unix epoch.
@@ -121,13 +128,17 @@ impl Prices {
         &self.days
     }
 
-    /// Simulates one security's whole path.
+    /// Simulates one security's whole path. Hostile values are bad prints: they
+    /// change what is reported, and returns are always computed from the reported
+    /// closes, but the true price path continues underneath.
     fn path(&self, ticker: usize) -> Vec<Bar> {
         let security = &self.universe.securities[self.equities[ticker]];
         let mut rng = Rng::for_key(self.options.seed, Stream::Prices, ticker as u64);
         let sigma = security.volatility / libm::sqrt(252.0);
         let drift = 0.07 / 252.0;
         let mut previous_close = round4(security.base_price);
+        let mut previous_reported_close = previous_close;
+        let first_row = ticker as u64 * self.days.len() as u64;
         let mut bars = Vec::with_capacity(self.days.len());
         for day in 0..self.days.len() {
             let ret = drift + sigma * student_t_unit_variance(&mut rng, 3);
@@ -140,16 +151,24 @@ impl Prices {
             let low = round4((open.min(close) * (1.0 - spread_down)).max(0.0001));
             let volume = (security.average_daily_volume * log_normal(&mut rng, 0.0, 0.5)).round();
             let vwap = round4(low + (high - low) * rng.uniform(0.3, 0.7));
-            bars.push(Bar {
+            let mut bar = Bar {
                 open,
                 high,
                 low,
                 close,
                 volume: Some(volume as i64),
                 vwap: Some(vwap),
-                return_1d: (day > 0).then(|| close / previous_close - 1.0),
-            });
+                return_1d: None,
+            };
+            if self.options.hostile {
+                self.inject_hostile(first_row + day as u64, &mut bar);
+            }
+            if day > 0 {
+                bar.return_1d = Some(bar.close / previous_reported_close - 1.0);
+            }
+            previous_reported_close = bar.close;
             previous_close = close;
+            bars.push(bar);
         }
         bars
     }
@@ -160,19 +179,20 @@ impl Prices {
             return;
         }
         match rng.below(5) {
-            0 => {
-                bar.close = f64::NAN;
-                bar.return_1d = Some(f64::NAN);
-            }
+            // A missing close: this return and the next are NaN.
+            0 => bar.close = f64::NAN,
             1 => bar.volume = None,
             2 => bar.vwap = None,
-            3 => bar.return_1d = Some(-0.0),
-            _ => {
-                // A zero close, as a bad print would leave. The next return would be
-                // infinite, so this row carries one.
-                bar.close = 0.0;
-                bar.return_1d = Some(f64::INFINITY);
+            // A halted day: one flat price and no volume.
+            3 => {
+                bar.open = bar.close;
+                bar.high = bar.close;
+                bar.low = bar.close;
+                bar.vwap = Some(bar.close);
+                bar.volume = Some(0);
             }
+            // A zero close: this return is -1 and the next is infinite.
+            _ => bar.close = 0.0,
         }
     }
 }
@@ -214,17 +234,13 @@ impl Dataset for Prices {
             let first_day = (row % per_ticker) as usize;
             let last_day = ((rows.end - (row - first_day as u64)).min(per_ticker)) as usize;
             for (day, bar) in path.iter().enumerate().take(last_day).skip(first_day) {
-                let mut bar = *bar;
-                if self.options.hostile {
-                    self.inject_hostile(row, &mut bar);
-                }
                 tickers.push(
                     self.universe.securities[self.equities[ticker]]
                         .ticker
                         .as_str(),
                 );
                 dates.push(self.days[day]);
-                bars.push(bar);
+                bars.push(*bar);
                 row += 1;
             }
         }

@@ -337,6 +337,16 @@ The first connectors cover where the data already lives:
   [`json` type](https://learn.microsoft.com/en-us/sql/t-sql/data-types/json-data-type)
   and JSON stored in `nvarchar(max)` both arrive as text. ODBC isn't among the
   clients that support the native type.
+- **Oracle Database** goes through the same `arrow-odbc` path, with Oracle's
+  Instant Client ODBC driver. Three Oracle behaviours meet the load rules in
+  [What "never wrong" means](#what-never-wrong-means):
+  - `NUMBER` without a declared precision is a floating decimal of up to 38
+    digits. Such a column must declare its Arrow type, and its values are
+    fetched as text and parsed exactly, never through f64.
+  - `DATE` carries a time of day but no zone, so it follows the rule for
+    zoneless timestamps. `TIMESTAMP WITH TIME ZONE` is an instant.
+  - Oracle stores an empty string as NULL, so text columns from Oracle can't
+    distinguish the two.
 - **JSON columns and MongoDB documents** go through one shared converter that
   maps declared paths to declared Arrow types.
   - Numbers are parsed from text straight into the declared type, and decimals

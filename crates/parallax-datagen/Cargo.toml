@@ -10,7 +10,7 @@ repository.workspace = true
 [dependencies]
 anyhow.workspace = true
 arrow-array.workspace = true
-arrow-buffer.workspace = true
+thiserror.workspace = true
 arrow-ipc.workspace = true
 arrow-schema.workspace = true
 clap.workspace = true

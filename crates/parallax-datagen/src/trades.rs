@@ -4,18 +4,19 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use arrow_array::{
-    ArrayRef, Date32Array, Decimal128Array, Int64Array, RecordBatch, StringArray,
-    TimestampMicrosecondArray,
+    ArrayRef, Date32Array, Int64Array, RecordBatch, StringArray, TimestampMicrosecondArray,
 };
 use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use jiff::civil::{Date, DateTime, date};
 use jiff::tz::TimeZone;
 
 use crate::calendar::{epoch_days, next_trading_day, trading_days};
-use crate::decimal::{from_f64, mul_round, to_f64};
+use crate::decimal::{from_f64, mul_round};
 use crate::dist::{log_normal, standard_normal};
+use crate::error::{OptionsError, check_rate};
 use crate::positions::HOSTILE_RATE;
 use crate::rng::{Rng, Stream};
+use crate::shared::{decimal_array, duplicate_of, extreme_quantity, quote};
 use crate::universe::{AssetClass, Universe};
 use crate::write::Dataset;
 
@@ -98,9 +99,17 @@ pub struct Trades {
     options: TradesOptions,
     universe: Universe,
     schema: SchemaRef,
-    days: Vec<Date>,
+    days: Vec<TradeDay>,
     side_frequency: crate::dist::Weighted,
     new_york: TimeZone,
+}
+
+/// A trading day with its settlement date, both precomputed as epoch days.
+#[derive(Clone, Copy, Debug)]
+struct TradeDay {
+    date: Date,
+    epoch_day: i32,
+    settle_epoch_day: i32,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -128,26 +137,39 @@ struct Fill {
 impl Trades {
     /// Builds the dataset description. Rows are generated on demand.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if there is no trading day between `start` and `end`.
-    #[must_use]
-    pub fn new(options: TradesOptions) -> Self {
-        let days = trading_days(options.start, options.end);
-        assert!(
-            !days.is_empty(),
-            "no trading days in {}..={}",
-            options.start,
-            options.end
-        );
-        Self {
-            universe: Universe::new(options.seed, options.securities, options.hostile),
+    /// Returns an error if there is no trading day between `start` and `end`, the
+    /// universe is empty, or the duplicate-key rate is not a probability.
+    pub fn new(options: TradesOptions) -> Result<Self, OptionsError> {
+        let days: Vec<TradeDay> = trading_days(options.start, options.end)
+            .into_iter()
+            .map(|date| TradeDay {
+                date,
+                epoch_day: epoch_days(date),
+                settle_epoch_day: epoch_days(next_trading_day(date)),
+            })
+            .collect();
+        if days.is_empty() {
+            return Err(OptionsError::NoTradingDays {
+                start: options.start,
+                end: options.end,
+            });
+        }
+        check_rate("duplicate_key_rate", options.duplicate_key_rate)?;
+        Ok(Self {
+            universe: Universe::new(
+                options.seed,
+                options.securities,
+                options.hostile,
+                options.end,
+            )?,
             schema: Arc::new(schema()),
             days,
             side_frequency: crate::dist::Weighted::new(&SIDES.map(|s| s.1)),
             new_york: TimeZone::get("America/New_York").expect("bundled time-zone database"),
             options,
-        }
+        })
     }
 
     /// The universe the rows refer to.
@@ -161,7 +183,7 @@ impl Trades {
         let mut rng = Rng::for_key(options.seed, Stream::Trades, row);
         let day_index =
             (u128::from(row) * self.days.len() as u128 / u128::from(options.rows.max(1))) as usize;
-        let trade_date = self.days[day_index.min(self.days.len() - 1)];
+        let day = self.days[day_index.min(self.days.len() - 1)];
         let security_index = self.universe.security_frequency.sample(&mut rng);
         let security = &self.universe.securities[security_index];
         let book = self.universe.book_frequency.sample(&mut rng);
@@ -174,13 +196,15 @@ impl Trades {
             AssetClass::Future => log_normal(&mut rng, libm::log(5.0), 1.0).round().max(1.0),
             AssetClass::Option => log_normal(&mut rng, libm::log(20.0), 1.0).round().max(1.0),
         };
-        let quoted = (security.base_price * (1.0 + 0.01 * standard_normal(&mut rng))).max(0.01);
-        let price =
-            from_f64(quoted, security.price_decimals) * 10i128.pow(6 - security.price_decimals);
+        let price = quote(
+            security,
+            security.base_price * (1.0 + 0.01 * standard_normal(&mut rng)),
+        );
         let commission_rate = from_f64(rng.uniform(1.0, 5.0) / 10_000.0, 8);
         // Regular session: 09:30 to 16:00 New York time, at microsecond resolution.
         let session_micros = rng.below(6 * 3_600 * 1_000_000 + 30 * 60 * 1_000_000);
-        let local = trade_date
+        let local = day
+            .date
             .at(9, 30, 0, 0)
             .checked_add(jiff::Span::new().microseconds(session_micros as i64))
             .expect("in range");
@@ -196,10 +220,10 @@ impl Trades {
         };
         let mut fill = Fill {
             trade_id: row as i64 + 1,
-            trade_date: epoch_days(trade_date),
+            trade_date: day.epoch_day,
             trade_time_utc: Some(trade_time_utc),
             trade_time_local: naive_micros(local),
-            settle_date: epoch_days(next_trading_day(trade_date)),
+            settle_date: day.settle_epoch_day,
             book,
             security: security_index,
             trader: rng.index(self.universe.traders.len()),
@@ -217,11 +241,8 @@ impl Trades {
         if options.hostile {
             self.inject_hostile(row, &mut fill, commission_rate);
         }
-        if options.duplicate_key_rate > 0.0 && row > 0 {
-            let mut keys = Rng::for_key(options.seed, Stream::Keys, row);
-            if keys.chance(options.duplicate_key_rate) {
-                fill.trade_id = (row - 1 - keys.below(row.min(1_000))) as i64 + 1;
-            }
+        if let Some(earlier) = duplicate_of(options.seed, row, options.duplicate_key_rate) {
+            fill.trade_id = earlier as i64 + 1;
         }
         fill
     }
@@ -249,7 +270,9 @@ impl Trades {
             0 | 1 => {
                 // A wall-clock time that is ambiguous or missing in New York, as a
                 // zoneless SQL Server datetime2 column could hold. No UTC instant
-                // exists for it without a policy, so the UTC column is null.
+                // exists for it without a policy, so the UTC column is null. Both
+                // times fall on daylight-saving Sundays, so on these rows the local
+                // time deliberately disagrees with trade_date.
                 let base = if rng.below(2) == 0 {
                     AMBIGUOUS_LOCAL
                 } else {
@@ -269,11 +292,7 @@ impl Trades {
             5 => self.derive_amounts(fill, commission_rate, true),
             _ => {
                 let security = &self.universe.securities[fill.security];
-                let unit_value_usd = to_f64(fill.price, 6)
-                    * to_f64(security.multiplier, 2)
-                    * to_f64(security.fx_rate_to_usd, 8);
-                let units = (1e15 / unit_value_usd).min(9.0e15).round();
-                fill.quantity = from_f64(units, 0) * 10_000;
+                fill.quantity = extreme_quantity(security, fill.price);
                 self.derive_amounts(fill, commission_rate, false);
             }
         }
@@ -330,14 +349,6 @@ pub fn schema() -> Schema {
     ])
 }
 
-fn decimal(values: impl Iterator<Item = i128>, precision: u8, scale: i8) -> ArrayRef {
-    Arc::new(
-        Decimal128Array::from_iter_values(values)
-            .with_precision_and_scale(precision, scale)
-            .expect("valid decimal type"),
-    )
-}
-
 impl Dataset for Trades {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
@@ -391,14 +402,14 @@ impl Dataset for Trades {
             strings(fills.iter().map(|f| sec(f).ticker.as_str()).collect()),
             strings(fills.iter().map(|f| sec(f).asset_class.label()).collect()),
             strings(fills.iter().map(|f| f.side).collect()),
-            decimal(fills.iter().map(|f| f.quantity), 20, 4),
-            decimal(fills.iter().map(|f| f.price), 18, 6),
-            decimal(fills.iter().map(|f| sec(f).multiplier), 10, 2),
+            decimal_array(fills.iter().map(|f| f.quantity), 20, 4),
+            decimal_array(fills.iter().map(|f| f.price), 18, 6),
+            decimal_array(fills.iter().map(|f| sec(f).multiplier), 10, 2),
             strings(fills.iter().map(|f| sec(f).currency).collect()),
-            decimal(fills.iter().map(|f| sec(f).fx_rate_to_usd), 18, 8),
-            decimal(fills.iter().map(|f| f.gross), 22, 2),
-            decimal(fills.iter().map(|f| f.commission), 18, 2),
-            decimal(fills.iter().map(|f| f.net), 22, 2),
+            decimal_array(fills.iter().map(|f| sec(f).fx_rate_to_usd), 18, 8),
+            decimal_array(fills.iter().map(|f| f.gross), 22, 2),
+            decimal_array(fills.iter().map(|f| f.commission), 18, 2),
+            decimal_array(fills.iter().map(|f| f.net), 22, 2),
             Arc::new(fills.iter().map(|f| f.broker).collect::<StringArray>()),
             Arc::new(fills.iter().map(|f| f.venue).collect::<StringArray>()),
             strings(fills.iter().map(|f| f.order_type).collect()),

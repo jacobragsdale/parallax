@@ -18,6 +18,7 @@ fn trades(rows: u64, hostile: bool) -> Trades {
         hostile,
         ..TradesOptions::default()
     })
+    .unwrap()
 }
 
 fn naive(micros: i64) -> jiff::civil::DateTime {
@@ -55,8 +56,8 @@ fn golden_rows_are_stable() {
     );
 }
 
-const GOLDEN_CALM: u64 = 14_685_118_206_929_668_686;
-const GOLDEN_HOSTILE: u64 = 4_192_444_994_259_219_294;
+const GOLDEN_CALM: u64 = 12_724_781_792_629_693_938;
+const GOLDEN_HOSTILE: u64 = 4_905_705_083_864_376_887;
 
 #[test]
 fn trades_are_ordered_timed_and_settled_correctly() {
@@ -190,11 +191,24 @@ fn duplicate_keys_only_when_asked() {
         rows: 20_000,
         duplicate_key_rate: 0.01,
         ..TradesOptions::default()
-    });
+    })
+    .unwrap();
     let ids: Vec<i64> = i64s(&dataset.batch(0..20_000), "trade_id")
         .into_iter()
         .flatten()
         .collect();
     let distinct: HashSet<i64> = ids.iter().copied().collect();
     assert!((100..=300).contains(&(ids.len() - distinct.len())));
+}
+
+#[test]
+fn rejects_a_range_without_trading_days() {
+    let saturday = jiff::civil::date(2026, 10, 31);
+    let err = Trades::new(TradesOptions {
+        start: saturday,
+        end: saturday,
+        ..TradesOptions::default()
+    })
+    .unwrap_err();
+    assert!(err.to_string().contains("no NYSE trading days"), "{err}");
 }

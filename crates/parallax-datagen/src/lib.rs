@@ -17,11 +17,14 @@
 pub mod calendar;
 pub mod decimal;
 pub mod dist;
+pub mod error;
 pub mod positions;
 pub mod prices;
 pub mod rng;
+mod shared;
 pub mod trades;
 pub mod universe;
 pub mod write;
 
+pub use error::OptionsError;
 pub use write::{Dataset, WriteSummary, batch_ranges, write_ipc_file};
