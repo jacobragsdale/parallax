@@ -327,8 +327,9 @@ refreshes in one of three cases:
 
 Each refresh applies as a diff. A memory budget evicts the least recently used
 tables, and an Arrow copy on local SSD makes reloading fast. Existing Python
-and C# services keep their business logic and become publishers that push
-Arrow batches through an ingest API.
+and C# services keep their business logic. parallax pulls from their existing
+GET endpoints through the HTTP connector, and live sources push Arrow batches
+through an ingest API.
 
 The first connectors cover where the data already lives:
 
@@ -357,6 +358,70 @@ The first connectors cover where the data already lives:
   - MongoDB uses the official `mongodb` driver.
 - **Parquet** goes through the `parquet` crate, behind a local SSD cache keyed
   by path, size and modification time, so the slow NFS share is read only once.
+- **HTTP** pulls from the existing C# and Python REST GET endpoints, on the
+  same refresh rules as any other source.
+  - Dataset parameters map onto the GET's query string, so a table is still
+    cached by dataset and parameters.
+  - The host supplies a service credential, as it supplies the per-connection
+    value. The library still contains no auth code.
+  - The connector asks for an Arrow IPC stream with
+    `Accept: application/vnd.apache.arrow.stream`, the
+    [IANA-registered type](https://www.iana.org/assignments/media-types/application/vnd.apache.arrow.stream),
+    and falls back to JSON, which goes through the shared JSON converter. A
+    service can add Arrow beside JSON on the same route, with pyarrow in Python
+    or the Apache.Arrow NuGet package in C#, and its other callers keep getting
+    JSON.
+
+### Choosing a source
+
+Pulling suits snapshot data better than pushing, because a service can't know
+in advance which parameters a PM will open, such as an as-of date and a fund.
+Push ingest stays for live streams and for "data changed" signals.
+
+Which connector a dataset uses depends on what its existing GET does:
+
+- A GET that wraps one query or file: connect directly with the SQL Server,
+  Oracle, Parquet or MongoDB connector, and move the SQL into the dataset
+  definition.
+- A GET that carries business logic, such as calculations, joins across sources,
+  adjustments or Python models: use the HTTP connector. Rewriting that logic as
+  SQL inside parallax would let the grid and the app's other pages show
+  different numbers for the same thing.
+- A GET that filters rows by the calling user: tables are shared across users,
+  so it needs an unfiltered variant called with the service credential, with
+  the host applying entitlements. The alternative, per-user parameters, gives up
+  the sharing. Whether the existing GETs filter by user is still an open
+  question.
+
+JSON costs far more than Arrow at this size. 100,000 rows of 20 floats and 2
+strings were serialized in Python on 2026-11-02:
+
+| Serializer | Time | Size |
+|---|---|---|
+| Standard library `json.dumps` | 873 ms | 56 MB |
+| orjson | 96 ms | 52 MB |
+| pyarrow IPC stream | 33 ms | 18 MB |
+
+JSON is workable up to about a million rows. Past that the endpoint needs Arrow:
+twenty million trades would be about 11 GB of JSON per load.
+
+HTTP responses follow the load rules in [Loads](#loads), plus these:
+
+- **Pagination:** pages fetched one after another can come from different
+  moments. A load must be a single response, or pages pinned to one snapshot by
+  an as-of parameter.
+- **Decimals:** they arrive as JSON numbers or strings, and both are parsed
+  exactly. Python's standard `json` module can't serialize `Decimal`, so
+  services often convert money to float first. Those values have already passed
+  through a double, which keeps 15 to 17 significant digits. Pydantic v2 writes
+  decimals as strings.
+- **Zoneless datetimes:** these follow the zoneless-timestamp rule. Pydantic
+  and orjson both emit `2026-11-01T01:30:00`, which falls in New York's repeated
+  hour, so it fails unless the column declares the earlier or later instant.
+- **Bare `NaN`:** Python's `json.dumps` writes a bare `NaN` token by default,
+  which isn't valid JSON. The converter accepts it as NaN, which becomes null and
+  is counted, as for other sources.
+- **Missing or changed fields:** these are load errors naming the column.
 
 ## The Angular library
 

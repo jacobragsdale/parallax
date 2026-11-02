@@ -8,7 +8,7 @@ behind the design, see [How parallax is designed](design.md).
 
 | Milestone | Scope |
 |---|---|
-| 1 | Engine, grid, pivot, Excel export, and connectors for SQL Server (including JSON columns), Oracle Database, Parquet and MongoDB. Angular package and demo app. |
+| 1 | Engine, grid, pivot, Excel export, and connectors for SQL Server (including JSON columns), Oracle Database, Parquet, MongoDB and HTTP (existing REST GETs). Angular package and demo app. |
 | 2 | Charts: line, area, bar (vertical or horizontal, grouped or stacked), scatter as density, heatmap, histogram, candlestick and OHLC. Crosshair with synced tooltips, wheel and drag zoom and pan, a range brush that filters linked views, legend toggling, two y-axes, log scale, and a trading-time axis driven by a per-dataset trading calendar. |
 | 3 | Technical-analysis tools, described in [Milestone 3 tools](#milestone-3-tools). |
 
@@ -40,6 +40,7 @@ Releases are semver 0.x until milestone 3. Each milestone publishes
    - Oracle Database, through the same ODBC path
    - Parquet, with the NFS cache
    - MongoDB
+   - HTTP, pulling from existing REST GETs as Arrow or JSON
 8. The Angular package, the demo app and the Playwright suite.
 
 Milestone 1 is done when all of the following hold:
