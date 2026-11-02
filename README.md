@@ -6,7 +6,9 @@ load and pivot tens of millions of rows on GPU-less Citrix desktops without
 showing a wrong number.
 
 parallax is in milestone 1 of its [roadmap](docs/roadmap.md), and there is
-nothing to install yet.
+nothing to install yet. The synthetic data generator, `parallax-datagen`, is the
+first working piece; [Contributing](CONTRIBUTING.md) shows how to build it and
+run the tests.
 
 ## Documentation
 

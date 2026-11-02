@@ -1,0 +1,4 @@
+/target
+*.arrow
+node_modules/
+/data

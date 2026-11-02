@@ -1,0 +1,22 @@
+[package]
+name = "parallax-datagen"
+description = "Reproducible synthetic finance data for parallax tests, benchmarks and demos"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+arrow-array.workspace = true
+arrow-buffer.workspace = true
+arrow-ipc.workspace = true
+arrow-schema.workspace = true
+clap.workspace = true
+jiff.workspace = true
+libm.workspace = true
+rayon.workspace = true
+
+[lints]
+workspace = true

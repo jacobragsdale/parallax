@@ -1,0 +1,29 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "Apache-2.0"
+repository = "https://github.com/jacobragsdale/parallax"
+
+[workspace.dependencies]
+anyhow = "1.0.104"
+arrow-array = { version = "60.1", default-features = false }
+arrow-buffer = { version = "60.1", default-features = false }
+arrow-ipc = { version = "60.1", default-features = false }
+arrow-schema = { version = "60.1", default-features = false }
+clap = { version = "4.6", features = ["derive"] }
+jiff = { version = "0.2.39", default-features = false, features = ["std", "tzdb-bundle-always"] }
+libm = "0.2.16"
+rayon = "1.12"
+thiserror = "2.0"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
