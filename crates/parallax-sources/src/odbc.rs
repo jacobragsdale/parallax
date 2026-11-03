@@ -16,6 +16,9 @@
 //!   as text. A column named in `json` is parsed by the shared converter into the
 //!   fields it declares, which replace it.
 //!
+//! Statements and text go through ODBC's UTF-16 calls, so non-ASCII text is right
+//! whatever the machine's locale.
+//!
 //! The connection string may name environment variables as `${NAME}`, read at
 //! each fetch, so passwords stay out of configuration files. Query parameters
 //! are bound in the order `bind` lists them, as text.
@@ -29,8 +32,8 @@ use arrow_array::types::{
     TimestampSecondType,
 };
 use arrow_array::{Array, ArrayRef, RecordBatch};
-use arrow_odbc::OdbcReaderBuilder;
 use arrow_odbc::odbc_api::{ConnectionOptions, Environment, IntoParameter};
+use arrow_odbc::{OdbcReaderBuilder, TextEncoding};
 use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use serde::Deserialize;
 
@@ -312,6 +315,9 @@ impl Source for Odbc {
             .with_schema(self.fetch_schema(&inferred))
             .with_max_bytes_per_batch(MAX_BATCH_BYTES)
             .with_max_text_size(MAX_TEXT)
+            // UTF-16 is ODBC's one fixed encoding; narrow text depends on the
+            // machine's locale, which in a container is often not UTF-8.
+            .with_payload_text_encoding(TextEncoding::Utf16)
             .build(cursor)
             .map_err(|e| format!("reading the result: {e}"))?;
         let mut batches = Vec::new();

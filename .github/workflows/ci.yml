@@ -84,7 +84,7 @@ jobs:
         env:
           PARALLAX_TEST_MSSQL: "Driver={ODBC Driver 18 for SQL Server};Server=localhost,1433;UID=sa;PWD=Parallax-Test-1;TrustServerCertificate=yes;"
           PARALLAX_TEST_ORACLE: "Driver={Oracle ODBC};DBQ=localhost:1521/FREEPDB1;UID=parallax;PWD=parallax;"
-          PARALLAX_TEST_MONGODB: "mongodb://localhost:27017"
+          PARALLAX_TEST_MONGODB: "mongodb://127.0.0.1:27017"
 
   webassembly:
     name: WebAssembly (build and test in Node)

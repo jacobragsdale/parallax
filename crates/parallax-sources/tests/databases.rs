@@ -322,21 +322,22 @@ mod odbc {
             connection,
             "SELECT id, qty, note, opened FROM parallax_lots",
         );
-        c.types.insert("qty".into(), FieldType::Decimal(38, 10));
+        // Oracle returns column names in upper case.
+        c.types.insert("QTY".into(), FieldType::Decimal(38, 10));
         let fetched = Odbc::new(c).fetch(&BTreeMap::new()).unwrap();
         let b = &fetched.batches[0];
         assert_eq!(
-            b.column_by_name("qty")
+            b.column_by_name("QTY")
                 .unwrap()
                 .as_primitive::<Decimal128Type>()
                 .value(0),
             123_456_789_012_345_678_901_234_567_890
         );
         // Oracle stores the empty string as null.
-        assert!(b.column_by_name("note").unwrap().is_null(0));
+        assert!(b.column_by_name("NOTE").unwrap().is_null(0));
         // 03:30 EDT on 2026-03-08 is 07:30 UTC.
         assert_eq!(
-            b.column_by_name("opened")
+            b.column_by_name("OPENED")
                 .unwrap()
                 .as_primitive::<TimestampMicrosecondType>()
                 .value(0),
