@@ -545,7 +545,8 @@
               "default": 20,
               "description": "Rows averaged.",
               "format": "uint32",
-              "minimum": 0,
+              "maximum": 100000,
+              "minimum": 1,
               "type": "integer"
             }
           },
@@ -566,7 +567,8 @@
               "default": 20,
               "description": "Rows in the smoothing.",
               "format": "uint32",
-              "minimum": 0,
+              "maximum": 100000,
+              "minimum": 1,
               "type": "integer"
             }
           },
@@ -587,7 +589,8 @@
               "default": 20,
               "description": "Rows averaged.",
               "format": "uint32",
-              "minimum": 0,
+              "maximum": 100000,
+              "minimum": 1,
               "type": "integer"
             }
           },
@@ -603,6 +606,7 @@
             "deviations": {
               "default": 2.0,
               "description": "Standard deviations above and below.",
+              "exclusiveMinimum": 0,
               "format": "double",
               "type": "number"
             },
@@ -614,7 +618,8 @@
               "default": 20,
               "description": "Rows averaged.",
               "format": "uint32",
-              "minimum": 0,
+              "maximum": 100000,
+              "minimum": 1,
               "type": "integer"
             }
           },
@@ -635,7 +640,8 @@
               "default": 14,
               "description": "Rows in Wilder's smoothing.",
               "format": "uint32",
-              "minimum": 0,
+              "maximum": 100000,
+              "minimum": 1,
               "type": "integer"
             }
           },
@@ -652,7 +658,8 @@
               "default": 12,
               "description": "Rows of the fast average.",
               "format": "uint32",
-              "minimum": 0,
+              "maximum": 100000,
+              "minimum": 1,
               "type": "integer"
             },
             "kind": {
@@ -663,14 +670,16 @@
               "default": 9,
               "description": "Rows of the signal line's average.",
               "format": "uint32",
-              "minimum": 0,
+              "maximum": 100000,
+              "minimum": 1,
               "type": "integer"
             },
             "slow": {
               "default": 26,
               "description": "Rows of the slow average.",
               "format": "uint32",
-              "minimum": 0,
+              "maximum": 100000,
+              "minimum": 1,
               "type": "integer"
             }
           },
@@ -691,7 +700,8 @@
               "default": 14,
               "description": "Rows in Wilder's smoothing.",
               "format": "uint32",
-              "minimum": 0,
+              "maximum": 100000,
+              "minimum": 1,
               "type": "integer"
             }
           },
@@ -708,21 +718,24 @@
               "default": 3,
               "description": "Rows %D averages %K over.",
               "format": "uint32",
-              "minimum": 0,
+              "maximum": 100000,
+              "minimum": 1,
               "type": "integer"
             },
             "k": {
               "default": 14,
               "description": "Rows whose range the close is placed in.",
               "format": "uint32",
-              "minimum": 0,
+              "maximum": 100000,
+              "minimum": 1,
               "type": "integer"
             },
             "k_smooth": {
               "default": 3,
               "description": "Rows %K is averaged over.",
               "format": "uint32",
-              "minimum": 0,
+              "maximum": 100000,
+              "minimum": 1,
               "type": "integer"
             },
             "kind": {

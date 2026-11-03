@@ -89,7 +89,9 @@ const indicatorSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("wma"), period: period(20) }),
   z.strictObject({ kind: z.literal("bollinger"), period: period(20), deviations: z._default(z.number().check(z.positive()), 2) }),
   z.strictObject({ kind: z.literal("rsi"), period: period(14) }),
-  z.strictObject({ kind: z.literal("macd"), fast: period(12), slow: period(26), signal: period(9) }),
+  z
+    .strictObject({ kind: z.literal("macd"), fast: period(12), slow: period(26), signal: period(9) })
+    .check(z.refine((m) => m.fast < m.slow, { message: "MACD's fast average must be shorter than its slow one", path: ["fast"] })),
   z.strictObject({ kind: z.literal("atr"), period: period(14) }),
   z.strictObject({ kind: z.literal("stochastic"), k: period(14), k_smooth: period(3), d: period(3) }),
   z.strictObject({ kind: z.literal("vwap") }),

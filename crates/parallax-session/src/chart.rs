@@ -10,7 +10,7 @@ use parallax_engine::chart::{
     BucketVolume, ChartConfig, ChartData, ChartRequest, ChartView, IndicatorLines, Interval,
     Reduced,
 };
-use parallax_engine::format::{Format, OVERFLOW_TEXT};
+use parallax_engine::format::{Format, MAX_DECIMALS, OVERFLOW_TEXT};
 use parallax_engine::{ColumnType, Formatter, Scalar, Table};
 use parallax_protocol::ipc::encode_batch;
 use parallax_protocol::layout::LayoutChart;
@@ -325,11 +325,7 @@ pub(crate) fn chart_frame(table: &Table, state: &ChartState) -> Result<ChartFram
         }
     }
     if !indicators.is_empty() {
-        let price = config
-            .ohlc
-            .as_ref()
-            .map(|o| o.close.as_str())
-            .or_else(|| config.y.first().map(String::as_str));
+        let price = config.indicator_price();
         let price_format =
             price.map_or_else(Format::default, |p| price_format(table, &state.formats, p));
         let lines = IndicatorTexts {
@@ -347,16 +343,21 @@ pub(crate) fn chart_frame(table: &Table, state: &ChartState) -> Result<ChartFram
     Ok(frame)
 }
 
-/// The format of a price-unit indicator: the price column's, with a decimal
-/// column's own scale when the layout names no decimals.
+/// The format of a price-unit indicator: the price column's, showing at least
+/// as many decimals as a double does by default, or a decimal column's scale
+/// if that is more, up to the most a format allows. An average of whole prices
+/// is rarely whole.
 fn price_format(table: &Table, formats: &BTreeMap<String, Format>, price: &str) -> Format {
     let mut format = formats.get(price).cloned().unwrap_or_default();
-    if format.decimals.is_none()
-        && let Some(ColumnType::Decimal { scale, .. }) = table
+    if format.decimals.is_none() {
+        let scale = match table
             .column_index(price)
             .map(|i| table.column(i).column_type())
-    {
-        format.decimals = u8::try_from(*scale).ok();
+        {
+            Some(ColumnType::Decimal { scale, .. }) => u8::try_from(*scale).unwrap_or(0),
+            _ => 0,
+        };
+        format.decimals = Some(scale.clamp(2, MAX_DECIMALS));
     }
     format
 }
@@ -445,5 +446,60 @@ impl IndicatorTexts<'_> {
             texts("y_text", y_texts),
         ])?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    use arrow_array::{Array, ArrayRef, Decimal128Array, RecordBatch};
+    use arrow_schema::{Field, Schema};
+    use parallax_engine::format::{Abbreviation, Format};
+    use parallax_engine::{Table, TableOptions};
+
+    use super::price_format;
+
+    fn table(scale: i8) -> Table {
+        let prices = Decimal128Array::from(vec![101, 102])
+            .with_precision_and_scale(38, scale)
+            .unwrap();
+        let schema = Schema::new(vec![Field::new("close", prices.data_type().clone(), false)]);
+        let batch =
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(prices) as ArrayRef]).unwrap();
+        let mut t = Table::new(&batch.schema(), TableOptions::default()).unwrap();
+        t.load(&[batch]).unwrap();
+        t
+    }
+
+    #[test]
+    fn indicator_texts_keep_the_price_format_and_enough_decimals() {
+        // Whole prices still give averages with two decimals.
+        let none = BTreeMap::new();
+        assert_eq!(price_format(&table(0), &none, "close").decimals, Some(2));
+        assert_eq!(price_format(&table(4), &none, "close").decimals, Some(4));
+        // A scale past what a format can show is held to the most it can, and
+        // the rest of the column's format is kept.
+        let abbreviated = BTreeMap::from([(
+            "close".to_owned(),
+            Format {
+                abbreviate: Some(Abbreviation::Thousands),
+                ..Format::default()
+            },
+        )]);
+        let format = price_format(&table(32), &abbreviated, "close");
+        assert_eq!(format.decimals, Some(30));
+        assert_eq!(format.abbreviate, Some(Abbreviation::Thousands));
+        assert!(parallax_engine::Formatter::new(&format).is_ok());
+        // Decimals the layout names are used as they are.
+        let named = BTreeMap::from([(
+            "close".to_owned(),
+            Format {
+                decimals: Some(0),
+                ..Format::default()
+            },
+        )]);
+        assert_eq!(price_format(&table(4), &named, "close").decimals, Some(0));
     }
 }

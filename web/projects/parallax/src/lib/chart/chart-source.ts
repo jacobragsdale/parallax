@@ -100,10 +100,13 @@ interface Current {
   shape: string;
 }
 
-/** What a frame's data looks like: the chart's kind and the columns it plots. */
-function shapeOf(layout: Layout): string {
+/**
+ * What a frame's data looks like: the chart's kind, the columns it plots and its indicators, whose lines a frame names
+ * by their place in the list.
+ */
+export function shapeOf(layout: Layout): string {
   const c = layout.chart;
-  return JSON.stringify(c === null ? null : [c.kind, c.x, c.y, c.y_right, c.series, c.ohlc, layout.group_by, layout.split_by, layout.measures]);
+  return JSON.stringify(c === null ? null : [c.kind, c.x, c.y, c.y_right, c.series, c.ohlc, c.indicators, c.volume, layout.group_by, layout.split_by, layout.measures]);
 }
 
 /** Opens a view for a chart and follows its layout. Call in an injection context. */

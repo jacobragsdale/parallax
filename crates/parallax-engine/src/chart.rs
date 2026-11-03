@@ -104,6 +104,18 @@ pub struct ChartConfig {
     pub volume: Option<String>,
 }
 
+impl ChartConfig {
+    /// The column price indicators read: a candle's close, or a line's first
+    /// plotted column.
+    #[must_use]
+    pub fn indicator_price(&self) -> Option<&str> {
+        self.ohlc
+            .as_ref()
+            .map(|o| o.close.as_str())
+            .or_else(|| self.y.first().map(String::as_str))
+    }
+}
+
 /// The part of a chart to reduce, and the pixels it fills.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ChartRequest {
@@ -747,7 +759,10 @@ impl ChartView {
 
     /// One series' rows that have every input of a kind, and their values.
     fn gather(&self, table: &Table, ordered: &Ordered, inputs: Inputs) -> Gathered {
-        let price = self.ohlc.map(|o| o[3]).or_else(|| self.y.first().copied());
+        let price = self
+            .config
+            .indicator_price()
+            .and_then(|c| table.column_index(c));
         let columns: Vec<usize> = match (inputs, self.ohlc) {
             (Inputs::Price, _) => price.into_iter().collect(),
             (Inputs::Range, Some([_, high, low, close])) => vec![high, low, close],

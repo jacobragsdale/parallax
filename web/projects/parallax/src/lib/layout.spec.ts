@@ -31,6 +31,16 @@ describe("layoutSchema", () => {
     expect(layoutSchema.safeParse({ formats: { x: { decimals: 31 } } }).success).toBe(false);
   });
 
+  it("checks indicators as the engine does, with TA-Lib's defaults", () => {
+    const chart = (indicators: unknown): unknown => ({ chart: { kind: "candlestick", indicators } });
+    expect(parseLayout(chart([{ kind: "macd" }, { kind: "vwap" }])).chart?.indicators).toEqual([{ kind: "macd", fast: 12, slow: 26, signal: 9 }, { kind: "vwap" }]);
+    const backwards = checkLayout(chart([{ kind: "macd", fast: 26, slow: 12 }]));
+    expect(backwards.ok ? "" : backwards.error).toContain("fast average must be shorter");
+    for (const wrong of [[{ kind: "sma", period: 0 }], [{ kind: "vwap", period: 5 }], [{ kind: "bollinger", deviations: -1 }], [{ kind: "vortex" }]]) {
+      expect(checkLayout(chart(wrong)).ok).toBe(false);
+    }
+  });
+
   it("brings older versions up to date, as the Rust crate does", () => {
     expect(parseLayout({ version: 0 }).version).toBe(1);
   });
