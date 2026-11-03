@@ -266,3 +266,96 @@ fn empty_sources_open_as_empty_tables() {
         .unwrap();
     assert_eq!(table.read().unwrap().table.num_rows(), 0);
 }
+
+async fn export(body: String) -> (axum::http::StatusCode, axum::http::HeaderMap, Vec<u8>) {
+    use tower::ServiceExt;
+    let registry = Arc::new(Registry::new(vec![positions_dataset(2_000)]));
+    let response = router(registry)
+        .oneshot(
+            axum::http::Request::post("/export")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(axum::body::Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let headers = response.headers().clone();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (status, headers, bytes.to_vec())
+}
+
+fn form(layout: &str, format: &str) -> String {
+    let encode = |s: &str| {
+        s.bytes()
+            .map(|b| match b {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' => {
+                    (b as char).to_string()
+                }
+                _ => format!("%{b:02X}"),
+            })
+            .collect::<String>()
+    };
+    format!("layout={}&format={format}", encode(layout))
+}
+
+#[tokio::test]
+async fn the_export_endpoint_downloads_a_workbook() {
+    let layout =
+        r#"{"dataset":"positions","group_by":["fund"],"measures":[{"aggregate":"count_all"}]}"#;
+    let (status, headers, body) = export(form(layout, "xlsx")).await;
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
+    assert!(
+        headers["content-type"]
+            .to_str()
+            .unwrap()
+            .contains("spreadsheetml")
+    );
+    let disposition = headers["content-disposition"].to_str().unwrap();
+    assert!(
+        disposition.starts_with("attachment; filename=\"positions-")
+            && disposition.ends_with(".xlsx\""),
+        "{disposition}"
+    );
+    assert_eq!(&body[..2], b"PK", "an xlsx file is a zip");
+}
+
+#[tokio::test]
+async fn the_export_endpoint_downloads_csv_with_every_row() {
+    let (status, headers, body) = export(form(
+        r#"{"dataset":"positions","columns":["position_id","fund"]}"#,
+        "csv",
+    ))
+    .await;
+    assert_eq!(status, 200);
+    assert!(
+        headers["content-type"]
+            .to_str()
+            .unwrap()
+            .starts_with("text/csv")
+    );
+    let text = String::from_utf8(body).unwrap();
+    assert_eq!(text.lines().next(), Some("position_id,fund"));
+    assert_eq!(text.lines().count(), 2_001);
+}
+
+#[tokio::test]
+async fn bad_exports_say_why() {
+    let (status, _, body) = export(form(r#"{"dataset":"positions"}"#, "pdf")).await;
+    assert_eq!(status, 400);
+    assert!(String::from_utf8_lossy(&body).contains("xlsx or csv"));
+    let (status, _, body) = export(form(r#"{"group_by":["fund"]}"#, "xlsx")).await;
+    assert_eq!(status, 400);
+    assert!(String::from_utf8_lossy(&body).contains("dataset"));
+    let (status, _, _) = export(form(r#"{"dataset":"nothing"}"#, "xlsx")).await;
+    assert_eq!(status, 404);
+    let (status, _, body) = export(form(
+        r#"{"dataset":"positions","group_by":["no_such_column"]}"#,
+        "xlsx",
+    ))
+    .await;
+    assert_eq!(status, 422);
+    assert!(String::from_utf8_lossy(&body).contains("no_such_column"));
+}

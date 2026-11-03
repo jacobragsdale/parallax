@@ -41,6 +41,7 @@ import { CellFlag } from "../frame";
 import type { FrameData, TreeRows } from "../frame";
 import { TREE_WIDTH_KEY, layoutSchema } from "../layout";
 import type { Layout, LayoutInput, LayoutScalar } from "../layout";
+import { ParallaxClient } from "../client";
 import { installThemeStyles, readTheme } from "../theme";
 import type { Theme, ThemeName } from "../theme";
 import { DEFAULT_TREE_WIDTH, DEFAULT_WIDTH, MIN_WIDTH, flatGeometry, groupedGeometry, rowGeometry } from "./geometry";
@@ -305,6 +306,7 @@ const GRID_STYLES = `
       [sourceAsOf]="source.frame()?.sourceAsOfMicros ?? null"
       [status]="source.status()"
       [message]="message()"
+      (exported)="export($event)"
     />
   `,
   styles: GRID_STYLES
@@ -379,8 +381,11 @@ export class GridComponent {
   private prepared: { readonly key: string; readonly text: string } | null = null;
   private tooltipTimer: ReturnType<typeof setTimeout> | null = null;
 
+  private readonly document = inject(DOCUMENT);
+  private readonly client = inject(ParallaxClient);
+
   constructor() {
-    installThemeStyles(inject(DOCUMENT));
+    installThemeStyles(this.document);
     const destroyRef = inject(DestroyRef);
     // Measure once rendered and whenever the grid resizes; that also asks for the first rows.
     afterNextRender(() => {
@@ -410,6 +415,52 @@ export class GridComponent {
   /** Drawing counters, for measurement. */
   public drawStats(): DrawStats {
     return this.stats;
+  }
+
+  /**
+   * Downloads the view as an Excel workbook or a CSV file. The browser posts the
+   * layout in a form and streams the answer to disk, so a large export never sits
+   * in the page's memory. A refusal, such as more rows than Excel holds, comes
+   * back as text, which the status bar shows.
+   */
+  public export(format: "xlsx" | "csv"): void {
+    const layout = this.current();
+    if (layout === null) {
+      return;
+    }
+    const target = `px-export-${String(Date.now())}-${String(Math.random()).slice(2)}`;
+    const frame = this.document.createElement("iframe");
+    frame.name = target;
+    frame.hidden = true;
+    // Downloads do not load the frame; an error answer does.
+    frame.addEventListener("load", () => {
+      const text = frame.contentDocument?.body.textContent.trim() ?? "";
+      if (text !== "") {
+        this.message.set(`Export failed: ${text}`);
+      }
+    });
+    this.document.body.append(frame);
+    setTimeout(() => {
+      frame.remove();
+    }, 600_000);
+    const form = this.document.createElement("form");
+    form.method = "post";
+    form.action = this.client.exportUrl();
+    form.target = target;
+    for (const [name, value] of [
+      ["layout", JSON.stringify(layout)],
+      ["format", format]
+    ] as const) {
+      const field = this.document.createElement("input");
+      field.type = "hidden";
+      field.name = name;
+      field.value = value;
+      form.append(field);
+    }
+    this.document.body.append(form);
+    form.submit();
+    form.remove();
+    this.message.set(format === "xlsx" ? "Exporting to Excel; your browser will save the file." : "Exporting to CSV; your browser will save the file.");
   }
 
   /** Lists a column's values under the view's other filters, for filter pick-lists. */

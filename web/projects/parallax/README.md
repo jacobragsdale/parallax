@@ -49,6 +49,13 @@ levels and top-N. Double-clicking a value opens the rows behind its group.
 <px-pivot [(layout)]="layout" />
 ```
 
+## Export a view
+
+The status bar under every grid has **Export to Excel** and **CSV**. The grid
+posts its layout to the server's `/export`, and the browser saves the file;
+`GridComponent.export("xlsx")` does the same from code. If the server is not
+at `/export` next to `url`, set `exportUrl` in `provideParallax`.
+
 ## Share a view
 
 `encodeLayout(layout)` returns text for a URL parameter, and

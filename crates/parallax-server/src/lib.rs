@@ -11,8 +11,11 @@
 //!
 //! - `GET /ws` upgrades to the protocol: binary protobuf messages in both directions.
 //! - `POST /invalidate/{dataset}` reloads every cached table of a dataset now.
+//! - `POST /export` downloads a view as an Excel workbook or a CSV file; see
+//!   [`export`].
 //! - `GET /health` answers `ok`.
 
+pub mod export;
 pub mod registry;
 pub mod sources;
 
@@ -36,6 +39,7 @@ pub fn router(registry: Arc<Registry>) -> Router {
     Router::new()
         .route("/ws", get(upgrade))
         .route("/invalidate/{dataset}", post(invalidate))
+        .route("/export", post(export::export))
         .route("/health", get(|| async { "ok" }))
         .with_state(registry)
 }

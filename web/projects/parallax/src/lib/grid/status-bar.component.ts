@@ -4,7 +4,7 @@
  * and a failed refresh. Stale data is wrong data, so the age is always visible.
  */
 
-import { ChangeDetectionStrategy, Component, DestroyRef, computed, inject, input, signal } from "@angular/core";
+import { ChangeDetectionStrategy, Component, DestroyRef, computed, inject, input, output, signal } from "@angular/core";
 
 import type { TableStatus } from "../proto/parallax_pb";
 
@@ -55,6 +55,8 @@ const GROUPED = new Intl.NumberFormat("en-US");
       <span class="px-badge px-badge-danger" role="status" [title]="f.title">{{ f.text }}</span>
     }
     <span class="px-status-message" role="status">{{ message() }}</span>
+    <button type="button" class="px-status-export" (click)="exported.emit('xlsx')">Export to Excel</button>
+    <button type="button" class="px-status-export" (click)="exported.emit('csv')">CSV</button>
     <button type="button" class="px-status-info" [attr.aria-expanded]="open()" aria-label="About this data" (click)="open.set(!open())">i</button>
     @if (open()) {
       <dl class="px-info" role="dialog" aria-label="About this data">
@@ -79,6 +81,8 @@ export class StatusBarComponent {
   public readonly status = input<TableStatus | null>(null);
   /** A short note, such as the result of a copy. */
   public readonly message = input<string>("");
+  /** Fires when the user asks for an export, with its format. */
+  public readonly exported = output<"xlsx" | "csv">();
 
   protected readonly open = signal(false);
   private readonly now = signal(Date.now());

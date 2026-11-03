@@ -1,0 +1,26 @@
+[package]
+name = "parallax-export"
+description = "Excel and CSV exports of parallax views, through the same engine and formatter as the screen"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+arrow-array.workspace = true
+arrow-schema.workspace = true
+jiff.workspace = true
+parallax-engine.workspace = true
+parallax-protocol.workspace = true
+rust_xlsxwriter = { version = "0.102", default-features = false, features = ["constant_memory", "ryu"] }
+thiserror.workspace = true
+
+[dev-dependencies]
+calamine = "0.38"
+parallax-datagen.workspace = true
+tempfile = "3.27"
+zip = { version = "9.2", default-features = false, features = ["deflate"] }
+
+[lints]
+workspace = true

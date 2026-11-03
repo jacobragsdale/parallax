@@ -364,6 +364,68 @@ impl Formatter {
         each(array, |i| self.timestamp_full(values.value(i), zoned))
     }
 
+    /// The Excel number format that shows values of `data_type` with the digits
+    /// this formatter shows, or `None` where Excel's General format already does
+    /// (text and booleans) or cannot (instants to the microsecond, which export
+    /// as text).
+    #[must_use]
+    pub fn excel_format(&self, data_type: &DataType) -> Option<String> {
+        self.excel(data_type, true)
+    }
+
+    /// The same format without a minus sign, for negative values that round to
+    /// zero: Excel would show them as `-0.00`, and this formatter never shows a
+    /// minus sign on zero.
+    #[must_use]
+    pub fn excel_unsigned_format(&self, data_type: &DataType) -> Option<String> {
+        self.excel(data_type, false)
+    }
+
+    fn excel(&self, data_type: &DataType, signed: bool) -> Option<String> {
+        let natural = match data_type {
+            DataType::Float64 => 2,
+            DataType::Decimal128(_, scale) => {
+                u8::try_from((*scale).max(0)).unwrap_or(0).min(MAX_DECIMALS)
+            }
+            DataType::Int64 => 0,
+            DataType::Date32 => return Some("yyyy-mm-dd".to_owned()),
+            DataType::Timestamp(..) => {
+                return match self.precision {
+                    TimePrecision::Seconds => Some("yyyy-mm-dd hh:mm:ss".to_owned()),
+                    TimePrecision::Milliseconds => Some("yyyy-mm-dd hh:mm:ss.000".to_owned()),
+                    TimePrecision::Microseconds => None,
+                };
+            }
+            _ => return None,
+        };
+        let decimals = self.decimals_or(natural) as usize;
+        let mut body = if self.thousands { "#,##0" } else { "0" }.to_owned();
+        if decimals > 0 {
+            body.push('.');
+            body.extend(std::iter::repeat_n('0', decimals));
+        }
+        if let Some(a) = self.abbreviate {
+            // Each trailing comma divides by a thousand.
+            body.extend(std::iter::repeat_n(',', a.shift() as usize / 3));
+            write!(body, "\"{}\"", a.suffix()).expect("writes to a string");
+        }
+        if self.percent {
+            body.push('%');
+        }
+        Some(match (signed, self.negative) {
+            (true, Negative::Minus) => body,
+            (true, Negative::Parentheses) => format!("{body};({body})"),
+            (false, _) => format!("{body};{body}"),
+        })
+    }
+
+    /// Whether `text`, made by this formatter, shows a value that rounded to zero.
+    #[must_use]
+    pub fn shows_zero(text: &str) -> bool {
+        text.chars().any(|c| c.is_ascii_digit())
+            && text.chars().filter(char::is_ascii_digit).all(|c| c == '0')
+    }
+
     fn signed(&self, negative: bool, body: String) -> String {
         match (negative, self.negative) {
             (false, _) => body,
@@ -902,6 +964,84 @@ mod tests {
             "\"1969-12-31T23:59:59.999999Z\""
         );
         assert_eq!(scalar_json(&ColumnType::Utf8, &Scalar::Null), "null");
+    }
+
+    #[test]
+    fn excel_formats_show_the_same_digits() {
+        let f = |format: Format, ty: DataType| Formatter::new(&format).unwrap().excel_format(&ty);
+        assert_eq!(f(Format::default(), DataType::Float64).unwrap(), "#,##0.00");
+        assert_eq!(
+            f(Format::default(), DataType::Decimal128(18, 4)).unwrap(),
+            "#,##0.0000"
+        );
+        assert_eq!(f(Format::default(), DataType::Int64).unwrap(), "#,##0");
+        assert_eq!(
+            f(
+                Format {
+                    thousands: Some(false),
+                    decimals: Some(3),
+                    ..Format::default()
+                },
+                DataType::Float64
+            )
+            .unwrap(),
+            "0.000"
+        );
+        assert_eq!(
+            f(
+                Format {
+                    percent: true,
+                    ..Format::default()
+                },
+                DataType::Float64
+            )
+            .unwrap(),
+            "#,##0.00%"
+        );
+        assert_eq!(
+            f(
+                Format {
+                    abbreviate: Some(Abbreviation::Millions),
+                    negative: Negative::Parentheses,
+                    ..Format::default()
+                },
+                DataType::Float64
+            )
+            .unwrap(),
+            "#,##0.0,,\"M\";(#,##0.0,,\"M\")"
+        );
+        assert_eq!(
+            f(Format::default(), DataType::Date32).unwrap(),
+            "yyyy-mm-dd"
+        );
+        let instant = DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()));
+        assert_eq!(
+            f(Format::default(), instant.clone()).unwrap(),
+            "yyyy-mm-dd hh:mm:ss"
+        );
+        assert!(
+            f(
+                Format {
+                    precision: TimePrecision::Microseconds,
+                    ..Format::default()
+                },
+                instant
+            )
+            .is_none()
+        );
+        assert!(f(Format::default(), DataType::Utf8).is_none());
+        let unsigned = Formatter::default().excel_unsigned_format(&DataType::Float64);
+        assert_eq!(unsigned.unwrap(), "#,##0.00;#,##0.00");
+    }
+
+    #[test]
+    fn zero_text_is_recognised() {
+        assert!(Formatter::shows_zero("0.00"));
+        assert!(Formatter::shows_zero("0.0M"));
+        assert!(Formatter::shows_zero("0.00%"));
+        assert!(!Formatter::shows_zero("-0.01"));
+        assert!(!Formatter::shows_zero("—"));
+        assert!(!Formatter::shows_zero(""));
     }
 
     #[test]

@@ -9,6 +9,8 @@ import { Connection } from "./connection";
 export interface ParallaxConfig {
   /** The server's WebSocket URL, such as `wss://host/ws`. A path such as `/ws` is resolved against the page. */
   readonly url: string;
+  /** Where exports are posted. By default, `/export` on the same server as `url`. */
+  readonly exportUrl?: string;
 }
 
 const CONFIG = new InjectionToken<ParallaxConfig>("parallax config");
@@ -31,6 +33,18 @@ function absolute(url: string): string {
 export class ParallaxClient {
   private readonly config = inject(CONFIG);
   private connecting: Promise<Connection> | null = null;
+
+  /** The URL exports are posted to. */
+  public exportUrl(): string {
+    const configured = this.config.exportUrl;
+    if (configured !== undefined) {
+      return configured;
+    }
+    const socket = new URL(absolute(this.config.url));
+    socket.protocol = socket.protocol === "wss:" ? "https:" : "http:";
+    socket.pathname = socket.pathname.replace(/\/ws$/, "") + "/export";
+    return socket.toString();
+  }
 
   /** Returns the shared connection. */
   public connection(): Promise<Connection> {

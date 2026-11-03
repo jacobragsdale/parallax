@@ -372,6 +372,9 @@ struct Grouped {
     split_keys: Vec<Box<[Key]>>,
     split_rows: Vec<i64>,
     expanded: Vec<(Vec<Scalar>, bool)>,
+    /// Shows every group whatever its expanded state, for exports. Frames still
+    /// report each group's own state.
+    show_all: bool,
     visible: Option<Vec<Visible>>,
     columns: Option<Vec<(u32, usize)>>,
     /// Values of lazy measures above the leaves, by (node, split, measure). Cleared
@@ -593,6 +596,7 @@ impl View {
                 split_keys: Vec::new(),
                 split_rows: Vec::new(),
                 expanded: Vec::new(),
+                show_all: false,
                 visible: None,
                 columns: None,
                 lazy_values: RefCell::default(),
@@ -807,6 +811,33 @@ impl View {
             total_columns,
             config_version: self.config_version,
             load_version: self.load_version,
+        }
+    }
+
+    /// The formatter of measure `measure`, as frames use it.
+    #[must_use]
+    pub fn measure_formatter(&self, measure: usize) -> Option<&Formatter> {
+        self.formatters.measures.get(measure)
+    }
+
+    /// The formatter of source column `name`, as frames use it.
+    #[must_use]
+    pub fn column_formatter(&self, table: &Table, name: &str) -> Option<&Formatter> {
+        table
+            .column_index(name)
+            .and_then(|c| self.formatters.columns.get(c))
+    }
+
+    /// Shows every group of a grouped view, whatever its expanded state, or goes
+    /// back to showing only expanded ones. Frames still report each group's own
+    /// state in `__expanded`, so an export can collapse the outline to match the
+    /// screen. Does nothing for a flat view.
+    pub fn show_all(&mut self, all: bool) {
+        if let Kind::Grouped(g) = &mut self.kind
+            && g.show_all != all
+        {
+            g.show_all = all;
+            g.visible = None;
         }
     }
 
@@ -1551,7 +1582,9 @@ impl Grouped {
                 id: u32,
                 out: &mut Vec<Visible>,
             ) {
-                if g.node(id).depth as usize == g.levels() || !g.is_expanded(table, id, config) {
+                if g.node(id).depth as usize == g.levels()
+                    || (!g.show_all && !g.is_expanded(table, id, config))
+                {
                     return;
                 }
                 let (children, rest) = g.children_in_order(table, id, config);

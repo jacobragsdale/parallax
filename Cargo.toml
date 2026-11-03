@@ -12,6 +12,7 @@ repository = "https://github.com/jacobragsdale/parallax"
 [workspace.dependencies]
 parallax-datagen = { path = "crates/parallax-datagen", version = "0.1.0" }
 parallax-engine = { path = "crates/parallax-engine", version = "0.1.0" }
+parallax-export = { path = "crates/parallax-export", version = "0.1.0" }
 parallax-protocol = { path = "crates/parallax-protocol", version = "0.1.0" }
 parallax-session = { path = "crates/parallax-session", version = "0.1.0" }
 anyhow = "1.0.104"

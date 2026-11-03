@@ -560,16 +560,37 @@ when the theme changes. Compact and comfortable densities set the row height.
 
 ## Excel export
 
-The server generates exports with `rust_xlsxwriter` in its constant-memory
-mode and streams them as downloads, because VDI memory is scarce. An export
-runs the current layout through the same engine, so it matches the screen.
+The server writes exports with `rust_xlsxwriter` and streams them as downloads,
+because VDI memory is scarce: the page posts the layout in a form to
+`POST /export`, and the browser saves the answer to disk instead of holding it.
+An export runs the layout through the same engine and formatter as the screen,
+so it holds the same numbers.
 
-- Cells hold real numbers, with Excel number formats from the shared formatter.
-- The sheet has frozen headers, autofilter and column widths.
-- Pivot levels become collapsible outline groups. `rust_xlsxwriter` doesn't
-  write native pivot tables, so a pivot exports as values.
-- An export larger than Excel's limit of 1,048,576 rows is refused, and CSV or
-  Parquet is offered instead.
+- Cells hold real numbers, with Excel number formats that show the digits the
+  screen shows. A negative value that rounds to zero gets a format without a
+  minus sign, because the screen never shows one there.
+- Dates and times are Excel dates, shown in the display zone. Times shown to
+  the microsecond, which Excel cannot hold, are written as their text.
+- The sheet has a frozen header row, column widths from the layout, and, for
+  flat views, an autofilter.
+- A pivot exports every group as an outline, and groups collapsed on screen
+  start collapsed. `rust_xlsxwriter` writes outline levels only for sheets it
+  holds in memory, so pivots of up to 2,000,000 cells are outlined; larger ones
+  stream without an outline, indented by level. Native Excel pivot tables are not
+  written.
+- A Notes sheet records the dataset, when the source was read, the layout, and
+  every place Excel cannot match the screen: values with more than 15
+  significant digits, which Excel rounds; infinities, which it lacks; and the
+  like.
+- An export larger than Excel's limit of 1,048,576 rows, or text longer than a
+  cell's 32,767 characters, is refused with the reason, and CSV is offered
+  instead. CSV holds every digit as text, and a pivot's CSV has one column per
+  group level.
+
+The read-back tests open each export with `calamine` and compare every cell
+with the engine's value, bit for bit for doubles. Excel can't run on the build
+host, so `cargo run -p parallax-export --example verification` writes a workbook
+whose second and third columns must read the same in real Excel on a VDI.
 
 ## Deliberately out of scope
 

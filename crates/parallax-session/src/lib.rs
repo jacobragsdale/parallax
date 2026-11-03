@@ -54,6 +54,13 @@ pub struct TableState {
 pub type SharedTable = Arc<RwLock<TableState>>;
 
 impl TableState {
+    /// When the source was read for the current load, in microseconds since the
+    /// Unix epoch.
+    #[must_use]
+    pub fn source_as_of_micros(&self) -> i64 {
+        self.source_as_of_micros
+    }
+
     /// Wraps a table that already holds its first load.
     #[must_use]
     pub fn new(table: Table, loaded_at_micros: i64, source_as_of_micros: i64) -> Self {

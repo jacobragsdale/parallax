@@ -268,3 +268,28 @@ test.describe("px-pivot", () => {
     expect(await layout(page)).toMatchObject({ filters: [] });
   });
 });
+
+test.describe("export", () => {
+  test("Export to Excel downloads a workbook of the view", async ({ page }) => {
+    await open(page, "preset=pivot");
+    const download = page.waitForEvent("download", { timeout: 60_000 });
+    await page.getByRole("button", { name: "Export to Excel" }).click();
+    const file = await download;
+    expect(file.suggestedFilename()).toMatch(/^positions-\d{4}-\d{2}-\d{2}-\d{4}\.xlsx$/);
+    const path = await file.path();
+    const bytes = await import("node:fs").then((fs) => fs.readFileSync(path));
+    expect(bytes.subarray(0, 2).toString()).toBe("PK");
+  });
+
+  test("CSV downloads every digit of the view", async ({ page }) => {
+    await open(page, "preset=pivot");
+    const download = page.waitForEvent("download", { timeout: 60_000 });
+    await page.getByRole("button", { name: "CSV" }).click();
+    const file = await download;
+    const text = await import("node:fs").then(async (fs) => fs.readFileSync(await file.path(), "utf8"));
+    const lines = text.split("\n");
+    expect(lines[0]?.startsWith("level,fund,strategy,sector,ticker,Bond | sum(market_value_usd),")).toBe(true);
+    expect(lines[0]?.endsWith(",Total | count(*)")).toBe(true);
+    expect(lines[1]?.startsWith("0,,,,,")).toBe(true);
+  });
+});

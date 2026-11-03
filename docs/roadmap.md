@@ -86,6 +86,9 @@ for these numbers.
 | Server memory | ≤ 1.5 × the raw Arrow size of loaded tables |
 | Excel export, 1 million rows × 40 columns | ≤ 30 s |
 
+On the build host, single-threaded, an Excel export of 1,000,000 generated
+positions by 40 columns took 28.0 s and the same CSV 8.1 s (2026-11-02).
+
 A budget for live updates, 10,000 row updates per second with a p99 of
 ≤ 250 ms from update to screen, waits until a streaming source exists. See
 [Deferred work](future.md).
