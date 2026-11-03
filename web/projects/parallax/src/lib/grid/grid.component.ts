@@ -57,7 +57,12 @@ export interface DrawStats {
   readonly fullDraws: number;
   readonly cellDraws: number;
   readonly drawMs: number;
+  /** For the most recent frames that answered a request, the time from asking for the rows to drawing them, in ms. */
+  readonly latencyMs: readonly number[];
 }
+
+/** How many recent request-to-draw times the stats keep. */
+const LATENCIES = 100;
 
 /** A request for the rows behind one group. */
 export interface DrillRequest {
@@ -368,7 +373,9 @@ export class GridComponent {
   });
   private readonly extent = computed((): Extent => ({ rows: this.totalRows(), columns: this.geometry().count, tree: this.geometry().treePx > 0 }));
 
-  private stats: DrawStats = { frames: 0, fullDraws: 0, cellDraws: 0, drawMs: 0 };
+  private stats: DrawStats = { frames: 0, fullDraws: 0, cellDraws: 0, drawMs: 0, latencyMs: [] };
+  /** The last frame drawn, so that its request-to-draw time is counted once. */
+  private timedFrame: FrameData | null = null;
   private drawn = new Map<string, string>();
   private drawnRows = new Set<number>();
   /** Full text of cells drawn cut short, and notes for flagged cells, by cell key. */
@@ -973,7 +980,11 @@ export class GridComponent {
     const pass = this.begin(context, frame, { first, scrollLeft, width, height });
     if (frame !== null) {
       const cells = this.drawRows(pass, frame, first, height);
-      this.stats = { frames: this.stats.frames + 1, fullDraws: this.stats.fullDraws, cellDraws: this.stats.cellDraws + cells, drawMs: this.stats.drawMs + performance.now() - started };
+      const now = performance.now();
+      const answered = frame !== this.timedFrame && frame.requestedAtMs !== undefined;
+      this.timedFrame = frame;
+      const latencyMs = answered ? [...this.stats.latencyMs.slice(1 - LATENCIES), now - (frame.requestedAtMs ?? now)] : this.stats.latencyMs;
+      this.stats = { frames: this.stats.frames + 1, fullDraws: this.stats.fullDraws, cellDraws: this.stats.cellDraws + cells, drawMs: this.stats.drawMs + now - started, latencyMs };
     }
   }
 

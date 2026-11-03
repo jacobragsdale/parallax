@@ -5,6 +5,8 @@
 
 listen = "127.0.0.1:8791"
 static_dir = "web/dist/demo/browser"
+# Lets the demo's performance overlay measure the whole tab, worker included.
+cross_origin_isolated = true
 
 [[dataset]]
 name = "positions"
@@ -32,3 +34,12 @@ browser = true
 kind = "generator"
 dataset = "positions"
 rows = 200000
+
+# Daily prices for 50 tickers, small enough to hold in the browser.
+[[dataset]]
+name = "prices"
+browser = true
+[dataset.source]
+kind = "generator"
+dataset = "prices"
+tickers = 50

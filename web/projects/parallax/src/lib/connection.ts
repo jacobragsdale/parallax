@@ -71,7 +71,7 @@ function sameViewport(a: Viewport | null, b: Viewport): boolean {
 export class ViewHandle {
   private configVersion = 0n;
   private lastLoadVersion = 0n;
-  private inFlight: { readonly viewport: Viewport; readonly requestId: bigint } | null = null;
+  private inFlight: { readonly viewport: Viewport; readonly requestId: bigint; readonly sentAtMs: number } | null = null;
   private pending: Viewport | null = null;
   private closed = false;
   private readonly fetches = new Map<bigint, Pending<FrameData>>();
@@ -170,7 +170,7 @@ export class ViewHandle {
       case: "setViewport",
       value: { viewId: this.id, firstRow: BigInt(viewport.firstRow), rowCount: BigInt(viewport.rowCount), firstColumn: viewport.firstColumn, columnCount: viewport.columnCount }
     });
-    this.inFlight = { viewport, requestId };
+    this.inFlight = { viewport, requestId, sentAtMs: performance.now() };
   }
 
   /** Releases the in-flight viewport if `requestId` answers it, and sends any pending one. */
@@ -194,12 +194,13 @@ export class ViewHandle {
       fetch.resolve(frame);
       return;
     }
+    const sentAtMs = this.inFlight?.requestId === requestId ? this.inFlight.sentAtMs : undefined;
     this.settle(requestId);
     if (frame.configVersion < this.configVersion || frame.loadVersion < this.lastLoadVersion) {
       return;
     }
     this.lastLoadVersion = frame.loadVersion;
-    this.listener.frame(frame);
+    this.listener.frame(sentAtMs === undefined ? frame : { ...frame, requestedAtMs: sentAtMs });
   }
 
   /** @internal Called by the connection when the transport closes: fetches fail and the view reports why. */

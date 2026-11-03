@@ -9,7 +9,7 @@ import { ChangeDetectionStrategy, Component, DOCUMENT, ViewEncapsulation, comput
 
 import type { DistinctValues } from "../connection";
 import { GridComponent } from "../grid/grid.component";
-import type { Density, DrillRequest } from "../grid/grid.component";
+import type { Density, DrawStats, DrillRequest } from "../grid/grid.component";
 import { layoutSchema } from "../layout";
 import type { Layout, LayoutInput } from "../layout";
 import { installThemeStyles } from "../theme";
@@ -255,6 +255,11 @@ export class PivotComponent {
   public readonly density = input<Density>("compact");
 
   private readonly gridRef = viewChild.required<GridComponent>("grid");
+
+  /** The grid's drawing counters. */
+  public drawStats(): DrawStats {
+    return this.gridRef().drawStats();
+  }
   protected readonly panelOpen = signal(true);
   protected readonly drill = signal<{ readonly label: string; readonly layout: Layout; readonly source: string } | null>(null);
   protected readonly current = computed((): Layout | null => {

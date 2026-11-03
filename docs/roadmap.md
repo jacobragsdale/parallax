@@ -95,9 +95,14 @@ A budget for live updates, 10,000 row updates per second with a p99 of
 
 ## Verification on a VDI
 
-The demo app has a performance overlay. It shows frame time, main-thread busy
-time, tab memory and the latency from data to screen, and a **Copy report**
-button copies those figures. At each milestone the demo runs on a Citrix VDI
+The demo app has a performance overlay, opened by its **Performance** button.
+It shows frame time, the main-thread time blocked by long frames, the grid's
+drawing time per frame, tab memory and the time from asking for rows to drawing
+them, and a **Copy report** button copies those figures with the browser and
+window they were taken on. Tab memory covers the whole tab, worker included,
+only when the server sends `cross_origin_isolated` headers and the page is a
+secure context (HTTPS or localhost); otherwise it is Chromium's JavaScript heap
+for the page, and the report says which. At each milestone the demo runs on a Citrix VDI
 against a test deployment, and the copied report joins the benchmark history
 next to the benchmark host's figures. The Excel verification workbook is opened
 on the same VDI.

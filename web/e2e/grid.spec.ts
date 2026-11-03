@@ -286,7 +286,8 @@ test.describe("export", () => {
     await page.route("**/export", async (route) => {
       const token = new URLSearchParams(route.request().postData() ?? "").get("token") ?? "";
       const payload = JSON.stringify({ source: "parallax-export", token, error: "the view has 2000000 rows, more than the 1048576 an Excel sheet holds" });
-      await route.fulfill({ status: 422, contentType: "text/html", body: `<script>parent.postMessage(${payload}, "*");</script>` });
+      // The test server isolates its pages, and an isolated page shows a frame only from a server that agrees.
+      await route.fulfill({ status: 422, contentType: "text/html", headers: { "cross-origin-embedder-policy": "require-corp" }, body: `<script>parent.postMessage(${payload}, "*");</script>` });
     });
     await open(page, "preset=pivot");
     await page.getByRole("button", { name: "Export to Excel" }).click();

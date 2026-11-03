@@ -11,7 +11,7 @@
     "format": "prettier . --write",
     "format:check": "prettier . --check",
     "test": "ng test parallax --watch=false",
-    "e2e": "playwright test -c e2e/playwright.config.ts grid.spec browser.spec",
+    "e2e": "playwright test -c e2e/playwright.config.ts grid.spec browser.spec demo.spec",
     "performance": "playwright test -c e2e/playwright.config.ts grid-performance"
   },
   "private": true,
