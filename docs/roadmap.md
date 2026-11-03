@@ -89,6 +89,23 @@ for these numbers.
 On the build host, single-threaded, an Excel export of 1,000,000 generated
 positions by 40 columns took 28.0 s and the same CSV 8.1 s (2026-11-02).
 
+Grouped views build on 16 threads of the build host. Its timings vary about
+twofold under load, so these are the best of three runs (2026-11-03):
+
+| Grouped view of generated positions | 1M rows | 2.5M rows |
+|---|---|---|
+| Count by fund | 8 ms | 23 ms |
+| Three sums by fund | 16 ms | 44 ms |
+| Three sums by fund, strategy, sector and ticker | 121 ms | 261 ms |
+| The reference pivot: those groups by asset class | 217 ms | 426 ms |
+
+The reference pivot took 1,045 ms at 1M rows before the build went leaf-first and
+parallel. Groupings with few groups are on course for the 500 ms budget at 20M
+rows. The reference pivot, with about 150,000 leaf groups at 1M rows, is not:
+its time now goes to building one tree node per group, which needs a more
+compact tree to come down further. The build host has too little free memory to
+load 20M rows, so the budget is still unmeasured at that size.
+
 A budget for live updates, 10,000 row updates per second with a p99 of
 ≤ 250 ms from update to screen, waits until a streaming source exists. See
 [Deferred work](future.md).

@@ -224,9 +224,13 @@ pub(crate) struct Input {
 #[derive(Clone, Debug)]
 pub(crate) enum State {
     Count(i64),
+    // Exact accumulators are hundreds of bytes and a pivot holds a state per cell
+    // and measure, so they are boxed: every state is as large as the largest
+    // variant, which would otherwise make a count as large as two accumulators.
     Float {
-        sum: ExactSum,
-        squares: ExactSum,
+        sum: Box<ExactSum>,
+        /// The exact sum of squares, kept only for variances.
+        squares: Option<Box<ExactSum>>,
         n: i64,
     },
     Exact {
@@ -237,8 +241,8 @@ pub(crate) enum State {
         huge: i64,
     },
     WeightedFloat {
-        weighted: ExactSum,
-        weights: ExactSum,
+        weighted: Box<ExactSum>,
+        weights: Box<ExactSum>,
         n: i64,
     },
     WeightedExact {
@@ -332,8 +336,9 @@ impl CompiledMeasure {
                     }
                 } else {
                     State::Float {
-                        sum: ExactSum::new(),
-                        squares: ExactSum::new(),
+                        sum: Box::new(ExactSum::new()),
+                        squares: matches!(self.aggregate, Aggregate::Variance | Aggregate::StdDev)
+                            .then(|| Box::new(ExactSum::new())),
                         n: 0,
                     }
                 }
@@ -348,8 +353,8 @@ impl CompiledMeasure {
                     }
                 } else {
                     State::WeightedFloat {
-                        weighted: ExactSum::new(),
-                        weights: ExactSum::new(),
+                        weighted: Box::new(ExactSum::new()),
+                        weights: Box::new(ExactSum::new()),
                         n: 0,
                     }
                 }
@@ -415,7 +420,7 @@ impl State {
                     } else {
                         sum.remove(x);
                     }
-                    if matches!(measure.aggregate, Aggregate::Variance | Aggregate::StdDev)
+                    if let Some(squares) = squares.as_deref_mut()
                         && x.is_finite()
                     {
                         add_square(squares, x, sign);
@@ -527,7 +532,9 @@ impl State {
                 },
             ) => {
                 sum.merge(s2);
-                squares.merge(q2);
+                if let (Some(a), Some(b)) = (squares.as_deref_mut(), q2.as_deref()) {
+                    a.merge(b);
+                }
                 *n += n2;
             }
             (
@@ -598,6 +605,9 @@ impl State {
     }
 }
 
+// A state per cell and measure: keep it small.
+const _: () = assert!(std::mem::size_of::<State>() <= 96);
+
 /// Returns `10^scale` for a non-negative decimal scale. Negative scales are
 /// normalized to zero on load.
 pub(crate) fn pow10(scale: i8) -> u128 {
@@ -662,6 +672,9 @@ pub(crate) fn finish(
                     if !sum.is_finite() {
                         return MeasureValue::Float(f64::NAN);
                     }
+                    let Some(squares) = squares.as_deref() else {
+                        unreachable!("variances keep their squares")
+                    };
                     // A square beyond the double range cannot be held exactly.
                     if !squares.is_finite() {
                         return MeasureValue::Overflow;
