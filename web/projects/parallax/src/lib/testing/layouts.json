@@ -179,14 +179,9 @@
         "volume AAPL"
       ],
       "horizontal": true,
-      "kind": "candlestick",
+      "kind": "line",
       "log_y": true,
-      "ohlc": {
-        "close": "close",
-        "high": "high",
-        "low": "low",
-        "open": "open"
-      },
+      "ohlc": null,
       "range": {
         "from": 1200.5,
         "to": 1450.0
@@ -195,11 +190,51 @@
       "stacked": true,
       "x": "date",
       "y": [
-        "vwap"
+        "close"
       ],
       "y_right": [
         "volume"
       ]
+    },
+    "column_widths": {},
+    "columns": [],
+    "dataset": "prices",
+    "expand_depth": 0,
+    "expanded": [],
+    "filters": [],
+    "formats": {},
+    "group_by": [],
+    "group_sort": {
+      "by": "key",
+      "descending": false
+    },
+    "having": [],
+    "measures": [],
+    "parameters": {},
+    "sort": [],
+    "split_by": [],
+    "top_n": null,
+    "version": 1
+  },
+  {
+    "chart": {
+      "axis": "value",
+      "hidden": [],
+      "horizontal": false,
+      "kind": "candlestick",
+      "log_y": false,
+      "ohlc": {
+        "close": "close",
+        "high": "high",
+        "low": "low",
+        "open": "open"
+      },
+      "range": null,
+      "series": null,
+      "stacked": false,
+      "x": "date",
+      "y": [],
+      "y_right": []
     },
     "column_widths": {},
     "columns": [],

@@ -112,7 +112,12 @@ export class ViewHandle {
 
   /** Asks for a window of rows and data columns. */
   public setViewport(viewport: Viewport): void {
-    if (this.closed || sameViewport(this.inFlight?.viewport ?? null, viewport) || sameViewport(this.pending?.viewport ?? null, viewport)) {
+    if (this.closed || sameViewport(this.pending?.viewport ?? null, viewport)) {
+      return;
+    }
+    // Back to the window in flight: whatever was waiting is no longer wanted.
+    if (sameViewport(this.inFlight?.viewport ?? null, viewport)) {
+      this.pending = null;
       return;
     }
     // The clock starts now, so time spent waiting behind the request in flight counts.
@@ -129,7 +134,12 @@ export class ViewHandle {
    * and panning faster than frames arrive never queues them.
    */
   public setChartWindow(window: ChartWindow): void {
-    if (this.closed || sameChartWindow(this.chartInFlight?.window ?? null, window) || sameChartWindow(this.chartPending?.window ?? null, window)) {
+    if (this.closed || sameChartWindow(this.chartPending?.window ?? null, window)) {
+      return;
+    }
+    // Back to the window in flight: whatever was waiting is no longer wanted.
+    if (sameChartWindow(this.chartInFlight?.window ?? null, window)) {
+      this.chartPending = null;
       return;
     }
     const askedAtMs = performance.now();

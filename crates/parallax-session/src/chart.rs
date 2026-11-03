@@ -21,37 +21,46 @@ pub(crate) struct ChartState {
     pub(crate) window: Option<ChartRequest>,
 }
 
-/// Formats one column's values as the layout says.
+/// Formats a column's values as the layout says. Made once per column for a
+/// frame, not once per value.
 struct Texts<'a> {
     table: &'a Table,
-    formats: &'a BTreeMap<String, Format>,
+    index: Option<usize>,
+    ty: ColumnType,
+    formatter: Formatter,
 }
 
-impl Texts<'_> {
-    fn formatter(&self, column: &str) -> Formatter {
-        self.formats
-            .get(column)
-            .and_then(|f| Formatter::new(f).ok())
-            .unwrap_or_default()
+impl<'a> Texts<'a> {
+    fn new(table: &'a Table, formats: &BTreeMap<String, Format>, column: &str) -> Self {
+        let index = table.column_index(column);
+        Self {
+            table,
+            index,
+            ty: index.map_or(ColumnType::Float64, |i| {
+                table.column(i).column_type().clone()
+            }),
+            formatter: formats
+                .get(column)
+                .and_then(|f| Formatter::new(f).ok())
+                .unwrap_or_default(),
+        }
     }
 
-    /// The text of a row's value in `column`.
-    fn cell(&self, column: &str, slot: Option<usize>) -> Option<String> {
-        let (slot, index) = (slot?, self.table.column_index(column)?);
-        let c = self.table.column(index);
-        let value = c.scalar(slot);
-        (value != Scalar::Null).then(|| self.formatter(column).scalar(c.column_type(), &value))
+    /// The text of a row's value.
+    fn cell(&self, slot: Option<usize>) -> Option<String> {
+        let value = self.table.column(self.index?).scalar(slot?);
+        (value != Scalar::Null).then(|| self.formatter.scalar(&self.ty, &value))
     }
 
-    /// The text of a value given as a scalar of `column`'s type.
-    fn value(&self, column: &str, value: &Scalar) -> String {
-        let ty = self
-            .table
-            .column_index(column)
-            .map_or(ColumnType::Float64, |i| {
-                self.table.column(i).column_type().clone()
-            });
-        self.formatter(column).scalar(&ty, value)
+    /// The text of a value of the column's type.
+    fn value(&self, value: &Scalar) -> String {
+        self.formatter.scalar(&self.ty, value)
+    }
+
+    /// The text of a double, such as a bin edge between the column's values.
+    fn double(&self, value: f64) -> String {
+        self.formatter
+            .scalar(&ColumnType::Float64, &Scalar::Float64(value))
     }
 }
 
@@ -103,14 +112,13 @@ pub(crate) fn chart_frame(table: &Table, state: &ChartState) -> Result<ChartFram
         height: 1,
     });
     let Reduced { data, x, ticks } = state.view.reduce(table, &request);
-    let text = Texts {
-        table,
-        formats: &state.formats,
-    };
     let config = state.view.config();
+    let texts_of = |column: &str| Texts::new(table, &state.formats, column);
+    let x_text = texts_of(&config.x);
+    let series_text = config.series.as_deref().map(texts_of);
     let left = state.layout.y.len();
-    let label = |column: &str, key: Option<&Scalar>| match (key, &config.series) {
-        (Some(key), Some(series)) => format!("{column} {}", text.value(series, key)),
+    let label = |column: &str, key: Option<&Scalar>| match (key, &series_text) {
+        (Some(key), Some(series)) => format!("{column} {}", series.value(key)),
         _ => column.to_owned(),
     };
     let mut frame = ChartFrame {
@@ -129,8 +137,10 @@ pub(crate) fn chart_frame(table: &Table, state: &ChartState) -> Result<ChartFram
         ChartData::Series(series) => {
             let (mut ids, mut xs, mut ys, mut x_texts, mut y_texts) =
                 (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+            let y_texts_by_column: Vec<Texts<'_>> = config.y.iter().map(|c| texts_of(c)).collect();
             for (i, (s, points)) in series.iter().enumerate() {
                 let column = &config.y[s.y];
+                let y_text = &y_texts_by_column[s.y];
                 frame.series.push(ChartSeries {
                     label: label(column, s.key.as_ref()),
                     column: column.clone(),
@@ -140,8 +150,8 @@ pub(crate) fn chart_frame(table: &Table, state: &ChartState) -> Result<ChartFram
                     ids.push(i as u32);
                     xs.push(p.x);
                     ys.push(p.y);
-                    x_texts.push(text.cell(&config.x, p.slot));
-                    y_texts.push(text.cell(column, p.slot));
+                    x_texts.push(x_text.cell(p.slot));
+                    y_texts.push(y_text.cell(p.slot));
                 }
             }
             frame.batch = batch(vec![
@@ -180,6 +190,9 @@ pub(crate) fn chart_frame(table: &Table, state: &ChartState) -> Result<ChartFram
                 Vec::new(),
                 Vec::new(),
             );
+            // Edges are doubles between the column's values, the same for every
+            // series.
+            let edge_texts: Vec<String> = edges.iter().map(|&e| x_text.double(e)).collect();
             for (i, (key, bins)) in counts.iter().enumerate() {
                 frame.series.push(ChartSeries {
                     label: label(&config.x, key.as_ref()),
@@ -191,14 +204,8 @@ pub(crate) fn chart_frame(table: &Table, state: &ChartState) -> Result<ChartFram
                     froms.push(edges[bin]);
                     tos.push(edges[bin + 1]);
                     ns.push(n);
-                    // Edges are doubles between the column's values.
-                    let formatter = text.formatter(&config.x);
-                    from_texts.push(Some(
-                        formatter.scalar(&ColumnType::Float64, &Scalar::Float64(edges[bin])),
-                    ));
-                    to_texts.push(Some(
-                        formatter.scalar(&ColumnType::Float64, &Scalar::Float64(edges[bin + 1])),
-                    ));
+                    from_texts.push(Some(edge_texts[bin].clone()));
+                    to_texts.push(Some(edge_texts[bin + 1].clone()));
                 }
             }
             frame.batch = batch(vec![
@@ -228,16 +235,11 @@ pub(crate) fn chart_frame(table: &Table, state: &ChartState) -> Result<ChartFram
                     .unwrap_or(f64::NAN)
             };
             let start_text = |start: i64| {
-                let value = match table
-                    .column_index(&config.x)
-                    .map(|i| table.column(i).column_type())
-                {
-                    Some(ColumnType::Date32) => {
-                        Scalar::Date32(i32::try_from(start).unwrap_or_default())
-                    }
+                let value = match x_text.ty {
+                    ColumnType::Date32 => Scalar::Date32(i32::try_from(start).unwrap_or_default()),
                     _ => Scalar::Timestamp(start),
                 };
-                text.value(&config.x, &value)
+                x_text.value(&value)
             };
             let mut columns: Vec<(Field, ArrayRef)> = vec![
                 floats("from", candles.iter().map(|(b, _)| b.from).collect()),
@@ -265,11 +267,12 @@ pub(crate) fn chart_frame(table: &Table, state: &ChartState) -> Result<ChartFram
                         .map(|(_, c)| price(column, slot(c)))
                         .collect(),
                 ));
+                let column_text = texts_of(column);
                 columns.push(texts(
                     &format!("{role}_text"),
                     candles
                         .iter()
-                        .map(|(_, c)| text.cell(column, slot(c)))
+                        .map(|(_, c)| column_text.cell(slot(c)))
                         .collect(),
                 ));
             }

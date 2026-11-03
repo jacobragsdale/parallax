@@ -440,6 +440,11 @@ impl ChartView {
                 data_type: table.column(x).column_type().to_arrow().to_string(),
             });
         }
+        if candles && !config.y.is_empty() {
+            return Err(ConfigError::Chart(
+                "a candlestick or OHLC chart draws its prices only; plot other columns in a chart of their own".into(),
+            ));
+        }
         if candles && config.series.is_some() {
             return Err(ConfigError::Chart(
                 "a candlestick or OHLC chart shows one instrument; filter to it instead of splitting by a series column".into(),

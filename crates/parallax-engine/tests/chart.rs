@@ -804,6 +804,12 @@ fn candles_refuse_a_number_axis_and_a_series_column() {
         .to_string();
     assert!(error.contains("buckets by calendar"), "{error}");
     let config = ChartConfig {
+        y: vec!["volume".into()],
+        ..candlestick("date", Vec::new(), XAxis::Value)
+    };
+    let error = ChartView::new(&t, config).unwrap_err().to_string();
+    assert!(error.contains("prices only"), "{error}");
+    let config = ChartConfig {
         series: Some("ticker".into()),
         ..candlestick("date", Vec::new(), XAxis::Value)
     };

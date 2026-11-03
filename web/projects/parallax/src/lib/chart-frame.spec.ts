@@ -103,7 +103,12 @@ describe("chart windows", () => {
     let now = 100;
     const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
     const sent: Uint8Array[] = [];
-    const c = new Connection({ send: (b) => sent.push(b), close: () => undefined });
+    const c = new Connection({
+      send: (b) => {
+        sent.push(b);
+      },
+      close: () => undefined
+    });
     const seen: ChartFrameData[] = [];
     const view = c.open("prices", "{}", {
       frame: () => undefined,
@@ -125,6 +130,12 @@ describe("chart windows", () => {
     expect(windows()[1]).toMatchObject({ value: { xFrom: 0, xTo: 6, width: 800 } });
     view.receiveChartFrame(answer, 4n);
     expect(seen.map((f) => f.requestedAtMs)).toEqual([100, 120]);
+    // Zoom to A, pan to B, pan back to A while A is in flight: the chart ends on A.
+    view.setChartWindow({ x: [1, 2], width: 800, height: 400 });
+    view.setChartWindow({ x: [3, 4], width: 800, height: 400 });
+    view.setChartWindow({ x: [1, 2], width: 800, height: 400 });
+    view.receiveChartFrame(answer, 5n);
+    expect(windows().length).toBe(3);
     clock.mockRestore();
   });
 });

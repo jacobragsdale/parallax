@@ -882,8 +882,8 @@ export type ChartFrame = Message<"parallax.v1.ChartFrame"> & {
   yTo: number;
 
   /**
-   * A candlestick or OHLC chart's bucket: "1m", "5m", "15m", "30m", "60m", "day",
-   * "week", "month", "quarter" or "year".
+   * A candlestick or OHLC chart's bucket: minutes as "<n>m" (1, 5, 15, 30 or
+   * 60), "day", "week", "month", "quarter", "year", or years as "<n>y".
    *
    * @generated from field: string interval = 15;
    */

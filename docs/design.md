@@ -400,6 +400,11 @@ it, tagged by view ID.
 - A client can fetch a window once without moving the view's viewport, which
   is how a copy larger than the screen gets its rows. One fetch is limited to
   1,000,000 cells.
+- A chart asks for a chart window instead of a viewport: an x range at a plot
+  size in pixels, at most 16,384 each way. The answer is the reduction for that
+  window, with the x axis's labelled ticks and every value's text, and a
+  refresh pushes it again. Only one chart window per view is in flight; a
+  newer one replaces any waiting, as viewports do.
 - Each data column in a frame travels with its display text, its cell flags
   (overflow, mixed units, undefined) and, for timestamps, full-precision text
   for copying. Every Arrow field names its role and column index in its

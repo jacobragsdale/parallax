@@ -427,9 +427,18 @@ impl OpenView {
         if behind >= current {
             return Ok(false);
         }
-        // A chart keeps no diffs: it rebuilds from the table.
-        if let Computed::Chart(chart) = &mut self.view {
-            chart.view.rebuild(&state.table);
+        // A chart keeps no diffs: it is built again from its layout, keeping the
+        // window it was asked for.
+        if let Computed::Chart(chart) = &self.view {
+            let window = chart.window;
+            let resolved = self
+                .layout
+                .resolve(&state.table)
+                .map_err(|e| e.to_string())?;
+            self.view = build_view(&state.table, &self.layout, resolved)?;
+            if let Computed::Chart(chart) = &mut self.view {
+                chart.window = window;
+            }
             return Ok(true);
         }
         let missing: Vec<&Arc<ChangeSet>> = state
@@ -595,6 +604,15 @@ impl Session {
                         for (path, expanded) in resolved.expanded {
                             view.set_expanded(path, expanded);
                         }
+                    } else if let (Computed::Chart(chart), Some(config), Some(new)) =
+                        (&mut open.view, &resolved.chart, &layout.chart)
+                        && current
+                        && chart.view.config() == config
+                    {
+                        // Only how the chart is drawn changed, such as hidden series,
+                        // scales or formats: the reduction stays.
+                        chart.layout = new.clone();
+                        chart.formats = resolved.config.formats;
                     } else {
                         // A chart rebuilds and keeps the window it was asked for.
                         let window = match &open.view {
@@ -610,7 +628,14 @@ impl Session {
                 open.layout = layout;
                 open.config_version = update.config_version;
                 open.broken_at = None;
-                self.frame(id, update.view_id, false).into_iter().collect()
+                // A chart has no viewport; a grid has no chart window.
+                if matches!(open.view, Computed::Chart(_)) {
+                    open.viewport = None;
+                }
+                self.frame(id, update.view_id, false)
+                    .into_iter()
+                    .chain(self.chart_frame(id, update.view_id, false))
+                    .collect()
             }
             client_message::Body::SetViewport(v) => {
                 let viewport = Viewport {
@@ -619,7 +644,9 @@ impl Session {
                     first_column: v.first_column,
                     column_count: v.column_count,
                 };
-                self.view_mut(v.view_id)?.viewport = Some(viewport);
+                let open = self.view_mut(v.view_id)?;
+                open.view.grid()?;
+                open.viewport = Some(viewport);
                 self.frame(id, v.view_id, false).into_iter().collect()
             }
             client_message::Body::FetchWindow(f) => {
@@ -901,8 +928,15 @@ impl Session {
             }
             drop(state);
             if changed {
-                out.extend(self.frame(0, id, true));
-                out.extend(self.chart_frame(0, id, true));
+                let chart = matches!(
+                    self.views.get(&id).map(|o| &o.view),
+                    Some(Computed::Chart(_))
+                );
+                if chart {
+                    out.extend(self.chart_frame(0, id, true));
+                } else {
+                    out.extend(self.frame(0, id, true));
+                }
             }
         }
         out

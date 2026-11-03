@@ -1236,17 +1236,22 @@ mod tests {
         }"#;
         let chart = r#"{
             "dataset": "prices",
+            "chart": {"kind": "line", "x": "date", "y": ["close"], "y_right": ["volume"],
+                      "series": "ticker", "axis": "trading", "log_y": true, "stacked": true,
+                      "horizontal": true, "range": {"from": 1200.5, "to": 1450.0},
+                      "hidden": ["volume AAPL"]}
+        }"#;
+        let candles = r#"{
+            "dataset": "prices",
             "filters": [{"column": "ticker", "op": "eq", "value": "AAPL"}],
-            "chart": {"kind": "candlestick", "x": "date", "y": ["vwap"], "y_right": ["volume"],
-                      "series": "ticker",
-                      "ohlc": {"open": "open", "high": "high", "low": "low", "close": "close"},
-                      "axis": "trading", "log_y": true, "stacked": true, "horizontal": true,
-                      "range": {"from": 1200.5, "to": 1450.0}, "hidden": ["volume AAPL"]}
+            "chart": {"kind": "candlestick", "x": "date",
+                      "ohlc": {"open": "open", "high": "high", "low": "low", "close": "close"}}
         }"#;
         [
             Layout::default(),
             Layout::from_json(full).unwrap(),
             Layout::from_json(chart).unwrap(),
+            Layout::from_json(candles).unwrap(),
             Layout::from_json(r#"{"chart": {"kind": "bar"}}"#).unwrap(),
         ]
         .iter()
