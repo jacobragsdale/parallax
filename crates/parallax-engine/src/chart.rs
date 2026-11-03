@@ -848,13 +848,15 @@ impl ChartView {
     fn ticks(&self, from: f64, to: f64, width: u32) -> Vec<Tick> {
         let wanted = (f64::from(width) / f64::from(TICK_SPACING)).max(1.0);
         match &self.placement {
-            Placement::Number { .. } => nice_ticks(from, to, wanted)
-                .into_iter()
-                .map(|x| Tick {
-                    x,
-                    label: number_label(x),
-                })
-                .collect(),
+            Placement::Number { .. } => {
+                let (values, step) = nice_ticks(from, to, wanted);
+                let labels = number_labels(&values, step);
+                values
+                    .into_iter()
+                    .zip(labels)
+                    .map(|(x, label)| Tick { x, label })
+                    .collect()
+            }
             placement => time_ticks(placement, from, to, wanted),
         }
     }
@@ -1039,10 +1041,10 @@ fn advance(start: i64, interval: Interval, instants: bool, zone: &TimeZone) -> i
 
 /// Round numbers between `from` and `to`, about `wanted` of them: steps of 1, 2
 /// or 5 times a power of ten.
-fn nice_ticks(from: f64, to: f64, wanted: f64) -> Vec<f64> {
+fn nice_ticks(from: f64, to: f64, wanted: f64) -> (Vec<f64>, f64) {
     let raw = (to - from) / wanted;
     if !(raw.is_finite() && raw > 0.0) {
-        return Vec::new();
+        return (Vec::new(), 1.0);
     }
     let power = 10f64.powf(raw.log10().floor());
     let step = [1.0, 2.0, 5.0, 10.0]
@@ -1052,17 +1054,58 @@ fn nice_ticks(from: f64, to: f64, wanted: f64) -> Vec<f64> {
         .unwrap_or(10.0 * power);
     let first = (from / step).ceil() as i64;
     let last = (to / step).floor() as i64;
-    (first..=last).map(|i| i as f64 * step).collect()
+    ((first..=last).map(|i| i as f64 * step).collect(), step)
 }
 
-/// A tick label for a round number: as few digits as show it.
-fn number_label(x: f64) -> String {
-    let rounded = (x * 1e9).round() / 1e9;
-    if rounded == rounded.trunc() && rounded.abs() < 1e15 {
-        format!("{}", rounded as i64)
+/// Labels for round tick values, one style per axis: in full with thousands
+/// separators while the axis stays under 10,000, compact (K, M, B, T) once it
+/// reaches it, with as many decimals as the step needs.
+fn number_labels(values: &[f64], step: f64) -> Vec<String> {
+    let largest = values.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+    let (divisor, suffix) = if largest >= 1e4 {
+        [(1e12, "T"), (1e9, "B"), (1e6, "M"), (1e3, "K")]
+            .into_iter()
+            .find(|(d, _)| largest >= *d)
+            .unwrap_or((1.0, ""))
     } else {
-        format!("{rounded}")
+        (1.0, "")
+    };
+    let scaled = step / divisor;
+    // Ticks are multiples of the step, so the step's own decimals show each exactly.
+    let mut decimals = 0usize;
+    while decimals < 12 {
+        let shifted = scaled * 10f64.powi(decimals as i32);
+        if (shifted.round() - shifted).abs() <= 1e-9 * shifted.abs().max(1.0) {
+            break;
+        }
+        decimals += 1;
     }
+    values
+        .iter()
+        .map(|&v| {
+            if v == 0.0 {
+                return "0".to_owned();
+            }
+            let text = format!("{:.decimals$}", v / divisor);
+            let (whole, fraction) = text
+                .split_once('.')
+                .map_or((text.as_str(), ""), |(w, f)| (w, f));
+            let (sign, digits) = whole.strip_prefix('-').map_or(("", whole), |d| ("-", d));
+            let mut grouped = String::new();
+            for (i, ch) in digits.chars().enumerate() {
+                if i > 0 && (digits.len() - i) % 3 == 0 {
+                    grouped.push(',');
+                }
+                grouped.push(ch);
+            }
+            let fraction = if fraction.is_empty() {
+                String::new()
+            } else {
+                format!(".{fraction}")
+            };
+            format!("{sign}{grouped}{fraction}{suffix}")
+        })
+        .collect()
 }
 
 /// Ticks on a date or instant axis at a calendar step, labelled in New York.

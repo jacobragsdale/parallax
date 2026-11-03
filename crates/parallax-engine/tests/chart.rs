@@ -816,3 +816,35 @@ fn candles_refuse_a_number_axis_and_a_series_column() {
     let error = ChartView::new(&t, config).unwrap_err().to_string();
     assert!(error.contains("one instrument"), "{error}");
 }
+
+#[test]
+fn number_ticks_turn_compact_once_the_axis_reaches_ten_thousand() {
+    let labels = |values: &[f64], width: u32| -> Vec<String> {
+        let t = table(values, &vec![Some(1.0); values.len()]);
+        let view = ChartView::new(&t, line(XAxis::Value)).unwrap();
+        view.reduce(
+            &t,
+            &ChartRequest {
+                x: None,
+                y: None,
+                width,
+                height: 100,
+            },
+        )
+        .ticks
+        .into_iter()
+        .map(|t| t.label)
+        .collect()
+    };
+    assert_eq!(labels(&[0.0, 2e7], 500), ["0", "5M", "10M", "15M", "20M"]);
+    assert_eq!(
+        labels(&[0.0, 5e6], 1_000),
+        [
+            "0", "0.5M", "1.0M", "1.5M", "2.0M", "2.5M", "3.0M", "3.5M", "4.0M", "4.5M", "5.0M"
+        ]
+    );
+    assert_eq!(
+        labels(&[-4_000.0, 4_000.0], 400),
+        ["-4,000", "-2,000", "0", "2,000", "4,000"]
+    );
+}

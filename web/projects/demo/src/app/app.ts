@@ -3,6 +3,7 @@ import { GridComponent, PivotComponent, decodeLayout, encodeLayout } from "paral
 import type { Density, DrawStats, LayoutInput, ThemeName } from "parallax";
 import * as z from "zod/mini";
 
+import { ChartsComponent } from "./charts.component";
 import { PerformanceComponent } from "./performance.component";
 
 /** A view the demo opens, and what it shows off. */
@@ -20,7 +21,7 @@ const REFERENCE_PIVOT = {
 } as const satisfies LayoutInput;
 
 /** The views the demo opens, in the order of their tabs. */
-const PRESET_NAMES = ["pivot", "browser", "trades", "sorted", "prices"] as const;
+const PRESET_NAMES = ["pivot", "browser", "trades", "sorted", "prices", "charts"] as const;
 
 type PresetName = (typeof PRESET_NAMES)[number];
 
@@ -47,6 +48,12 @@ const PRESETS: Readonly<Record<PresetName, Preset>> = {
     title: "Largest trades",
     about: "The trades sorted by gross amount, largest first, with amounts shown exactly.",
     layout: { dataset: "trades", sort: [{ column: "gross_amount_local", descending: true }] }
+  },
+  charts: {
+    title: "Charts",
+    about:
+      "Every chart kind, reduced by the engine to the pixels it fills: lines on trading days, candles bucketed to fit, stacked bars, a histogram, a density of a thousand points and a heatmap that diverges around zero.",
+    layout: { dataset: "prices" }
   },
   prices: {
     title: "Daily prices",
@@ -84,7 +91,7 @@ function remember(name: string, value: string): void {
   selector: "demo-root",
   changeDetection: ChangeDetectionStrategy.OnPush,
   host: { "[class.dark]": "theme() === 'dark'" },
-  imports: [GridComponent, PivotComponent, PerformanceComponent],
+  imports: [ChartsComponent, GridComponent, PivotComponent, PerformanceComponent],
   template: `
     <header>
       <strong>parallax</strong>
@@ -117,7 +124,9 @@ function remember(name: string, value: string): void {
     </header>
     <p class="about">{{ about() }}</p>
     <main>
-      @if (ready()) {
+      @if (charts()) {
+        <demo-charts [theme]="theme()" />
+      } @else if (ready()) {
         @if (grouped()) {
           <px-pivot [(layout)]="layout" [theme]="theme()" [density]="density()" />
         } @else {
@@ -219,6 +228,8 @@ export class App {
     return (layout.group_by?.length ?? 0) > 0 || (layout.split_by?.length ?? 0) > 0 || (layout.measures?.length ?? 0) > 0;
   });
   protected readonly note = signal("");
+  /** The charts page, which shows several views of its own. */
+  protected readonly charts = computed(() => this.search.preset === "charts" && this.search.layout === undefined);
   /** False while a linked layout is being read, so the preset never opens in its place. */
   protected readonly ready = signal(this.search.layout === undefined);
   protected readonly about = computed(() => (this.search.layout === undefined ? PRESETS[this.search.preset].about : "A view opened from a shared link."));

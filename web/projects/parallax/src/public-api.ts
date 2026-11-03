@@ -15,11 +15,14 @@ export type { CellValue, DistinctValue, FrameColumn, FrameData, GroupKey, TreeRo
 export { exactDecimal, isNegativeText, pathValue } from "./lib/format";
 export { AGGREGATES, CHART_KINDS, FILTER_OPS, LAYOUT_VERSION, SHOW_AS, TREE_WIDTH_KEY, checkLayout, layoutSchema, measureWidthKey, parseLayout } from "./lib/layout";
 export type { Layout, LayoutChart, LayoutCheck, LayoutFilter, LayoutFormat, LayoutInput, LayoutMeasure, LayoutScalar } from "./lib/layout";
-export { THEMES, TOKENS, readTheme } from "./lib/theme";
-export type { Theme, ThemeName } from "./lib/theme";
+export { CHART_COLORS, THEMES, TOKENS, readChartColors, readTheme } from "./lib/theme";
+export type { ChartColors, Theme, ThemeName } from "./lib/theme";
 export { GridComponent } from "./lib/grid/grid.component";
 export type { Density, DrawStats, DrillRequest } from "./lib/grid/grid.component";
 export type { FieldKind, SourceField, ViewPlacement } from "./lib/grid/grid-source";
 export { PivotComponent } from "./lib/pivot/pivot.component";
+export { ChartComponent } from "./lib/chart/chart.component";
+export { chartModel } from "./lib/chart/model";
+export type { CategoryData, ChartModel, LegendEntry, Mark } from "./lib/chart/model";
 export { drillLayout } from "./lib/pivot/edit";
 export { decodeLayout, encodeLayout } from "./lib/share";

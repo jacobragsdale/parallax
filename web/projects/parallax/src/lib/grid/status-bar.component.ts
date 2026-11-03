@@ -62,8 +62,10 @@ interface Badge {
       <span [class]="b.classes" [attr.role]="b.role" [title]="b.title">{{ b.text }}</span>
     }
     <span class="px-status-message" role="status">{{ message() }}</span>
-    <button type="button" class="px-status-export" (click)="exported.emit('xlsx')">Export to Excel</button>
-    <button type="button" class="px-status-export" (click)="exported.emit('csv')">CSV</button>
+    @if (exports()) {
+      <button type="button" class="px-status-export" (click)="exported.emit('xlsx')">Export to Excel</button>
+      <button type="button" class="px-status-export" (click)="exported.emit('csv')">CSV</button>
+    }
     <button type="button" class="px-status-info" [attr.aria-expanded]="open()" aria-label="About this data" (click)="open.set(!open())">i</button>
     @if (open()) {
       <dl class="px-info" role="dialog" aria-label="About this data">
@@ -82,6 +84,10 @@ export class StatusBarComponent {
   public readonly parameters = input<Readonly<Record<string, string>>>({});
   /** Rows in the view. */
   public readonly viewRows = input<number | null>(null);
+  /** Said in place of the row count, such as a chart's points; null shows the rows. */
+  public readonly summary = input<string | null>(null);
+  /** Whether the export buttons show. */
+  public readonly exports = input(true);
   /** When the source was read, in microseconds since the epoch. */
   public readonly sourceAsOf = input<bigint | null>(null);
   /** The table's status from the engine. */
@@ -97,6 +103,10 @@ export class StatusBarComponent {
   private readonly now = signal(Date.now());
 
   protected readonly rows = computed(() => {
+    const summary = this.summary();
+    if (summary !== null) {
+      return summary;
+    }
     const rows = this.viewRows();
     return rows === null ? "loading…" : `${GROUPED.format(rows)} rows`;
   });

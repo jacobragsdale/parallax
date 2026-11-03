@@ -118,8 +118,75 @@ function declarations(theme: Theme): string {
   return KEYS.map((key) => `${TOKENS[key]}: ${theme[key]};`).join(" ");
 }
 
+/** The colours charts draw data with, beside the grid's tokens they share. */
+export interface ChartColors {
+  /** Categorical slots, assigned to series in this order and never cycled. */
+  readonly series: readonly string[];
+  /** Candles that close above their open, drawn hollow. */
+  readonly up: string;
+  /** Candles that close below their open, drawn filled. */
+  readonly down: string;
+  /** A sequential ramp from near zero to the most, for densities and heatmaps. */
+  readonly ramp: readonly string[];
+  /** The neutral midpoint and the negative pole when values take both signs. */
+  readonly middle: string;
+  readonly negativeRamp: readonly string[];
+}
+
+/** Chart colours by theme: a categorical order checked for colour-vision deficiency on each theme's surface. */
+export const CHART_COLORS: Readonly<Record<ThemeName, ChartColors>> = {
+  light: {
+    series: ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"],
+    up: "#1baf7a",
+    down: "#e34948",
+    ramp: ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"],
+    middle: "#f0efec",
+    negativeRamp: ["#fbd5d4", "#f4a9a8", "#ec7c7b", "#e34948", "#c12f2f", "#9a2222", "#701818"]
+  },
+  dark: {
+    series: ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"],
+    up: "#199e70",
+    down: "#e66767",
+    ramp: ["#0d366b", "#184f95", "#256abf", "#3987e5", "#6da7ec", "#9ec5f4", "#cde2fb"],
+    middle: "#383835",
+    negativeRamp: ["#5c1414", "#7d1d1d", "#a12828", "#c93838", "#e66767", "#f09a99", "#f8cbca"]
+  }
+};
+
+/** The custom property of each chart colour: `--px-series-1` to `--px-series-8`, `--px-ramp-1` to `--px-ramp-7`, and so on. */
+function chartDeclarations(colors: ChartColors): string {
+  const list = (name: string, values: readonly string[]): string => values.map((v, i) => `--px-${name}-${String(i + 1)}: ${v};`).join(" ");
+  return [
+    list("series", colors.series),
+    `--px-up: ${colors.up};`,
+    `--px-down: ${colors.down};`,
+    list("ramp", colors.ramp),
+    `--px-middle: ${colors.middle};`,
+    list("negative-ramp", colors.negativeRamp)
+  ].join(" ");
+}
+
+/** Reads the chart colours in effect for `element`, falling back to the light theme's. */
+export function readChartColors(element: Element): ChartColors {
+  const style = getComputedStyle(element);
+  const fallback = CHART_COLORS.light;
+  const read = (name: string, otherwise: string): string => {
+    const value = style.getPropertyValue(`--px-${name}`).trim();
+    return value === "" ? otherwise : value;
+  };
+  const list = (name: string, values: readonly string[]): readonly string[] => values.map((v, i) => read(`${name}-${String(i + 1)}`, v));
+  return {
+    series: list("series", fallback.series),
+    up: read("up", fallback.up),
+    down: read("down", fallback.down),
+    ramp: list("ramp", fallback.ramp),
+    middle: read("middle", fallback.middle),
+    negativeRamp: list("negative-ramp", fallback.negativeRamp)
+  };
+}
+
 /** The stylesheet that defines the tokens for each theme, in the `parallax` layer. */
-export const THEME_STYLES = `@layer parallax { px-grid, px-pivot { ${declarations(THEMES.light)} } px-grid[data-px-theme="dark"], px-pivot[data-px-theme="dark"] { ${declarations(THEMES.dark)} } }`;
+export const THEME_STYLES = `@layer parallax { px-grid, px-pivot, px-chart { ${declarations(THEMES.light)} ${chartDeclarations(CHART_COLORS.light)} } px-grid[data-px-theme="dark"], px-pivot[data-px-theme="dark"], px-chart[data-px-theme="dark"] { ${declarations(THEMES.dark)} ${chartDeclarations(CHART_COLORS.dark)} } }`;
 
 const STYLE_ID = "px-theme-tokens";
 
