@@ -99,6 +99,9 @@ pub enum ConfigError {
     /// A chart lacks columns its kind needs.
     #[error("this chart needs {0}")]
     MissingChartColumns(String),
+    /// A chart's settings do not fit its kind.
+    #[error("{0}")]
+    Chart(String),
     /// A filter value does not match the column's type.
     #[error("filter on {column}: {reason}")]
     Filter {

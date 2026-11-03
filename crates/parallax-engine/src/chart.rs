@@ -143,17 +143,17 @@ pub struct Point {
 }
 
 /// One calendar bucket of a candlestick or OHLC chart, by the rows that give its
-/// prices.
+/// prices. A price no row of the bucket has is `None`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Candle {
-    /// The row with the first open, by x and then insertion order.
-    pub open: usize,
+    /// The first row with an open, by time and then insertion order.
+    pub open: Option<usize>,
     /// The row with the highest high; the first such on ties.
-    pub high: usize,
+    pub high: Option<usize>,
     /// The row with the lowest low; the first such on ties.
-    pub low: usize,
-    /// The row with the last close.
-    pub close: usize,
+    pub low: Option<usize>,
+    /// The last row with a close.
+    pub close: Option<usize>,
 }
 
 /// A calendar bucket and where it spans on the axis.
@@ -285,10 +285,8 @@ impl Placement {
     fn position(&self, key: Key) -> Option<f64> {
         let position = match (self, key) {
             (_, Key::Null) => return None,
-            (Self::Number { .. }, Key::Int(v)) => v as f64,
-            (Self::Number { .. }, Key::Float(bits)) => f64::from_bits(bits),
-            (Self::Number { scale }, Key::Decimal(v)) => {
-                crate::bignum::ratio_to_f64(v, &[crate::aggregate::pow10(scale.unwrap_or(0))])
+            (Self::Number { scale }, Key::Int(_) | Key::Float(_) | Key::Decimal(_)) => {
+                crate::aggregate::key_to_f64(key, scale.unwrap_or(0))
             }
             (Self::Date, Key::Date(d)) => f64::from(d),
             (Self::Instant, Key::Ts(t)) => t as f64,
@@ -302,18 +300,24 @@ impl Placement {
 
 /// The y value of a slot as a double, or `None` for a null or NaN.
 fn y_value(column: &Column, slot: usize) -> Option<f64> {
-    let value = match column.key(slot) {
-        Key::Int(v) => v as f64,
-        Key::Float(bits) => f64::from_bits(bits),
-        Key::Decimal(v) => {
-            let ColumnType::Decimal { scale, .. } = column.column_type() else {
-                return None;
-            };
-            crate::bignum::ratio_to_f64(v, &[crate::aggregate::pow10(*scale)])
-        }
-        _ => return None,
+    let scale = match column.column_type() {
+        ColumnType::Decimal { scale, .. } => *scale,
+        _ => 0,
     };
+    let value = crate::aggregate::key_to_f64(column.key(slot), scale);
     value.is_finite().then_some(value)
+}
+
+/// An x key's own value, which orders rows that share an axis position: instants
+/// outside the session all take its edge on a trading-time axis.
+fn x_order(key: Key) -> i128 {
+    match key {
+        Key::Int(v) | Key::Ts(v) => i128::from(v),
+        Key::Date(d) => i128::from(d),
+        Key::Decimal(v) => v,
+        Key::Float(bits) => i128::from(bits),
+        _ => 0,
+    }
 }
 
 fn numeric(ty: &ColumnType) -> bool {
@@ -418,6 +422,19 @@ impl ChartView {
                 "open, high, low and close".into(),
             ));
         }
+        let candles = matches!(config.kind, ChartKind::Candlestick | ChartKind::Ohlc);
+        if candles && matches!(placement, Placement::Number { .. }) {
+            return Err(ConfigError::ChartColumn {
+                role: "x axis of a candlestick or OHLC chart, which buckets by calendar".into(),
+                column: config.x.clone(),
+                data_type: table.column(x).column_type().to_arrow().to_string(),
+            });
+        }
+        if candles && config.series.is_some() {
+            return Err(ConfigError::Chart(
+                "a candlestick or OHLC chart shows one instrument; filter to it instead of splitting by a series column".into(),
+            ));
+        }
         if config.kind == ChartKind::Histogram && !matches!(placement, Placement::Number { .. }) {
             return Err(ConfigError::ChartColumn {
                 role: "binned column of a histogram".into(),
@@ -457,7 +474,9 @@ impl ChartView {
     pub fn rebuild(&mut self, table: &Table) {
         self.load_version = table.load_version();
         let x = table.column(self.x);
-        let mut by_key: rustc_hash::FxHashMap<Option<Key>, Vec<(f64, u64, usize)>> =
+        // Each row's position, its own x value, insertion number and slot.
+        type Placed = (f64, i128, u64, usize);
+        let mut by_key: rustc_hash::FxHashMap<Option<Key>, Vec<Placed>> =
             rustc_hash::FxHashMap::default();
         for slot in table.live_slots() {
             if !self
@@ -467,22 +486,26 @@ impl ChartView {
             {
                 continue;
             }
-            let Some(position) = self.placement.position(x.key(slot)) else {
+            let x_key = x.key(slot);
+            let Some(position) = self.placement.position(x_key) else {
                 continue;
             };
             let key = self.series.map(|s| table.column(s).key(slot));
             by_key
                 .entry(key)
                 .or_default()
-                .push((position, table.seq(slot), slot));
+                .push((position, x_order(x_key), table.seq(slot), slot));
         }
         let mut rows: Vec<(Option<Key>, Ordered)> = by_key
             .into_iter()
             .map(|(key, mut points)| {
-                points.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+                // By position, then by the value itself, then by insertion.
+                points.sort_unstable_by(|a, b| {
+                    a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2))
+                });
                 let ordered = Ordered {
                     x: points.iter().map(|p| p.0).collect(),
-                    slots: points.iter().map(|p| p.2).collect(),
+                    slots: points.iter().map(|p| p.3).collect(),
                 };
                 (key, ordered)
             })
@@ -529,18 +552,15 @@ impl ChartView {
                 ChartData::Series(self.series_m4(table, from, to, width))
             }
             ChartKind::Scatter => self.density(table, from, to, request),
-            ChartKind::Histogram => self.histogram(table, request),
+            ChartKind::Histogram => self.histogram(table, from, to, request),
             ChartKind::Candlestick | ChartKind::Ohlc => self.candles(table, from, to, width),
         };
-        let x = match &data {
-            ChartData::Histogram { edges, .. } => (
-                edges.first().copied().unwrap_or(from),
-                edges.last().copied().unwrap_or(to),
-            ),
-            _ => (from, to),
-        };
-        let ticks = self.ticks(x.0, x.1, width);
-        Reduced { data, x, ticks }
+        let ticks = self.ticks(from, to, width);
+        Reduced {
+            data,
+            x: (from, to),
+            ticks,
+        }
     }
 
     fn series_m4(
@@ -614,37 +634,23 @@ impl ChartView {
         }
     }
 
-    fn histogram(&self, table: &Table, request: &ChartRequest) -> ChartData {
-        let x = table.column(self.x);
+    fn histogram(&self, table: &Table, from: f64, to: f64, request: &ChartRequest) -> ChartData {
         let bins = (request.width / BIN_WIDTH).max(1);
-        let (from, to) = request.x.or_else(|| self.x_extent()).unwrap_or((0.0, 1.0));
-        let (from, to) = if to > from {
-            (from, to)
-        } else {
-            (from - 0.5, from + 0.5)
-        };
         // Edges are computed once and every value is placed by comparing with
         // them, so a value on an edge lands in the bin the edge's label opens.
-        let edges: Vec<f64> = (0..=bins)
+        let mut edges: Vec<f64> = (0..=bins)
             .map(|i| from + (to - from) * f64::from(i) / f64::from(bins))
             .collect();
-        let edges = {
-            let mut e = edges;
-            if let Some(last) = e.last_mut() {
-                *last = to;
-            }
-            e
-        };
+        if let Some(last) = edges.last_mut() {
+            *last = to;
+        }
         let counts = self
             .rows
             .iter()
             .map(|(key, o)| {
                 let mut counts = vec![0u64; bins as usize];
                 for r in o.within(from, to) {
-                    let Some(v) = self.placement.position(x.key(o.slots[r])) else {
-                        continue;
-                    };
-                    let bin = edges.partition_point(|&e| e <= v).saturating_sub(1);
+                    let bin = edges.partition_point(|&e| e <= o.x[r]).saturating_sub(1);
                     counts[bin.min(bins as usize - 1)] += 1;
                 }
                 (self.scalar(table, *key), counts)
@@ -654,75 +660,88 @@ impl ChartView {
     }
 
     fn candles(&self, table: &Table, from: f64, to: f64, width: u32) -> ChartData {
-        let Some([open, high, low, close]) = self.ohlc else {
-            return ChartData::Candles {
-                interval: Interval::Day,
-                candles: Vec::new(),
-            };
-        };
-        let x = table.column(self.x);
         let instants = matches!(
             self.placement,
             Placement::Instant | Placement::TradingInstant(_)
         );
         let interval = self.interval(from, to, width, instants);
+        let (Some([open, high, low, close]), Some((_, rows))) = (self.ohlc, self.rows.first())
+        else {
+            return ChartData::Candles {
+                interval,
+                candles: Vec::new(),
+            };
+        };
+        let x = table.column(self.x);
         let zone = TimeZone::get(crate::format::DEFAULT_ZONE).unwrap_or(TimeZone::UTC);
-        let mut candles: Vec<(Bucket, Candle)> = Vec::new();
-        let mut current: Option<(i64, Bucket, Candle, f64, f64)> = None;
-        let (h, l) = (table.column(high), table.column(low));
-        let _ = (open, close);
-        // Every series contributes; candlesticks normally have one.
-        let mut rows: Vec<(f64, usize)> = self
-            .rows
-            .iter()
-            .flat_map(|(_, ord)| ord.within(from, to).map(|r| (ord.x[r], ord.slots[r])))
-            .collect();
-        rows.sort_by(|a, b| {
-            a.0.total_cmp(&b.0)
-                .then(table.seq(a.1).cmp(&table.seq(b.1)))
-        });
-        for (_, slot) in rows {
-            let start = bucket_start(x.key(slot), interval, &zone);
-            let Some(start) = start else { continue };
-            let hv = y_value(h, slot).unwrap_or(f64::NEG_INFINITY);
-            let lv = y_value(l, slot).unwrap_or(f64::INFINITY);
-            match &mut current {
-                Some((key, _, candle, high, low)) if *key == start => {
-                    if hv > *high {
-                        *high = hv;
-                        candle.high = slot;
-                    }
-                    if lv < *low {
-                        *low = lv;
-                        candle.low = slot;
-                    }
-                    candle.close = slot;
-                }
-                _ => {
-                    if let Some((_, bucket, candle, _, _)) = current.take() {
-                        candles.push((bucket, candle));
-                    }
-                    let bucket = Bucket {
-                        from: self.bucket_position(start, interval, instants, &zone, false),
-                        to: self.bucket_position(start, interval, instants, &zone, true),
-                    };
-                    current = Some((
-                        start,
-                        bucket,
-                        Candle {
-                            open: slot,
-                            high: slot,
-                            low: slot,
-                            close: slot,
-                        },
-                        hv,
-                        lv,
-                    ));
-                }
+        let bucket_of = |r: usize| bucket_start(x.key(rows.slots[r]), interval, &zone);
+        // Buckets crossing either edge of the range keep all their rows, so an
+        // edge candle shows its whole bucket however the chart is panned.
+        let within = rows.within(from, to);
+        let mut start = within.start;
+        if let Some(first) = (start < within.end).then(|| bucket_of(start)).flatten() {
+            while start > 0 && bucket_of(start - 1) == Some(first) {
+                start -= 1;
             }
         }
-        if let Some((_, bucket, candle, _, _)) = current {
-            candles.push((bucket, candle));
+        let mut end = within.end;
+        if let Some(last) = (end > start).then(|| bucket_of(end - 1)).flatten() {
+            while end < rows.slots.len() && bucket_of(end) == Some(last) {
+                end += 1;
+            }
+        }
+        let (o, h, l, c) = (
+            table.column(open),
+            table.column(high),
+            table.column(low),
+            table.column(close),
+        );
+        let mut candles: Vec<(Bucket, Candle)> = Vec::new();
+        let mut current: Option<(i64, Bucket, Candle, f64, f64)> = None;
+        for r in start..end {
+            let slot = rows.slots[r];
+            let Some(bucket) = bucket_of(r) else { continue };
+            if current.as_ref().is_none_or(|(key, ..)| *key != bucket) {
+                if let Some((_, span, candle, _, _)) = current.take() {
+                    candles.push((span, candle));
+                }
+                let span = Bucket {
+                    from: self.bucket_position(bucket, interval, instants, &zone, false),
+                    to: self.bucket_position(bucket, interval, instants, &zone, true),
+                };
+                let empty = Candle {
+                    open: None,
+                    high: None,
+                    low: None,
+                    close: None,
+                };
+                current = Some((bucket, span, empty, f64::NEG_INFINITY, f64::INFINITY));
+            }
+            let Some((_, _, candle, highest, lowest)) = current.as_mut() else {
+                continue;
+            };
+            // Each price comes from a row that has it.
+            if candle.open.is_none() && y_value(o, slot).is_some() {
+                candle.open = Some(slot);
+            }
+            if let Some(v) = y_value(h, slot)
+                && v > *highest
+            {
+                *highest = v;
+                candle.high = Some(slot);
+            }
+            if let Some(v) = y_value(l, slot)
+                && v < *lowest
+            {
+                *lowest = v;
+                candle.low = Some(slot);
+            }
+            if y_value(c, slot).is_some() {
+                candle.close = Some(slot);
+            }
+        }
+        if let Some((_, span, candle, _, _)) = current {
+            candles.push((span, candle));
         }
         ChartData::Candles { interval, candles }
     }
@@ -935,27 +954,26 @@ fn bucket_start(key: Key, interval: Interval, zone: &TimeZone) -> Option<i64> {
             interval,
         )))),
         Key::Ts(t) => {
-            let local = jiff::Timestamp::from_microsecond(t)
+            let zoned = jiff::Timestamp::from_microsecond(t)
                 .ok()?
-                .to_zoned(zone.clone())
-                .datetime();
-            let start = match interval {
+                .to_zoned(zone.clone());
+            match interval {
                 Interval::Minutes(m) => {
-                    let minutes = i32::from(local.hour()) * 60 + i32::from(local.minute());
-                    let floored = minutes - minutes % m as i32;
-                    local
-                        .date()
-                        .at((floored / 60) as i8, (floored % 60) as i8, 0, 0)
+                    // Cut on local time by the instant's own offset, so the
+                    // repeated autumn hour keeps its own buckets.
+                    let offset = i64::from(zoned.offset().seconds()) * 1_000_000;
+                    let step = i64::from(m) * 60_000_000;
+                    let local = t + offset;
+                    Some(local - local.rem_euclid(step) - offset)
                 }
-                other => DateTime::from(truncate_date(local.date(), other)),
-            };
-            Some(
-                start
-                    .to_zoned(zone.clone())
-                    .ok()?
-                    .timestamp()
-                    .as_microsecond(),
-            )
+                other => Some(
+                    DateTime::from(truncate_date(zoned.date(), other))
+                        .to_zoned(zone.clone())
+                        .ok()?
+                        .timestamp()
+                        .as_microsecond(),
+                ),
+            }
         }
         _ => None,
     }
@@ -1041,7 +1059,7 @@ fn time_ticks(placement: &Placement, from: f64, to: f64, wanted: f64) -> Vec<Tic
         Placement::TradingDate(c) => (false, Some(c)),
         Placement::Number { .. } => return Vec::new(),
     };
-    // The x values at the range's ends.
+    // The x value at a position; on a trading axis, the open moment there.
     let value_at = |position: f64| -> i64 {
         match (calendar, instants) {
             (Some(c), true) => c.instant_at(position),
@@ -1049,7 +1067,27 @@ fn time_ticks(placement: &Placement, from: f64, to: f64, wanted: f64) -> Vec<Tic
             (None, _) => position as i64,
         }
     };
-    let (start, end) = (value_at(from), value_at(to));
+    // A step's length in axis units: trading time gives a day the session and a
+    // year 252 trading days.
+    let day = match calendar {
+        Some(c) if instants => c.session_micros() as f64,
+        None if instants => 86_400_000_000.0,
+        _ => 1.0,
+    };
+    let (week, month, year) = if calendar.is_some() {
+        (5.0, 21.0, 252.0)
+    } else {
+        (7.0, 30.44, 365.25)
+    };
+    let length = |i: Interval| match i {
+        Interval::Minutes(m) => f64::from(m) * 60_000_000.0,
+        Interval::Day => day,
+        Interval::Week => day * week,
+        Interval::Month => day * month,
+        Interval::Quarter => day * month * 3.0,
+        Interval::Year => day * year,
+        Interval::Years(n) => day * year * f64::from(n),
+    };
     let steps = [
         Interval::Minutes(1),
         Interval::Minutes(5),
@@ -1068,24 +1106,10 @@ fn time_ticks(placement: &Placement, from: f64, to: f64, wanted: f64) -> Vec<Tic
         Interval::Years(50),
         Interval::Years(100),
     ];
-    let span_days = if instants {
-        (end - start) as f64 / 86_400_000_000.0
-    } else {
-        (end - start) as f64
-    };
-    let days_in = |i: Interval| match i {
-        Interval::Minutes(m) => f64::from(m) / 1_440.0,
-        Interval::Day => 1.0,
-        Interval::Week => 7.0,
-        Interval::Month => 30.44,
-        Interval::Quarter => 91.3,
-        Interval::Year => 365.25,
-        Interval::Years(n) => 365.25 * f64::from(n),
-    };
     let step = steps
         .into_iter()
         .filter(|i| instants || !matches!(i, Interval::Minutes(_)))
-        .find(|&i| span_days / days_in(i) <= wanted)
+        .find(|&i| (to - from) / length(i) <= wanted)
         .unwrap_or(Interval::Years(100));
     let label = |value: i64| -> String {
         if instants {
@@ -1117,6 +1141,7 @@ fn time_ticks(placement: &Placement, from: f64, to: f64, wanted: f64) -> Vec<Tic
             Key::Date(i32::try_from(value).unwrap_or(0))
         }
     };
+    let (start, end) = (value_at(from), value_at(to));
     let mut ticks = Vec::new();
     let Some(mut at) = bucket_start(key(start), step, &zone) else {
         return ticks;
@@ -1129,9 +1154,12 @@ fn time_ticks(placement: &Placement, from: f64, to: f64, wanted: f64) -> Vec<Tic
             && x <= to
             && ticks.last().is_none_or(|t: &Tick| t.x < x)
         {
+            // On a trading axis a closed moment sits where the market next opens,
+            // so the tick there is labelled with that moment.
+            let shown = if calendar.is_some() { value_at(x) } else { at };
             ticks.push(Tick {
                 x,
-                label: label(at),
+                label: label(shown),
             });
         }
         let next = advance(at, step, instants, &zone);

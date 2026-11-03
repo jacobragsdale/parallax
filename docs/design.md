@@ -349,8 +349,16 @@ any cell.
 A chart's x axis is either its values or trading time on the NYSE calendar,
 where closed days and the hours outside the 09:30 to 16:00 session take no
 space, so trading days sit one apart and Friday's close meets Monday's open.
-The engine places the axis's ticks and writes their labels, because only it can
-map trading time back to dates.
+The calendar's closures hold from 2000; before that, only weekends close. The
+engine places the axis's ticks and writes their labels, because only it can
+map trading time back to dates; a tick that falls on a closed moment moves to
+where the market next opens and takes that moment's label.
+
+A candle at either edge of the visible range keeps its whole bucket, so panning
+never changes its prices, and each price comes from a row that has one. Minute
+buckets are cut by each instant's own offset, so the repeated autumn hour gets
+its own candles. Candlestick and OHLC charts show one instrument and need dates
+or instants on the x axis.
 
 M4's guarantee is tested directly: for random series with gaps and repeated x
 values, the line through the reduced points reaches exactly the same lowest and

@@ -163,9 +163,9 @@ pub fn trading_days(start: Date, end: Date) -> Vec<Date> {
     days
 }
 
-/// The years whose closures the trading-time axis knows. Outside them, only
-/// weekends are closed.
-const CLOSURE_YEARS: std::ops::RangeInclusive<i16> = 1970..=2100;
+/// The years whose closures the trading-time axis knows: the holiday rules hold
+/// from 2000. Outside them, only weekends are closed.
+const CLOSURE_YEARS: std::ops::RangeInclusive<i16> = 2000..=2100;
 
 /// NYSE's full-day closures on weekdays, as days since the epoch, sorted.
 fn weekday_closures() -> &'static [i32] {
@@ -229,15 +229,9 @@ impl TradingCalendar {
     #[must_use]
     pub fn day_index(&self, days: i32) -> i64 {
         let closures = weekday_closures();
-        let first = epoch_days(date(*CLOSURE_YEARS.start(), 1, 1));
-        let closed = |d: i32| closures.partition_point(|&c| c < d) as i64;
-        // Closures between the epoch and `days`, signed like the weekdays.
-        let between = if days >= 0 {
-            closed(days) - closed(0)
-        } else {
-            -(closed(0) - closed(days.max(first)))
-        };
-        weekdays_before(days) - between
+        // Every closure the calendar knows comes after the epoch.
+        let closed = closures.partition_point(|&c| c < days) as i64;
+        weekdays_before(days) - closed
     }
 
     /// Whether the market opens on `days`.
@@ -334,7 +328,7 @@ mod tests {
                 assert_eq!(calendar.day_index(closed), calendar.day_index(b));
             }
         }
-        for day in epoch_days(date(1990, 1, 1))..epoch_days(date(2030, 1, 1)) {
+        for day in epoch_days(date(2000, 1, 1))..epoch_days(date(2030, 1, 1)) {
             assert_eq!(
                 calendar.is_open(day),
                 is_trading_day(from_epoch_days(day)),
@@ -342,6 +336,14 @@ mod tests {
                 from_epoch_days(day)
             );
         }
+    }
+
+    #[test]
+    fn before_2000_only_weekends_close() {
+        let calendar = TradingCalendar::nyse();
+        // Martin Luther King Jr. Day 1990 was a trading day.
+        assert!(calendar.is_open(epoch_days(date(1990, 1, 15))));
+        assert!(!calendar.is_open(epoch_days(date(1990, 1, 13))));
     }
 
     #[test]

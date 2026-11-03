@@ -10,7 +10,8 @@ use parallax_datagen::Dataset;
 use parallax_datagen::calendar::{from_epoch_days, trading_days};
 use parallax_datagen::prices::{Prices, PricesOptions};
 use parallax_engine::chart::{
-    ChartConfig, ChartData, ChartKind, ChartRequest, ChartView, Interval, OhlcColumns, Point, XAxis,
+    Candle, ChartConfig, ChartData, ChartKind, ChartRequest, ChartView, Interval, OhlcColumns,
+    Point, XAxis,
 };
 use parallax_engine::{Filter, FilterOp, Scalar, Table, TableOptions};
 use proptest::prelude::*;
@@ -298,10 +299,10 @@ fn weekly_candles_match_the_daily_prices() {
     for ((bucket, candle), e) in candles.iter().zip(&expected) {
         assert_eq!(bucket.from, f64::from(e.0));
         assert_eq!(bucket.to, f64::from(e.0 + 7));
-        assert_eq!(value(&t, "open", candle.open), e.1);
-        assert_eq!(value(&t, "high", candle.high), e.2);
-        assert_eq!(value(&t, "low", candle.low), e.3);
-        assert_eq!(value(&t, "close", candle.close), e.4);
+        assert_eq!(value(&t, "open", candle.open.unwrap()), e.1);
+        assert_eq!(value(&t, "high", candle.high.unwrap()), e.2);
+        assert_eq!(value(&t, "low", candle.low.unwrap()), e.3);
+        assert_eq!(value(&t, "close", candle.close.unwrap()), e.4);
     }
 }
 
@@ -526,4 +527,286 @@ fn charts_refuse_columns_that_cannot_play_their_part() {
         })
         .contains("trading-time")
     );
+}
+
+fn candlestick(x: &str, filters: Vec<Filter>, axis: XAxis) -> ChartConfig {
+    ChartConfig {
+        kind: ChartKind::Candlestick,
+        x: x.into(),
+        y: Vec::new(),
+        series: None,
+        ohlc: Some(OhlcColumns {
+            open: "open".into(),
+            high: "high".into(),
+            low: "low".into(),
+            close: "close".into(),
+        }),
+        filters,
+        axis,
+    }
+}
+
+fn first_ticker(t: &Table) -> Filter {
+    let ticker = t.column(t.column_index("ticker").unwrap()).scalar(0);
+    Filter::new("ticker", FilterOp::Eq(ticker))
+}
+
+fn candles_of(
+    view: &ChartView,
+    t: &Table,
+    request: &ChartRequest,
+) -> (Interval, Vec<(f64, Candle)>) {
+    match view.reduce(t, request).data {
+        ChartData::Candles { interval, candles } => (
+            interval,
+            candles.into_iter().map(|(b, c)| (b.from, c)).collect(),
+        ),
+        other => panic!("not candles: {other:?}"),
+    }
+}
+
+#[test]
+fn candles_at_the_edges_keep_their_whole_bucket() {
+    let t = prices(2);
+    let view = ChartView::new(
+        &t,
+        candlestick("date", vec![first_ticker(&t)], XAxis::Value),
+    )
+    .unwrap();
+    let (from, to) = view.x_extent().unwrap();
+    let width = (((to - from) / 7.0) * 4.0).ceil() as u32 + 4;
+    let (interval, all) = candles_of(
+        &view,
+        &t,
+        &ChartRequest {
+            x: None,
+            y: None,
+            width,
+            height: 100,
+        },
+    );
+    assert_eq!(interval, Interval::Week);
+    // A window that starts and ends mid-week, at the same pixels per day.
+    let (a, b) = (from + 59.0, to - 61.0);
+    let narrower = ((f64::from(width) * (b - a) / (to - from)).ceil() as u32).max(1);
+    let (interval, part) = candles_of(
+        &view,
+        &t,
+        &ChartRequest {
+            x: Some((a, b)),
+            y: None,
+            width: narrower,
+            height: 100,
+        },
+    );
+    assert_eq!(interval, Interval::Week);
+    for candle in &part {
+        assert!(
+            all.contains(candle),
+            "{candle:?} differs from the full chart's candle"
+        );
+    }
+}
+
+#[test]
+fn a_bucket_takes_each_price_from_a_row_that_has_it() {
+    let days: Vec<i32> = vec![20_391, 20_392, 20_393]; // Monday to Wednesday
+    let batch = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            Field::new("date", DataType::Date32, false),
+            Field::new("open", DataType::Float64, true),
+            Field::new("high", DataType::Float64, true),
+            Field::new("low", DataType::Float64, true),
+            Field::new("close", DataType::Float64, true),
+        ])),
+        vec![
+            Arc::new(arrow_array::Date32Array::from(days)) as ArrayRef,
+            Arc::new(Float64Array::from(vec![None, Some(10.0), Some(11.0)])) as ArrayRef,
+            Arc::new(Float64Array::from(vec![None, Some(12.0), None])) as ArrayRef,
+            Arc::new(Float64Array::from(vec![Some(9.0), None, Some(8.0)])) as ArrayRef,
+            Arc::new(Float64Array::from(vec![Some(9.5), Some(10.5), None])) as ArrayRef,
+        ],
+    )
+    .unwrap();
+    let mut t = Table::new(&batch.schema(), TableOptions::default()).unwrap();
+    t.load(&[batch]).unwrap();
+    let view = ChartView::new(&t, candlestick("date", Vec::new(), XAxis::Value)).unwrap();
+    let (interval, candles) = candles_of(
+        &view,
+        &t,
+        &ChartRequest {
+            x: None,
+            y: None,
+            width: 4,
+            height: 100,
+        },
+    );
+    assert_eq!(interval, Interval::Week);
+    assert_eq!(candles.len(), 1);
+    let candle = candles[0].1;
+    let price = |column: &str, slot: Option<usize>| value(&t, column, slot.unwrap());
+    assert_eq!(price("open", candle.open), 10.0);
+    assert_eq!(price("high", candle.high), 12.0);
+    assert_eq!(price("low", candle.low), 8.0);
+    assert_eq!(price("close", candle.close), 10.5);
+}
+
+#[test]
+fn minute_candles_keep_the_repeated_autumn_hour_apart() {
+    // Every ten minutes across New York's change back from daylight time.
+    let start = "2026-11-01T00:00:00-04:00"
+        .parse::<jiff::Timestamp>()
+        .unwrap()
+        .as_microsecond();
+    let times: Vec<i64> = (0..24).map(|i| start + i * 600_000_000).collect();
+    let n = times.len();
+    let batch = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            Field::new(
+                "at",
+                DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, Some("UTC".into())),
+                false,
+            ),
+            Field::new("open", DataType::Float64, false),
+            Field::new("high", DataType::Float64, false),
+            Field::new("low", DataType::Float64, false),
+            Field::new("close", DataType::Float64, false),
+        ])),
+        vec![
+            Arc::new(
+                arrow_array::TimestampMicrosecondArray::from(times.clone()).with_timezone("UTC"),
+            ) as ArrayRef,
+            Arc::new(Float64Array::from(vec![1.0; n])) as ArrayRef,
+            Arc::new(Float64Array::from(vec![2.0; n])) as ArrayRef,
+            Arc::new(Float64Array::from(vec![0.5; n])) as ArrayRef,
+            Arc::new(Float64Array::from(vec![1.5; n])) as ArrayRef,
+        ],
+    )
+    .unwrap();
+    let mut t = Table::new(&batch.schema(), TableOptions::default()).unwrap();
+    t.load(&[batch]).unwrap();
+    let view = ChartView::new(&t, candlestick("at", Vec::new(), XAxis::Value)).unwrap();
+    let (from, to) = view.x_extent().unwrap();
+    // Wide enough for 30-minute candles, too narrow for 15-minute ones.
+    let width = ((to - from) / 1_800_000_000.0 * 4.0).ceil() as u32 + 4;
+    let (interval, candles) = candles_of(
+        &view,
+        &t,
+        &ChartRequest {
+            x: None,
+            y: None,
+            width,
+            height: 100,
+        },
+    );
+    assert_eq!(interval, Interval::Minutes(30));
+    // New York's offsets are whole hours, so its half hours are UTC's.
+    let mut expected: Vec<i64> = times
+        .iter()
+        .map(|t| t - t.rem_euclid(1_800_000_000))
+        .collect();
+    expected.dedup();
+    let starts: Vec<i64> = candles.iter().map(|(from, _)| *from as i64).collect();
+    assert_eq!(starts, expected);
+}
+
+#[test]
+fn trading_ticks_are_trading_moments_and_spaced_by_trading_time() {
+    let calendar = parallax_engine::calendar::TradingCalendar::nyse();
+    let at = |s: &str| {
+        s.parse::<jiff::Zoned>()
+            .unwrap()
+            .timestamp()
+            .as_microsecond()
+    };
+    // Friday 15:00 to Monday 10:00 is an hour and a half of trading.
+    let times = [
+        at("2026-10-30T15:00:00[America/New_York]"),
+        at("2026-11-02T10:00:00[America/New_York]"),
+    ];
+    let batch = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            Field::new(
+                "at",
+                DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, Some("UTC".into())),
+                false,
+            ),
+            Field::new("y", DataType::Float64, false),
+        ])),
+        vec![
+            Arc::new(
+                arrow_array::TimestampMicrosecondArray::from(times.to_vec()).with_timezone("UTC"),
+            ) as ArrayRef,
+            Arc::new(Float64Array::from(vec![1.0, 2.0])) as ArrayRef,
+        ],
+    )
+    .unwrap();
+    let mut t = Table::new(&batch.schema(), TableOptions::default()).unwrap();
+    t.load(&[batch]).unwrap();
+    let config = ChartConfig {
+        x: "at".into(),
+        ..line(XAxis::Trading)
+    };
+    let view = ChartView::new(&t, config).unwrap();
+    let ticks = view
+        .reduce(
+            &t,
+            &ChartRequest {
+                x: None,
+                y: None,
+                width: 1_000,
+                height: 100,
+            },
+        )
+        .ticks;
+    assert!(ticks.len() >= 3, "{ticks:?}");
+    for tick in &ticks {
+        let instant = calendar.instant_at(tick.x);
+        let local = jiff::Timestamp::from_microsecond(instant)
+            .unwrap()
+            .to_zoned(jiff::tz::TimeZone::get("America/New_York").unwrap());
+        assert_eq!(local.strftime("%H:%M").to_string(), tick.label, "{tick:?}");
+        assert!(
+            calendar.is_open(parallax_datagen::calendar::epoch_days(local.date())),
+            "{tick:?}"
+        );
+    }
+    // On a trading-date axis, no tick names a closed day.
+    let t = prices(1);
+    let config = ChartConfig {
+        x: "date".into(),
+        y: vec!["close".into()],
+        ..line(XAxis::Trading)
+    };
+    let view = ChartView::new(&t, config).unwrap();
+    let (from, _) = view.x_extent().unwrap();
+    let reduced = view.reduce(
+        &t,
+        &ChartRequest {
+            x: Some((from, from + 40.0)),
+            y: None,
+            width: 2_000,
+            height: 100,
+        },
+    );
+    for tick in &reduced.ticks {
+        let day = from_epoch_days(calendar.day_at(tick.x as i64));
+        assert_eq!(day.strftime("%b %-d").to_string(), tick.label);
+        assert!(calendar.is_open(parallax_datagen::calendar::epoch_days(day)));
+    }
+}
+
+#[test]
+fn candles_refuse_a_number_axis_and_a_series_column() {
+    let t = prices(2);
+    let error = ChartView::new(&t, candlestick("close", Vec::new(), XAxis::Value))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("buckets by calendar"), "{error}");
+    let config = ChartConfig {
+        series: Some("ticker".into()),
+        ..candlestick("date", Vec::new(), XAxis::Value)
+    };
+    let error = ChartView::new(&t, config).unwrap_err().to_string();
+    assert!(error.contains("one instrument"), "{error}");
 }

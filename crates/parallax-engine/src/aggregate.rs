@@ -819,7 +819,8 @@ fn i256_to_u128_or_zero(value: &BigUint) -> u128 {
     }
 }
 
-fn key_to_f64(key: Key, scale: i8) -> f64 {
+/// A numeric key as a double, a decimal correctly rounded; NaN for other keys.
+pub(crate) fn key_to_f64(key: Key, scale: i8) -> f64 {
     match key {
         Key::Float(bits) => f64::from_bits(bits),
         Key::Int(i) => i as f64,
