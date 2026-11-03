@@ -10,7 +10,9 @@ use parallax_engine::view::{GroupOrder, GroupSort, Sort};
 use parallax_engine::{Aggregate, Measure, Table, TableOptions, View, ViewConfig};
 
 fn main() {
-    let rows: u64 = std::env::args().nth(1).map_or(1_000_000, |s| s.parse().unwrap());
+    let rows: u64 = std::env::args()
+        .nth(1)
+        .map_or(1_000_000, |s| s.parse().unwrap());
     let dataset = Positions::new(PositionsOptions {
         rows,
         ..PositionsOptions::default()
@@ -21,7 +23,10 @@ fn main() {
         .into_iter()
         .map(|r| dataset.batch(r))
         .collect();
-    println!("generate {rows} rows: {:.2} s", started.elapsed().as_secs_f64());
+    println!(
+        "generate {rows} rows: {:.2} s",
+        started.elapsed().as_secs_f64()
+    );
 
     let mut table = Table::new(
         &batches[0].schema(),
@@ -37,7 +42,12 @@ fn main() {
     drop(batches);
 
     let pivot = ViewConfig {
-        group_by: vec!["fund".into(), "strategy".into(), "sector".into(), "ticker".into()],
+        group_by: vec![
+            "fund".into(),
+            "strategy".into(),
+            "sector".into(),
+            "ticker".into(),
+        ],
         split_by: vec!["asset_class".into()],
         measures: vec![
             Measure::new(Aggregate::Sum, "market_value_usd"),
