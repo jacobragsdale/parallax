@@ -70,3 +70,41 @@ test("Shift and drag lists the brushed days, and another ticker shows all of its
   };
   await expect.poll(close).toBeLessThan(1000);
 });
+
+test("an indicator keeps the zoom and the brush; another start date shows everything again", async ({ page }) => {
+  const chart = await open(page);
+  const status = chart.locator(".px-status-rows");
+  const plot = chart.locator(".px-chart-plot");
+  const box = await plot.boundingBox();
+  const [x, y] = [(box?.x ?? 0) + (box?.width ?? 0) / 2, (box?.y ?? 0) + (box?.height ?? 0) * 0.2];
+  await page.mouse.move(x, y);
+  for (let i = 0; i < 5; i += 1) {
+    await page.mouse.wheel(0, -100);
+  }
+  await expect(status).toContainText("zoomed in");
+  const rows = page.locator("demo-technical .rows .px-status-rows");
+  await expect(rows).toHaveText(/^[\d,]+ rows$/);
+  const count = async (): Promise<number> => Number((await rows.textContent())?.replace(/\D/g, "") ?? "0");
+  const all = await count();
+  await page.keyboard.down("Shift");
+  await page.mouse.move(x - 60, y);
+  await page.mouse.down();
+  await page.mouse.move(x + 60, y, { steps: 5 });
+  await page.mouse.up();
+  await page.keyboard.up("Shift");
+  await expect.poll(count).toBeLessThan(all);
+  const narrowed = await count();
+  // An indicator is drawn over the same rows: the zoom, the brush and the grid stay.
+  await page.getByLabel("WMA 20").check();
+  await expect(chart.locator(".px-legend-entry").filter({ hasText: "WMA 20" })).toBeVisible();
+  await expect(status).toContainText("zoomed in");
+  await expect(chart.locator(".px-chart-brush")).toBeVisible();
+  expect(await count()).toBe(narrowed);
+  // Another start date draws other rows: everything is shown, unbrushed.
+  await page.getByRole("combobox", { name: "Since" }).selectOption("2020-01-01");
+  await expect(status).not.toContainText("zoomed in");
+  await expect(chart.locator(".px-chart-brush")).toHaveCount(0);
+  await expect.poll(count).toBeGreaterThan(all);
+  // The header's link cannot describe a page of views of its own.
+  await expect(page.getByRole("button", { name: "Copy link to this view" })).toBeDisabled();
+});

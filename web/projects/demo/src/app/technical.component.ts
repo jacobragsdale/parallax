@@ -1,6 +1,6 @@
 import { ChangeDetectionStrategy, Component, computed, input, signal } from "@angular/core";
 import { ChartComponent, GridComponent } from "parallax";
-import type { LayoutDrawing, LayoutFilter, LayoutIndicator, LayoutInput, ThemeName } from "parallax";
+import type { Density, LayoutFilter, LayoutIndicator, LayoutInput, ThemeName } from "parallax";
 
 const TICKERS = ["QYE", "ZREZ", "NV"] as const;
 type Ticker = (typeof TICKERS)[number];
@@ -27,6 +27,7 @@ const OPTIONS: readonly Option[] = [
   { key: "sma50", label: "SMA 50", indicator: { kind: "sma", period: 50 }, candles: false, priced: true },
   { key: "sma200", label: "SMA 200", indicator: { kind: "sma", period: 200 }, candles: false, priced: true },
   { key: "ema20", label: "EMA 20", indicator: { kind: "ema", period: 20 }, candles: false, priced: true },
+  { key: "wma20", label: "WMA 20", indicator: { kind: "wma", period: 20 }, candles: false, priced: true },
   { key: "bollinger", label: "Bollinger 20 2", indicator: { kind: "bollinger", period: 20, deviations: 2 }, candles: false, priced: true },
   { key: "vwap", label: "VWAP", indicator: { kind: "vwap" }, candles: true, priced: true },
   { key: "rsi", label: "RSI 14", indicator: { kind: "rsi", period: 14 }, candles: false, priced: false },
@@ -57,15 +58,18 @@ function fits(option: Option, s: Settings): boolean {
   return (candles || !option.candles) && !(s.compare && option.priced);
 }
 
-/** The chart the settings make, keeping drawings already made. */
-function chartLayout(s: Settings, drawings: readonly LayoutDrawing[]): LayoutInput {
+/** What a chart keeps from the one it replaces: its drawings, zoom and hidden series. */
+type Kept = Pick<NonNullable<LayoutInput["chart"]>, "drawings" | "range" | "hidden">;
+
+/** The chart the settings make, keeping what the chart before it holds. */
+function chartLayout(s: Settings, kept: Kept): LayoutInput {
   const since: LayoutFilter = { column: "date", op: "ge", value: s.since, values: [] };
   const indicators = OPTIONS.filter((o) => s.on.has(o.key) && fits(o, s)).map((o) => o.indicator);
   if (s.compare) {
     return {
       dataset: "prices",
       filters: [{ column: "ticker", op: "in", value: null, values: [...TICKERS] }, since],
-      chart: { kind: "line", x: "date", y: ["close"], series: "ticker", axis: "trading", compare: true, indicators, events: s.events ? "event" : null, drawings: [...drawings] }
+      chart: { ...kept, kind: "line", x: "date", y: ["close"], series: "ticker", axis: "trading", compare: true, indicators, events: s.events ? "event" : null }
     };
   }
   const candles = s.kind === "candlestick" || s.kind === "ohlc";
@@ -73,6 +77,7 @@ function chartLayout(s: Settings, drawings: readonly LayoutDrawing[]): LayoutInp
     dataset: "prices",
     filters: [{ column: "ticker", op: "eq", value: s.ticker, values: [] }, since],
     chart: {
+      ...kept,
       kind: s.kind,
       x: "date",
       ...(candles ? { ohlc: { open: "open", high: "high", low: "low", close: "close" } } : { y: ["close"] }),
@@ -80,8 +85,7 @@ function chartLayout(s: Settings, drawings: readonly LayoutDrawing[]): LayoutInp
       log_y: s.log,
       volume: "volume",
       indicators,
-      events: s.events ? "event" : null,
-      drawings: [...drawings]
+      events: s.events ? "event" : null
     }
   };
 }
@@ -141,7 +145,7 @@ function rowsLayout(s: Settings, brush: readonly LayoutFilter[]): LayoutInput {
     <section class="chart"><px-chart [(layout)]="chart" [theme]="theme()" (brushed)="brush($event)" /></section>
     <section class="rows">
       <h2>{{ rowsTitle() }}</h2>
-      <px-grid [(layout)]="rows" [theme]="theme()" />
+      <px-grid [(layout)]="rows" [theme]="theme()" [density]="density()" />
     </section>
   `,
   styles: `
@@ -201,6 +205,7 @@ function rowsLayout(s: Settings, brush: readonly LayoutFilter[]): LayoutInput {
 })
 export class TechnicalComponent {
   public readonly theme = input<ThemeName>("light");
+  public readonly density = input<Density>("compact");
 
   protected readonly tickers = TICKERS;
   protected readonly kinds = KINDS;
@@ -215,17 +220,26 @@ export class TechnicalComponent {
     log: false
   });
   protected readonly options = computed(() => OPTIONS.map((o) => ({ key: o.key, label: o.label, on: this.settings().on.has(o.key), fits: fits(o, this.settings()) })));
-  protected readonly chart = signal<LayoutInput>(chartLayout(this.settings(), []));
+  protected readonly chart = signal<LayoutInput>(chartLayout(this.settings(), {}));
   private readonly brushed = signal<readonly LayoutFilter[]>([]);
   protected readonly rows = signal<LayoutInput>(rowsLayout(this.settings(), []));
   protected readonly rowsTitle = computed(() => (this.brushed().length === 0 ? "Every day shown, newest first: Shift-drag on the chart to narrow them" : "The days brushed on the chart"));
 
-  /** New settings remake the chart, keeping its drawings, and show every day again. */
-  private apply(next: Settings): void {
+  /**
+   * New settings remake the chart. Another ticker, start date or comparison draws other rows: the zoom goes, the grid
+   * lists every day again, and the chart drops its brush itself. Another ticker or a comparison also puts prices on
+   * another scale, so drawings anchored to the old one go too. Indicators, events and the log scale change neither.
+   */
+  private apply(next: Settings, change: { readonly rows: boolean; readonly units: boolean }): void {
     this.settings.set(next);
-    this.chart.update((current) => chartLayout(next, current.chart?.drawings ?? []));
-    this.brushed.set([]);
-    this.rows.set(rowsLayout(next, []));
+    this.chart.update((current) => {
+      const c = current.chart;
+      return chartLayout(next, { drawings: change.units ? [] : c?.drawings, range: change.rows ? null : c?.range, hidden: c?.hidden });
+    });
+    if (change.rows) {
+      this.brushed.set([]);
+      this.rows.set(rowsLayout(next, []));
+    }
   }
 
   protected pick(field: "ticker" | "kind" | "since", event: Event): void {
@@ -235,17 +249,14 @@ export class TechnicalComponent {
     const kind = field === "kind" ? parse(KINDS, value) : s.kind;
     const since = field === "since" ? parse(SINCE, value) : s.since;
     if (ticker !== null && kind !== null && since !== null) {
-      // Drawings are anchored to one ticker's prices: another ticker starts without them.
-      if (field === "ticker") {
-        this.chart.update((current) => ({ ...current, chart: { ...current.chart, kind: current.chart?.kind ?? "candlestick", drawings: [] } }));
-      }
-      this.apply({ ...s, ticker, kind, since });
+      this.apply({ ...s, ticker, kind, since }, { rows: field !== "kind", units: field === "ticker" });
     }
   }
 
   protected flag(field: "compare" | "events" | "log"): void {
     const s = this.settings();
-    this.apply({ ...s, [field]: !s[field] });
+    const compare = field === "compare";
+    this.apply({ ...s, [field]: !s[field] }, { rows: compare, units: compare });
   }
 
   protected toggle(key: string): void {
@@ -254,7 +265,7 @@ export class TechnicalComponent {
     if (!on.delete(key)) {
       on.add(key);
     }
-    this.apply({ ...s, on });
+    this.apply({ ...s, on }, { rows: false, units: false });
   }
 
   protected brush(filters: readonly LayoutFilter[] | null): void {

@@ -23,6 +23,7 @@ import {
   model,
   output,
   signal,
+  untracked,
   viewChild
 } from "@angular/core";
 import type { ElementRef } from "@angular/core";
@@ -35,7 +36,7 @@ import type { ChartColors, Theme, ThemeName } from "../theme";
 import { ChartHeadComponent, ChartMeasureComponent, ChartNoteComponent, ChartTipComponent } from "./chart-parts.component";
 import { DrawingEditor, measureView } from "./drawing-editor";
 import type { PlacedReading } from "./chart-parts.component";
-import { chartSource } from "./chart-source";
+import { chartSource, rowsPart } from "./chart-source";
 import type { PlotSize } from "./chart-source";
 import { brushFilters, eventRows, indicatorRows, markAt, panRange, readSeries, zoomRange } from "./interaction";
 import type { Range, Reading } from "./interaction";
@@ -574,6 +575,18 @@ export class ChartComponent {
       const element = this.canvas().nativeElement;
       this.colors.set(readChartColors(element));
       this.tokens.set(readTheme(element));
+    });
+    // A brush selects rows: once the chart draws other rows, it selects nothing shown, and is cleared.
+    let rows: string | null = null;
+    effect(() => {
+      const layout = this.current();
+      const next = layout === null ? null : rowsPart(layout);
+      untracked(() => {
+        if (rows !== null && next !== rows && this.brush() !== null) {
+          this.clearBrush();
+        }
+        rows = next;
+      });
     });
     // Ask for the chart at the plot's size, over the zoomed range if any.
     effect(() => {

@@ -121,10 +121,10 @@ function remember(name: string, value: string): void {
           <option value="comfortable">Comfortable</option>
         </select>
       </label>
-      <button type="button" (click)="share()">Copy link to this view</button>
+      <button type="button" [disabled]="pageOfViews()" [title]="pageOfViews() ? 'This page holds several views of its own' : ''" (click)="share()">Copy link to this view</button>
       <button type="button" [attr.aria-pressed]="performance()" (click)="togglePerformance()">Performance</button>
       <span role="status">{{ note() }}</span>
-      <details>
+      <details [hidden]="pageOfViews()">
         <summary>Layout</summary>
         <pre data-testid="layout-json">{{ layoutJson() }}</pre>
       </details>
@@ -134,7 +134,7 @@ function remember(name: string, value: string): void {
       @if (charts()) {
         <demo-charts [theme]="theme()" />
       } @else if (technical()) {
-        <demo-technical [theme]="theme()" />
+        <demo-technical [theme]="theme()" [density]="density()" />
       } @else if (ready()) {
         @if (grouped()) {
           <px-pivot [(layout)]="layout" [theme]="theme()" [density]="density()" />
@@ -241,6 +241,8 @@ export class App {
   protected readonly charts = computed(() => this.search.preset === "charts" && this.search.layout === undefined);
   /** The technical-analysis page, which has its own controls. */
   protected readonly technical = computed(() => this.search.preset === "technical" && this.search.layout === undefined);
+  /** A page of views of its own, which the header's link and layout cannot describe. */
+  protected readonly pageOfViews = computed(() => this.charts() || this.technical());
   /** False while a linked layout is being read, so the preset never opens in its place. */
   protected readonly ready = signal(this.search.layout === undefined);
   protected readonly about = computed(() => (this.search.layout === undefined ? PRESETS[this.search.preset].about : "A view opened from a shared link."));

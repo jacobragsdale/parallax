@@ -102,6 +102,12 @@ interface Current {
   shape: string;
 }
 
+/** Which rows a chart draws: a brush selects among them, so a change here leaves a brush selecting nothing it shows. */
+export function rowsPart(layout: Layout): string {
+  const c = layout.chart;
+  return JSON.stringify([layout.dataset, layout.parameters, layout.filters, c?.kind, c?.x, c?.axis, c?.series]);
+}
+
 /**
  * What a frame's data looks like: the chart's kind, the columns it plots and its indicators, whose lines a frame names
  * by their place in the list.
