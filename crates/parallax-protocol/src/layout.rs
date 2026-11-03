@@ -304,7 +304,7 @@ fn value_error(column: &str, reason: impl Into<String>) -> LayoutError {
 fn parse_decimal(column: &str, text: &str, scale: i8) -> Result<i128, LayoutError> {
     let bad = || value_error(column, format!("{text:?} is not a decimal"));
     let (mantissa, exponent) = match text.find(['e', 'E']) {
-        Some(i) => (&text[..i], text[i + 1..].parse::<i32>().map_err(|_| bad())?),
+        Some(i) => (&text[..i], text[i + 1..].parse::<i64>().map_err(|_| bad())?),
         None => (text, 0),
     };
     let (negative, digits) = match mantissa.strip_prefix('-') {
@@ -322,7 +322,12 @@ fn parse_decimal(column: &str, text: &str, scale: i8) -> Result<i128, LayoutErro
     }
     // The value is all_digits * 10^(exponent - fraction.len()); rescale to `scale`.
     let all_digits = format!("{whole}{fraction}");
-    let shift = i32::from(scale) + exponent - fraction.len() as i32;
+    // Computed in i64 and bounded, so hostile exponents cannot overflow.
+    let shift = i64::from(scale)
+        .checked_add(exponent)
+        .and_then(|s| s.checked_sub(i64::try_from(fraction.len()).ok()?))
+        .filter(|s| s.abs() <= 76)
+        .ok_or_else(|| value_error(column, format!("{text} is out of range")))?;
     let trimmed = all_digits.trim_start_matches('0');
     let mut unscaled: i128 = if trimmed.is_empty() {
         0
@@ -363,6 +368,12 @@ fn scalar(column: &str, ty: &ColumnType, value: &Value) -> Result<Scalar, Layout
         (ColumnType::Float64, Value::Number(n)) => {
             Scalar::Float64(n.as_str().parse().map_err(|_| mismatch())?)
         }
+        // JSON has no infinity, so infinities travel as "inf" and "-inf".
+        (ColumnType::Float64, Value::String(s)) => match s.as_str() {
+            "inf" | "+inf" | "infinity" => Scalar::Float64(f64::INFINITY),
+            "-inf" | "-infinity" => Scalar::Float64(f64::NEG_INFINITY),
+            _ => return Err(mismatch()),
+        },
         (ColumnType::Decimal { scale, .. }, Value::Number(n)) => {
             Scalar::Decimal(parse_decimal(column, n.as_str(), *scale)?)
         }
@@ -611,8 +622,10 @@ pub fn scalar_to_json(table: &Table, column: &str, value: &Scalar) -> Value {
         Scalar::Null => Value::Null,
         Scalar::Boolean(b) => Value::Bool(*b),
         Scalar::Int64(i) => Value::from(*i),
-        Scalar::Float64(f) => serde_json::Number::from_f64(*f)
-            .map_or_else(|| Value::String(f.to_string()), Value::Number),
+        Scalar::Float64(f) if f.is_infinite() => {
+            Value::String(if *f > 0.0 { "inf" } else { "-inf" }.to_owned())
+        }
+        Scalar::Float64(f) => serde_json::Number::from_f64(*f).map_or(Value::Null, Value::Number),
         Scalar::Decimal(d) => {
             let scale = match column_type(table, column) {
                 Ok(ColumnType::Decimal { scale, .. }) => scale as u32,
@@ -745,6 +758,11 @@ mod tests {
         assert!(parse_decimal("x", "abc", 2).is_err());
         assert!(parse_decimal("x", "", 2).is_err());
         assert!(parse_decimal("x", "1e40", 2).is_err());
+        assert!(
+            parse_decimal("x", "1e2147483647", 2).is_err(),
+            "hostile exponent"
+        );
+        assert!(parse_decimal("x", "1e-9223372036854775808", 2).is_err());
     }
 
     #[test]

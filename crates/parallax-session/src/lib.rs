@@ -2,23 +2,33 @@
 //!
 //! A [`Session`] belongs to one connection: a WebSocket on the server, or the
 //! browser worker that hosts the WebAssembly engine. It turns client messages into
-//! server messages. Tables come from a [`Catalog`] and are shared between sessions;
-//! when a table reloads, [`Session::refresh`] brings each view up to date by
-//! applying the change sets it missed and pushes fresh frames.
+//! server messages. Tables come from a [`Catalog`] and are shared between sessions.
+//!
+//! A table can reload at any moment, and a reload reuses freed row slots. Before a
+//! view answers anything, it first applies the change sets it missed, under the same
+//! read lock that the answer is computed under. A frame therefore always describes
+//! the table as it is, and carries that load's version.
 //!
 //! The session never reads a clock. Times on tables are supplied by whoever loads
 //! them, which keeps the code identical on the server and in WebAssembly.
 
 use std::collections::{BTreeMap, VecDeque};
-use std::sync::{Arc, RwLock};
+use std::ops::Range;
+use std::sync::{Arc, RwLock, RwLockReadGuard};
 
-use parallax_engine::{ChangeSet, LoadError, LoadReport, Table, View, ViewConfig};
+use arrow_array::RecordBatch;
+use arrow_schema::Schema;
+use parallax_engine::{ChangeSet, LoadError, LoadReport, Table, TableOptions, View};
 use parallax_protocol::PROTOCOL_VERSION;
 use parallax_protocol::ipc::{encode_batch, encode_schema};
-use parallax_protocol::layout::{Layout, ResolvedLayout};
+use parallax_protocol::layout::{
+    AggregateName, FilterOpName, Layout, LayoutExpanded, LayoutFilter, LayoutMeasure,
+    ResolvedLayout, ShowAsName,
+};
 use parallax_protocol::v1::{
-    ClientMessage, ColumnCount, DatasetInfo, DistinctValuesResult, Error as ErrorMessage, Frame,
-    ServerMessage, TableStatus, ViewOpened, Welcome, client_message, server_message,
+    ClientMessage, ColumnCount, DatasetInfo, DistinctValues, DistinctValuesResult,
+    Error as ErrorMessage, Frame, ServerMessage, TableStatus, ViewOpened, Welcome, client_message,
+    server_message,
 };
 use prost::Message;
 
@@ -57,6 +67,26 @@ impl TableState {
         }
     }
 
+    /// Creates a table from a first load. The schema comes from the source, so an
+    /// empty result still opens as an empty table.
+    ///
+    /// # Errors
+    ///
+    /// Returns the load error if the table refuses the rows.
+    pub fn from_batches(
+        schema: &Schema,
+        batches: &[RecordBatch],
+        options: TableOptions,
+        now_micros: i64,
+        source_as_of_micros: i64,
+    ) -> Result<Self, LoadError> {
+        let mut table = Table::new(schema, options)?;
+        let (report, _) = table.load(batches)?;
+        let mut state = Self::new(table, now_micros, source_as_of_micros);
+        state.nans_to_null = report.nans_to_null;
+        Ok(state)
+    }
+
     /// Replaces the table's contents. A refused load keeps the previous contents and
     /// records the error, so views keep showing the last good data.
     ///
@@ -65,7 +95,7 @@ impl TableState {
     /// Returns the load error after recording it.
     pub fn reload(
         &mut self,
-        batches: &[arrow_array::RecordBatch],
+        batches: &[RecordBatch],
         now_micros: i64,
         source_as_of_micros: i64,
     ) -> Result<LoadReport, LoadError> {
@@ -118,6 +148,18 @@ impl TableState {
     }
 }
 
+/// Reads a shared table. A lock poisoned by a panic during a reload means the table
+/// may be half-updated, so it is refused rather than shown.
+///
+/// # Errors
+///
+/// Returns a message if the lock is poisoned.
+pub fn read_table(table: &SharedTable) -> Result<RwLockReadGuard<'_, TableState>, String> {
+    table
+        .read()
+        .map_err(|_| "the table is unavailable after an internal error".to_owned())
+}
+
 /// A value the host attaches to a connection, such as the signed-in user, and that
 /// dataset code receives. The library passes it through without interpreting it.
 pub type ConnectionContext = Arc<dyn std::any::Any + Send + Sync>;
@@ -164,14 +206,18 @@ impl MemoryCatalog {
     pub fn insert(&self, name: &str, table: SharedTable) {
         self.tables
             .write()
-            .expect("catalog lock")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(name.to_owned(), table);
     }
 
     /// Returns a dataset's table.
     #[must_use]
     pub fn get(&self, name: &str) -> Option<SharedTable> {
-        self.tables.read().expect("catalog lock").get(name).cloned()
+        self.tables
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(name)
+            .cloned()
     }
 }
 
@@ -179,7 +225,7 @@ impl Catalog for MemoryCatalog {
     fn datasets(&self) -> Vec<DatasetInfo> {
         self.tables
             .read()
-            .expect("catalog lock")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .keys()
             .map(|name| DatasetInfo {
                 name: name.clone(),
@@ -207,6 +253,14 @@ struct Viewport {
     column_count: u32,
 }
 
+/// Converts a client's start and count to an index range, saturating instead of
+/// overflowing and clamping to the platform's index size.
+fn index_range(start: u64, count: u64) -> Range<usize> {
+    let end = start.saturating_add(count);
+    let clamp = |v: u64| usize::try_from(v).unwrap_or(usize::MAX);
+    clamp(start)..clamp(end)
+}
+
 struct OpenView {
     table: SharedTable,
     layout: Layout,
@@ -215,6 +269,50 @@ struct OpenView {
     viewport: Option<Viewport>,
     status_version: u64,
     status_error: Option<String>,
+    /// The load version a rebuild last failed at, so the error is reported once.
+    broken_at: Option<u64>,
+}
+
+/// Builds a view from a resolved layout and applies its expanded groups.
+fn build_view(table: &Table, resolved: ResolvedLayout) -> Result<View, String> {
+    let mut view = View::new(table, resolved.config).map_err(|e| e.to_string())?;
+    for (path, expanded) in resolved.expanded {
+        view.set_expanded(path, expanded);
+    }
+    Ok(view)
+}
+
+impl OpenView {
+    /// Applies the change sets the view missed, or rebuilds it if the kept history
+    /// does not reach back far enough. Returns `true` if the view changed.
+    fn catch_up(&mut self, state: &TableState) -> Result<bool, String> {
+        let current = state.table.load_version();
+        let behind = self.view.load_version();
+        if behind >= current {
+            return Ok(false);
+        }
+        let missing: Vec<&Arc<ChangeSet>> = state
+            .history
+            .iter()
+            .filter(|c| c.load_version > behind)
+            .collect();
+        let contiguous = missing
+            .first()
+            .is_some_and(|c| c.load_version == behind + 1)
+            && missing.last().is_some_and(|c| c.load_version == current);
+        if contiguous {
+            for change in missing {
+                self.view.apply(&state.table, change);
+            }
+        } else {
+            let resolved = self
+                .layout
+                .resolve(&state.table)
+                .map_err(|e| e.to_string())?;
+            self.view = build_view(&state.table, resolved)?;
+        }
+        Ok(true)
+    }
 }
 
 /// The protocol state of one connection.
@@ -239,15 +337,6 @@ fn reply(request_id: u64, body: server_message::Body) -> ServerMessage {
         request_id,
         body: Some(body),
     }
-}
-
-/// Builds a view from a resolved layout and applies its expanded groups.
-fn build_view(table: &Table, resolved: ResolvedLayout) -> Result<View, String> {
-    let mut view = View::new(table, resolved.config).map_err(|e| e.to_string())?;
-    for (path, expanded) in resolved.expanded {
-        view.set_expanded(path, expanded);
-    }
-    Ok(view)
 }
 
 impl Session {
@@ -289,7 +378,28 @@ impl Session {
         let Some(body) = message.body else {
             return vec![error(id, 0, "empty message")];
         };
-        match body {
+        let view_id = match &body {
+            client_message::Body::Hello(_) => 0,
+            client_message::Body::OpenView(m) => m.view_id,
+            client_message::Body::UpdateView(m) => m.view_id,
+            client_message::Body::SetViewport(m) => m.view_id,
+            client_message::Body::SetExpanded(m) => m.view_id,
+            client_message::Body::CloseView(m) => m.view_id,
+            client_message::Body::DrillThrough(m) => m.view_id,
+            client_message::Body::DistinctValues(m) => m.view_id,
+        };
+        match self.dispatch(id, body) {
+            Ok(messages) => messages,
+            Err(message) => vec![error(id, view_id, message)],
+        }
+    }
+
+    fn dispatch(
+        &mut self,
+        id: u64,
+        body: client_message::Body,
+    ) -> Result<Vec<ServerMessage>, String> {
+        Ok(match body {
             client_message::Body::Hello(_) => vec![reply(
                 id,
                 server_message::Body::Welcome(Welcome {
@@ -299,45 +409,28 @@ impl Session {
             )],
             client_message::Body::OpenView(open) => {
                 let parameters: BTreeMap<String, String> = open.parameters.into_iter().collect();
-                let opened = self
+                let table = self
                     .catalog
-                    .open(&open.dataset, &parameters, &self.context)
-                    .and_then(|table| {
-                        let layout =
-                            Layout::from_json(&open.layout_json).map_err(|e| e.to_string())?;
-                        self.open_view(id, open.view_id, table, layout)
-                    });
-                match opened {
-                    Ok(messages) => messages,
-                    Err(message) => vec![error(id, open.view_id, message)],
-                }
+                    .open(&open.dataset, &parameters, &self.context)?;
+                let layout = Layout::from_json(&open.layout_json).map_err(|e| e.to_string())?;
+                self.open_view(id, open.view_id, table, layout)?
             }
             client_message::Body::UpdateView(update) => {
-                let Some(open) = self.views.get_mut(&update.view_id) else {
-                    return vec![error(id, update.view_id, "no such view")];
+                let open = self.view_mut(update.view_id)?;
+                let layout = Layout::from_json(&update.layout_json).map_err(|e| e.to_string())?;
+                let view = {
+                    let state = read_table(&open.table)?;
+                    let resolved = layout.resolve(&state.table).map_err(|e| e.to_string())?;
+                    build_view(&state.table, resolved)?
                 };
-                let rebuilt = Layout::from_json(&update.layout_json)
-                    .map_err(|e| e.to_string())
-                    .and_then(|layout| {
-                        let state = open.table.read().expect("table lock");
-                        let resolved = layout.resolve(&state.table).map_err(|e| e.to_string())?;
-                        Ok((layout, build_view(&state.table, resolved)?))
-                    });
-                match rebuilt {
-                    Ok((layout, view)) => {
-                        open.layout = layout;
-                        open.view = view;
-                        open.config_version = update.config_version;
-                        self.frame(id, update.view_id, false).into_iter().collect()
-                    }
-                    Err(message) => vec![error(id, update.view_id, message)],
-                }
+                open.layout = layout;
+                open.view = view;
+                open.config_version = update.config_version;
+                open.broken_at = None;
+                self.frame(id, update.view_id, false).into_iter().collect()
             }
             client_message::Body::SetViewport(v) => {
-                let Some(open) = self.views.get_mut(&v.view_id) else {
-                    return vec![error(id, v.view_id, "no such view")];
-                };
-                open.viewport = Some(Viewport {
+                self.view_mut(v.view_id)?.viewport = Some(Viewport {
                     first_row: v.first_row,
                     row_count: v.row_count,
                     first_column: v.first_column,
@@ -346,76 +439,61 @@ impl Session {
                 self.frame(id, v.view_id, false).into_iter().collect()
             }
             client_message::Body::SetExpanded(e) => {
-                let Some(open) = self.views.get_mut(&e.view_id) else {
-                    return vec![error(id, e.view_id, "no such view")];
+                let path: Vec<serde_json::Value> =
+                    serde_json::from_str(&e.path_json).map_err(|err| err.to_string())?;
+                let open = self.view_mut(e.view_id)?;
+                let table = Arc::clone(&open.table);
+                let state = read_table(&table)?;
+                open.catch_up(&state)?;
+                let probe = Layout {
+                    group_by: open.layout.group_by.clone(),
+                    expanded: vec![LayoutExpanded {
+                        path: path.clone(),
+                        expanded: e.expanded,
+                    }],
+                    ..Layout::default()
                 };
-                let path: Result<Vec<serde_json::Value>, _> = serde_json::from_str(&e.path_json);
-                let resolved = path.map_err(|err| err.to_string()).and_then(|path| {
-                    let probe = Layout {
-                        group_by: open.layout.group_by.clone(),
-                        expanded: vec![parallax_protocol::layout::LayoutExpanded {
-                            path: path.clone(),
-                            expanded: e.expanded,
-                        }],
-                        ..Layout::default()
-                    };
-                    let state = open.table.read().expect("table lock");
-                    probe
-                        .resolve(&state.table)
-                        .map(|r| (path, r.expanded))
-                        .map_err(|err| err.to_string())
-                });
-                match resolved {
-                    Ok((path_json, expanded)) => {
-                        for (path, flag) in expanded {
-                            open.view.set_expanded(path, flag);
-                        }
-                        open.layout.expanded.retain(|x| x.path != path_json);
-                        open.layout
-                            .expanded
-                            .push(parallax_protocol::layout::LayoutExpanded {
-                                path: path_json,
-                                expanded: e.expanded,
-                            });
-                        self.frame(id, e.view_id, false).into_iter().collect()
-                    }
-                    Err(message) => vec![error(id, e.view_id, message)],
+                let resolved = probe.resolve(&state.table).map_err(|err| err.to_string())?;
+                drop(state);
+                for (scalars, flag) in resolved.expanded {
+                    open.view.set_expanded(scalars, flag);
                 }
+                open.layout.expanded.retain(|x| x.path != path);
+                open.layout.expanded.push(LayoutExpanded {
+                    path,
+                    expanded: e.expanded,
+                });
+                self.frame(id, e.view_id, false).into_iter().collect()
             }
             client_message::Body::CloseView(c) => {
                 self.views.remove(&c.view_id);
                 Vec::new()
             }
             client_message::Body::DrillThrough(d) => {
-                let Some(open) = self.views.get_mut(&d.view_id) else {
-                    return vec![error(id, d.view_id, "no such view")];
-                };
+                let open = self.view_mut(d.view_id)?;
                 let table = Arc::clone(&open.table);
-                let config = {
-                    let state = table.read().expect("table lock");
-                    open.view.drill_through(&state.table, d.row as usize)
-                };
-                let Some(config) = config else {
-                    return vec![error(
-                        id,
-                        d.view_id,
-                        "that row has no single group to drill into",
-                    )];
-                };
                 let layout = {
-                    let state = table.read().expect("table lock");
+                    let state = read_table(&table)?;
+                    open.catch_up(&state)?;
+                    let config = open
+                        .view
+                        .drill_through(&state.table, usize::try_from(d.row).unwrap_or(usize::MAX))
+                        .ok_or_else(|| "that row has no single group to drill into".to_owned())?;
                     Layout::from_flat_config(&config, &state.table)
                 };
-                match self.open_view(id, d.new_view_id, table, layout) {
-                    Ok(messages) => messages,
-                    Err(message) => vec![error(id, d.new_view_id, message)],
-                }
+                self.open_view(id, d.new_view_id, table, layout)?
             }
-            client_message::Body::DistinctValues(request) => match self.distinct_values(&request) {
-                Ok(result) => vec![reply(id, server_message::Body::DistinctValues(result))],
-                Err(message) => vec![error(id, request.view_id, message)],
-            },
-        }
+            client_message::Body::DistinctValues(request) => vec![reply(
+                id,
+                server_message::Body::DistinctValues(self.distinct_values(&request)?),
+            )],
+        })
+    }
+
+    fn view_mut(&mut self, view_id: u32) -> Result<&mut OpenView, String> {
+        self.views
+            .get_mut(&view_id)
+            .ok_or_else(|| format!("no view {view_id}"))
     }
 
     fn open_view(
@@ -426,7 +504,7 @@ impl Session {
         layout: Layout,
     ) -> Result<Vec<ServerMessage>, String> {
         let (view, schema, status) = {
-            let state = table.read().expect("table lock");
+            let state = read_table(&table)?;
             let resolved = layout.resolve(&state.table).map_err(|e| e.to_string())?;
             let view = build_view(&state.table, resolved)?;
             let schema = encode_schema(state.table.schema()).map_err(|e| e.to_string())?;
@@ -445,6 +523,7 @@ impl Session {
                 viewport: None,
                 status_version,
                 status_error,
+                broken_at: None,
             },
         );
         Ok(vec![reply(
@@ -458,14 +537,24 @@ impl Session {
         )])
     }
 
-    /// Builds the frame for a view's current viewport, if it has one.
+    /// Builds the frame for a view's current viewport, if it has one. The view first
+    /// catches up with its table, under the same lock the window is read under.
     fn frame(&mut self, request_id: u64, view_id: u32, pushed: bool) -> Option<ServerMessage> {
         let open = self.views.get_mut(&view_id)?;
         let viewport = open.viewport?;
-        let state = open.table.read().expect("table lock");
-        let rows = viewport.first_row as usize..(viewport.first_row + viewport.row_count) as usize;
-        let columns = viewport.first_column as usize
-            ..(viewport.first_column + viewport.column_count) as usize;
+        let table = Arc::clone(&open.table);
+        let state = match read_table(&table) {
+            Ok(state) => state,
+            Err(message) => return Some(error(request_id, view_id, message)),
+        };
+        if let Err(message) = open.catch_up(&state) {
+            return Some(error(request_id, view_id, message));
+        }
+        let rows = index_range(viewport.first_row, viewport.row_count);
+        let columns = index_range(
+            u64::from(viewport.first_column),
+            u64::from(viewport.column_count),
+        );
         let window = open.view.window(&state.table, rows, columns);
         let batch = match encode_batch(&window.batch) {
             Ok(bytes) => bytes,
@@ -496,42 +585,27 @@ impl Session {
         for id in ids {
             let open = self.views.get_mut(&id).expect("listed view");
             let table = Arc::clone(&open.table);
-            let state = table.read().expect("table lock");
-            let current = state.table.load_version();
-            let mut changed = false;
-            if open.view.load_version() < current {
-                let missing: Vec<&Arc<ChangeSet>> = state
-                    .history
-                    .iter()
-                    .filter(|c| c.load_version > open.view.load_version())
-                    .collect();
-                let contiguous = missing
-                    .first()
-                    .is_some_and(|c| c.load_version == open.view.load_version() + 1)
-                    && missing.last().is_some_and(|c| c.load_version == current);
-                if contiguous {
-                    for change in missing {
-                        open.view.apply(&state.table, change);
-                    }
-                } else {
-                    // Too far behind for the kept history: rebuild from the layout.
-                    match open
-                        .layout
-                        .resolve(&state.table)
-                        .map_err(|e| e.to_string())
-                        .and_then(|r| build_view(&state.table, r))
-                    {
-                        Ok(view) => open.view = view,
-                        Err(message) => {
-                            out.push(error(0, id, message));
-                            continue;
-                        }
-                    }
+            let state = match read_table(&table) {
+                Ok(state) => state,
+                Err(message) => {
+                    out.push(error(0, id, message));
+                    continue;
                 }
-                changed = true;
-            }
+            };
+            let current = state.table.load_version();
+            let changed = match open.catch_up(&state) {
+                Ok(changed) => changed,
+                Err(message) => {
+                    // Report a failed rebuild once per load, not on every refresh.
+                    if open.broken_at != Some(current) {
+                        open.broken_at = Some(current);
+                        out.push(error(0, id, message));
+                    }
+                    false
+                }
+            };
             let error_now = state.refresh_error.as_ref().map(|(m, _)| m.clone());
-            if changed || open.status_version != current || open.status_error != error_now {
+            if open.status_version != current || open.status_error != error_now {
                 open.status_version = current;
                 open.status_error = error_now;
                 out.push(reply(
@@ -549,62 +623,62 @@ impl Session {
 
     fn distinct_values(
         &mut self,
-        request: &parallax_protocol::v1::DistinctValues,
+        request: &DistinctValues,
     ) -> Result<DistinctValuesResult, String> {
         let open = self
             .views
             .get(&request.view_id)
-            .ok_or_else(|| "no such view".to_owned())?;
-        let state = open.table.read().expect("table lock");
-        let mut layout = Layout {
-            filters: open
-                .layout
-                .filters
-                .iter()
-                .filter(|f| f.column != request.column)
-                .cloned()
-                .collect(),
+            .ok_or_else(|| format!("no view {}", request.view_id))?;
+        let state = read_table(&open.table)?;
+        // Other columns' filters apply, as in a spreadsheet's filter list; the
+        // column's own filter does not, so its other values stay choosable.
+        let mut filters: Vec<LayoutFilter> = open
+            .layout
+            .filters
+            .iter()
+            .filter(|f| f.column != request.column)
+            .cloned()
+            .collect();
+        if !request.search.is_empty() {
+            filters.push(LayoutFilter {
+                column: request.column.clone(),
+                op: FilterOpName::Contains,
+                value: Some(serde_json::Value::String(request.search.clone())),
+                values: Vec::new(),
+            });
+        }
+        let layout = Layout {
+            filters,
             group_by: vec![request.column.clone()],
-            measures: vec![parallax_protocol::layout::LayoutMeasure {
+            measures: vec![LayoutMeasure {
                 column: None,
-                aggregate: parallax_protocol::layout::AggregateName::CountAll,
+                aggregate: AggregateName::CountAll,
                 percentile: None,
                 weight: None,
                 unit_column: None,
-                show_as: parallax_protocol::layout::ShowAsName::Value,
+                show_as: ShowAsName::Value,
             }],
             ..Layout::default()
         };
-        if !request.search.is_empty() {
-            layout
-                .filters
-                .push(parallax_protocol::layout::LayoutFilter {
-                    column: request.column.clone(),
-                    op: parallax_protocol::layout::FilterOpName::Contains,
-                    value: Some(serde_json::Value::String(request.search.clone())),
-                    values: Vec::new(),
-                });
-        }
         let resolved = layout.resolve(&state.table).map_err(|e| e.to_string())?;
-        let config: ViewConfig = resolved.config;
-        let mut view = View::new(&state.table, config).map_err(|e| e.to_string())?;
+        let mut view = View::new(&state.table, resolved.config).map_err(|e| e.to_string())?;
         let total = view.num_rows(&state.table).saturating_sub(1);
         let limit = if request.limit == 0 {
             1_000
         } else {
             request.limit as usize
         };
-        let window = view.window(&state.table, 1..1 + limit, 0..1);
-        // Keep the value column and the count, dropping the tree columns.
-        let batch = window.batch;
-        let value = batch
-            .column_by_name(&request.column)
-            .cloned()
-            .ok_or_else(|| "missing value column".to_owned())?;
-        let count = batch.column(batch.num_columns() - 2).clone();
-        let out = arrow_array::RecordBatch::try_from_iter([
-            (request.column.as_str(), value),
-            ("count", count),
+        let window = view.window(&state.table, 1..limit.saturating_add(1), 0..1);
+        let column = |name: &str| {
+            window
+                .batch
+                .column_by_name(name)
+                .cloned()
+                .ok_or_else(|| format!("the distinct-values window has no {name} column"))
+        };
+        let out = RecordBatch::try_from_iter([
+            (request.column.as_str(), column(&request.column)?),
+            ("count", column("count(*)")?),
         ])
         .map_err(|e| e.to_string())?;
         Ok(DistinctValuesResult {
@@ -613,5 +687,17 @@ impl Session {
             values: encode_batch(&out).map_err(|e| e.to_string())?,
             truncated: total > limit,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn client_ranges_saturate() {
+        assert_eq!(index_range(5, 10), 5..15);
+        assert_eq!(index_range(1, u64::MAX), 1..usize::MAX);
+        assert_eq!(index_range(u64::MAX, 1), usize::MAX..usize::MAX);
     }
 }

@@ -56,10 +56,39 @@ async fn invalidate(
     State(registry): State<Arc<Registry>>,
     Path(dataset): Path<String>,
 ) -> impl IntoResponse {
-    let reloaded = tokio::task::spawn_blocking(move || registry.invalidate(&dataset))
-        .await
-        .unwrap_or(0);
-    (StatusCode::OK, format!("{reloaded}"))
+    let name = dataset.clone();
+    match tokio::task::spawn_blocking(move || registry.invalidate(&dataset)).await {
+        Ok(Some(reloaded)) => (StatusCode::OK, format!("{reloaded}")),
+        Ok(None) => (StatusCode::NOT_FOUND, format!("unknown dataset {name}")),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("reloading {name} failed"),
+        ),
+    }
+}
+
+/// Runs `work` on the session off the async threads. Returns `None` if the work
+/// panicked, which ends the connection: the session's state is lost with it.
+async fn on_session<T: Send + 'static>(
+    session: &mut Option<Session>,
+    work: impl FnOnce(&mut Session) -> T + Send + 'static,
+) -> Option<T> {
+    let mut s = session.take()?;
+    match tokio::task::spawn_blocking(move || {
+        let out = work(&mut s);
+        (s, out)
+    })
+    .await
+    {
+        Ok((s, out)) => {
+            *session = Some(s);
+            Some(out)
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "session task failed; closing the connection");
+            None
+        }
+    }
 }
 
 async fn upgrade(
@@ -80,36 +109,27 @@ async fn serve(socket: WebSocket, registry: Arc<Registry>, context: ConnectionCo
     let catalog: Arc<dyn Catalog> = Arc::clone(&registry) as Arc<dyn Catalog>;
     let mut session = Some(Session::with_context(catalog, context));
     loop {
-        let replies: Vec<Vec<u8>> = tokio::select! {
+        let replies: Option<Vec<Vec<u8>>> = tokio::select! {
             incoming = stream.next() => match incoming {
                 Some(Ok(WsMessage::Binary(bytes))) => {
-                    let mut s = session.take().expect("session");
-                    let (s, replies) = tokio::task::spawn_blocking(move || {
-                        let replies = s.handle_bytes(&bytes);
-                        (s, replies)
-                    })
-                    .await
-                    .expect("session task");
-                    session = Some(s);
-                    replies
+                    on_session(&mut session, move |s| s.handle_bytes(&bytes)).await
                 }
-                Some(Ok(WsMessage::Close(_))) | None | Some(Err(_)) => break,
-                Some(Ok(_)) => Vec::new(),
+                Some(Ok(WsMessage::Close(_)) | Err(_)) | None => break,
+                Some(Ok(_)) => Some(Vec::new()),
             },
             changed = changes.recv() => match changed {
                 Ok(()) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                    let mut s = session.take().expect("session");
-                    let (s, replies) = tokio::task::spawn_blocking(move || {
-                        let replies: Vec<Vec<u8>> = s.refresh().iter().map(Message::encode_to_vec).collect();
-                        (s, replies)
+                    on_session(&mut session, |s| {
+                        s.refresh().iter().map(Message::encode_to_vec).collect()
                     })
                     .await
-                    .expect("session task");
-                    session = Some(s);
-                    replies
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             },
+        };
+        let Some(replies) = replies else {
+            let _ = sink.send(WsMessage::Close(None)).await;
+            return;
         };
         for reply in replies {
             if sink.send(WsMessage::Binary(reply.into())).await.is_err() {

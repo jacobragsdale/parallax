@@ -11,6 +11,7 @@ repository.workspace = true
 anyhow.workspace = true
 arrow-array.workspace = true
 arrow-ipc.workspace = true
+arrow-schema.workspace = true
 axum = { version = "0.8.9", features = ["ws"] }
 clap.workspace = true
 futures-util = "0.3.34"

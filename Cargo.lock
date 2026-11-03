@@ -1553,6 +1553,7 @@ dependencies = [
  "anyhow",
  "arrow-array",
  "arrow-ipc",
+ "arrow-schema",
  "axum",
  "clap",
  "futures-util",

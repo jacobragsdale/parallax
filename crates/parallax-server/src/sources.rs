@@ -12,11 +12,7 @@ use parallax_datagen::prices::{Prices, PricesOptions};
 use parallax_datagen::trades::{Trades, TradesOptions};
 use serde::Deserialize;
 
-use crate::registry::{Fetched, Source};
-
-fn now_micros() -> i64 {
-    jiff::Timestamp::now().as_microsecond()
-}
+use crate::registry::{Fetched, Source, now_micros};
 
 /// Reads every batch of an Arrow IPC file.
 #[derive(Debug, Clone)]
@@ -30,6 +26,7 @@ impl Source for ArrowFile {
         let file = File::open(&self.path).map_err(|e| format!("{}: {e}", self.path.display()))?;
         let reader =
             arrow_ipc::reader::FileReader::try_new(file, None).map_err(|e| e.to_string())?;
+        let schema = reader.schema();
         let batches = reader
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())?;
@@ -39,6 +36,7 @@ impl Source for ArrowFile {
             .and_then(|t| jiff::Timestamp::try_from(t).ok())
             .map_or_else(now_micros, |t| t.as_microsecond());
         Ok(Fetched {
+            schema,
             batches,
             as_of_micros: modified,
         })
@@ -179,6 +177,7 @@ impl Source for Generator {
             .map(|range| dataset.batch(range))
             .collect();
         Ok(Fetched {
+            schema: dataset.schema(),
             batches,
             as_of_micros: now_micros(),
         })

@@ -8,8 +8,8 @@
 
 use std::sync::{Arc, RwLock};
 
-use parallax_engine::{Table, TableOptions};
-use parallax_protocol::ipc::decode_batches;
+use parallax_engine::TableOptions;
+use parallax_protocol::ipc::decode_stream;
 use parallax_session::{MemoryCatalog, Session, TableState};
 use wasm_bindgen::prelude::*;
 
@@ -47,33 +47,29 @@ impl Worker {
         now_micros: f64,
         source_as_of_micros: f64,
     ) -> Result<u64, JsError> {
-        let batches = decode_batches(arrow_ipc)?;
+        let (schema, batches) = decode_stream(arrow_ipc)?;
         let now = now_micros as i64;
         let as_of = source_as_of_micros as i64;
         if let Some(existing) = self.catalog.get(name) {
             let report = existing
                 .write()
-                .map_err(|_| JsError::new("table lock poisoned"))?
+                .map_err(|_| JsError::new("the table is unavailable after an internal error"))?
                 .reload(&batches, now, as_of)?;
             return Ok(report.rows as u64);
         }
-        let schema = batches
-            .first()
-            .map(arrow_array::RecordBatch::schema)
-            .ok_or_else(|| JsError::new("the stream has no batches"))?;
-        let mut table = Table::new(
+        let state = TableState::from_batches(
             &schema,
+            &batches,
             TableOptions {
                 primary_key,
                 ..TableOptions::default()
             },
+            now,
+            as_of,
         )?;
-        let (report, _) = table.load(&batches)?;
-        self.catalog.insert(
-            name,
-            Arc::new(RwLock::new(TableState::new(table, now, as_of))),
-        );
-        Ok(report.rows as u64)
+        let rows = state.table.num_rows() as u64;
+        self.catalog.insert(name, Arc::new(RwLock::new(state)));
+        Ok(rows)
     }
 
     /// Handles one encoded client message and returns the encoded replies.

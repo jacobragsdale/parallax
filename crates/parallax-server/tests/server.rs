@@ -26,6 +26,7 @@ fn positions_dataset(rows: u64) -> Dataset {
         duplicates: DuplicatePolicy::Error,
         refresh: RefreshPolicy::default(),
         resolve: None,
+        max_tables: 4,
     }
 }
 
@@ -124,7 +125,7 @@ async fn clients_get_frames_and_pushed_refreshes() {
     })
     .await
     .unwrap();
-    assert_eq!(reloaded, 1);
+    assert_eq!(reloaded, Some(1));
     let Some(Body::TableStatus(status)) = receive(&mut ws).await.body else {
         panic!("expected a status")
     };
@@ -204,4 +205,64 @@ fn the_connection_context_reaches_dataset_code_and_separates_tables() {
             .unwrap_err()
             .contains("no parameter fund")
     );
+}
+
+#[tokio::test]
+async fn invalidating_an_unknown_dataset_is_not_found() {
+    use tower::ServiceExt;
+    let registry = Arc::new(Registry::new(vec![positions_dataset(10)]));
+    let response = router(registry)
+        .oneshot(
+            axum::http::Request::post("/invalidate/postions")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 404);
+}
+
+#[test]
+fn concurrent_first_opens_share_one_table() {
+    let registry = Arc::new(Registry::new(vec![positions_dataset(2_000)]));
+    let handles: Vec<_> = (0..4)
+        .map(|_| {
+            let registry = Arc::clone(&registry);
+            std::thread::spawn(move || {
+                let context: ConnectionContext = Arc::new(());
+                registry
+                    .open("positions", &BTreeMap::new(), &context)
+                    .unwrap()
+            })
+        })
+        .collect();
+    let tables: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+    assert!(tables.windows(2).all(|w| Arc::ptr_eq(&w[0], &w[1])));
+    // One load, not four: the table is still at its first load version.
+    assert_eq!(tables[0].read().unwrap().table.load_version(), 1);
+}
+
+#[test]
+fn parameter_combinations_are_capped() {
+    let registry = Registry::new(vec![positions_dataset(50)]);
+    let context: ConnectionContext = Arc::new(());
+    for seed in 0..4 {
+        let mut p = BTreeMap::new();
+        p.insert("seed".to_owned(), seed.to_string());
+        registry.open("positions", &p, &context).unwrap();
+    }
+    let mut p = BTreeMap::new();
+    p.insert("seed".to_owned(), "99".to_owned());
+    let err = registry.open("positions", &p, &context).unwrap_err();
+    assert!(err.contains("limit"), "{err}");
+}
+
+#[test]
+fn empty_sources_open_as_empty_tables() {
+    let registry = Registry::new(vec![positions_dataset(0)]);
+    let context: ConnectionContext = Arc::new(());
+    let table = registry
+        .open("positions", &BTreeMap::new(), &context)
+        .unwrap();
+    assert_eq!(table.read().unwrap().table.num_rows(), 0);
 }

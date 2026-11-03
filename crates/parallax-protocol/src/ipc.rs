@@ -34,6 +34,21 @@ pub fn encode_schema(schema: &Schema) -> Result<Vec<u8>, ArrowError> {
     Ok(out)
 }
 
+/// Decodes an Arrow IPC stream into its schema and batches. A stream with a schema
+/// and no batches is an empty result, not an error.
+///
+/// # Errors
+///
+/// Returns an error if the bytes are not a valid stream.
+pub fn decode_stream(
+    bytes: &[u8],
+) -> Result<(arrow_schema::SchemaRef, Vec<RecordBatch>), ArrowError> {
+    let reader = StreamReader::try_new(Cursor::new(bytes), None)?;
+    let schema = reader.schema();
+    let batches = reader.collect::<Result<Vec<_>, _>>()?;
+    Ok((schema, batches))
+}
+
 /// Decodes every batch of an Arrow IPC stream.
 ///
 /// # Errors

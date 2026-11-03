@@ -48,6 +48,9 @@ struct DatasetConfig {
     max_age_seconds: Option<u64>,
     #[serde(default)]
     refresh_seconds: Option<u64>,
+    /// The most parameter combinations cached at once.
+    #[serde(default = "default_max_tables")]
+    max_tables: usize,
     source: SourceConfig,
 }
 
@@ -56,6 +59,10 @@ struct DatasetConfig {
 enum SourceConfig {
     ArrowFile { path: PathBuf },
     Generator(Generator),
+}
+
+fn default_max_tables() -> usize {
+    32
 }
 
 #[tokio::main]
@@ -88,8 +95,10 @@ async fn main() -> anyhow::Result<()> {
             refresh: RefreshPolicy {
                 max_age: d.max_age_seconds.map(Duration::from_secs),
                 every: d.refresh_seconds.map(Duration::from_secs),
+                ..RefreshPolicy::default()
             },
             resolve: None,
+            max_tables: d.max_tables,
         })
         .collect();
     let registry = Arc::new(Registry::new(datasets));
