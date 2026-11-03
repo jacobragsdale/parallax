@@ -848,3 +848,23 @@ fn number_ticks_turn_compact_once_the_axis_reaches_ten_thousand() {
         ["-4,000", "-2,000", "0", "2,000", "4,000"]
     );
 }
+
+#[test]
+fn a_zoomed_window_still_reports_the_whole_extent() {
+    let t = table(&[3.0, 5.0, 11.0], &[Some(1.0), Some(2.0), Some(3.0)]);
+    let view = ChartView::new(&t, line(XAxis::Value)).unwrap();
+    let request = |x| ChartRequest {
+        x,
+        y: None,
+        width: 100,
+        height: 50,
+    };
+    let all = view.reduce(&t, &request(None));
+    assert_eq!((all.x, all.extent), ((3.0, 11.0), (3.0, 11.0)));
+    let zoomed = view.reduce(&t, &request(Some((4.0, 6.0))));
+    assert_eq!((zoomed.x, zoomed.extent), ((4.0, 6.0), (3.0, 11.0)));
+    // A single x is shown, and bounded, half a unit either side.
+    let one = table(&[7.0], &[Some(1.0)]);
+    let view = ChartView::new(&one, line(XAxis::Value)).unwrap();
+    assert_eq!(view.reduce(&one, &request(None)).extent, (6.5, 7.5));
+}

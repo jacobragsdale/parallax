@@ -27,7 +27,7 @@ function batch(columns: Columns): Uint8Array {
 }
 
 function chartFrame(columns: Columns, extra: Omit<MessageInitShape<typeof ChartFrameSchema>, "$typeName"> = {}): ChartFrame {
-  return create(ChartFrameSchema, { viewId: 3, xFrom: 0, xTo: 10, ticks: [{ x: 0, label: "Jan 2" }], batch: batch(columns), ...extra });
+  return create(ChartFrameSchema, { viewId: 3, xFrom: 0, xTo: 10, extentFrom: 0, extentTo: 10, ticks: [{ x: 0, label: "Jan 2" }], batch: batch(columns), ...extra });
 }
 
 describe("decodeChartFrame", () => {
@@ -71,6 +71,8 @@ describe("decodeChartFrame", () => {
     expect(() => decodeChartFrame(chartFrame({ series: new Uint32Array([1, 0]), ...points }, { series }))).toThrow("in order");
     expect(() => decodeChartFrame(chartFrame({ series: new Uint32Array([0, 5]), ...points }, { series }))).toThrow("does not list");
     expect(() => decodeChartFrame(chartFrame({ count: new Uint32Array([1, 2, 3]) }, { columns: 2, rows: 2 }))).toThrow("size");
+    expect(() => decodeChartFrame(chartFrame({ series: new Uint32Array([0, 0]), ...points }, { series, extentFrom: 5, extentTo: 1 }))).toThrow("extent");
+    expect(() => decodeChartFrame(chartFrame({ series: new Uint32Array([0, 0]), ...points }, { series, extentTo: Number.NaN }))).toThrow("extent");
     expect(() => decodeChartFrame(chartFrame({ series: new Uint32Array([0]), x: new Float64Array([1]), y: ["not a number"], x_text: ["a"], y_text: ["a"], x_json: ["1"] }, { series }))).toThrow(
       "doubles"
     );

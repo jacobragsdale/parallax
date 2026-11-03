@@ -242,6 +242,9 @@ pub struct Reduced {
     pub data: ChartData,
     /// The x range shown, in axis positions.
     pub x: (f64, f64),
+    /// The data's whole x range, in axis positions, which zooming and panning
+    /// stay within: the range shown when the request names none.
+    pub extent: (f64, f64),
     /// The x axis's ticks.
     pub ticks: Vec<Tick>,
 }
@@ -558,12 +561,16 @@ impl ChartView {
     #[must_use]
     pub fn reduce(&self, table: &Table, request: &ChartRequest) -> Reduced {
         let width = request.width.max(1);
-        let (from, to) = request.x.or_else(|| self.x_extent()).unwrap_or((0.0, 1.0));
-        let (from, to) = if to > from {
-            (from, to)
-        } else {
-            (from - 0.5, from + 0.5)
+        // A single x value is shown half a unit either side.
+        let widen = |(from, to): (f64, f64)| {
+            if to > from {
+                (from, to)
+            } else {
+                (from - 0.5, from + 0.5)
+            }
         };
+        let extent = widen(self.x_extent().unwrap_or((0.0, 1.0)));
+        let (from, to) = widen(request.x.unwrap_or(extent));
         let data = match self.config.kind {
             ChartKind::Line | ChartKind::Area => {
                 ChartData::Series(self.series_m4(table, from, to, width))
@@ -576,6 +583,7 @@ impl ChartView {
         Reduced {
             data,
             x: (from, to),
+            extent,
             ticks,
         }
     }

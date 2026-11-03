@@ -118,7 +118,12 @@ pub(crate) fn chart_frame(table: &Table, state: &ChartState) -> Result<ChartFram
         width: 1,
         height: 1,
     });
-    let Reduced { data, x, ticks } = state.view.reduce(table, &request);
+    let Reduced {
+        data,
+        x,
+        extent,
+        ticks,
+    } = state.view.reduce(table, &request);
     let config = state.view.config();
     let texts_of = |column: &str| Texts::new(table, &state.formats, column);
     let x_text = texts_of(&config.x);
@@ -131,6 +136,8 @@ pub(crate) fn chart_frame(table: &Table, state: &ChartState) -> Result<ChartFram
     let mut frame = ChartFrame {
         x_from: x.0,
         x_to: x.1,
+        extent_from: extent.0,
+        extent_to: extent.1,
         ticks: ticks
             .into_iter()
             .map(|t| ChartTick {

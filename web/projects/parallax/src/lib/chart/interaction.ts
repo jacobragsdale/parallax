@@ -4,7 +4,7 @@
  * and panning move the x range, and the filters a brushed range selects.
  */
 
-import type { ChartFrameData } from "../chart-frame";
+import type { CandleData, ChartFrameData, SeriesData } from "../chart-frame";
 import type { LayoutFilter, LayoutScalar } from "../layout";
 import type { ChartModel, Hit, Mark } from "./model";
 
@@ -41,12 +41,39 @@ export function nearestIndex(xs: Float64Array, x: number): number {
   return before >= 0 && Math.abs((xs[before] ?? 0) - x) <= Math.abs((xs[low] ?? 0) - x) ? before : low;
 }
 
+/** Whether point `i` of `s` is drawn, rather than a break between segments. */
+function drawn(s: SeriesData, i: number): boolean {
+  return (s.yText[i] ?? null) !== null;
+}
+
+/** The index of the drawn point of `s` nearest `x`, skipping breaks, or -1 if there is none. */
+export function nearestDrawn(s: SeriesData, x: number): number {
+  const i = nearestIndex(s.x, x);
+  if (i < 0) {
+    return -1;
+  }
+  // The nearest drawn point is the first one met going left from the nearest point, or going right.
+  let left = i;
+  while (left >= 0 && !drawn(s, left)) {
+    left -= 1;
+  }
+  let right = i;
+  while (right < s.x.length && !drawn(s, right)) {
+    right += 1;
+  }
+  if (right >= s.x.length) {
+    return left;
+  }
+  return left >= 0 && Math.abs((s.x[left] ?? 0) - x) <= Math.abs((s.x[right] ?? 0) - x) ? left : right;
+}
+
 /** How far from the crosshair, in pixels, another series' point may be and still be read. */
 const NEAR = 6;
 
 /**
  * What the crosshair reads at axis position `x` on a line or area chart: it snaps to the nearest point of any shown
- * series, then lists every shown series' point nearest it, so the pointer never has to land on a line. The engine
+ * series, then lists every shown series' point nearest it, so the pointer never has to land on a line. Breaks between
+ * segments are never snapped to or read. The engine
  * keeps different points of each series when it reduces them to the pixels, so a series' nearest point may be of
  * another x than the crosshair's; its row then names that x too, and a series with no point within a few pixels, or
  * a gap there, says nothing.
@@ -61,7 +88,7 @@ export function readSeries(frame: ChartFrameData, model: ChartModel, hidden: rea
   let snapped: number | null = null;
   let title = "";
   for (const { s } of shown) {
-    const i = nearestIndex(s.x, x);
+    const i = nearestDrawn(s, x);
     const at = s.x[i];
     if (at !== undefined && (snapped === null || Math.abs(at - x) < Math.abs(snapped - x))) {
       snapped = at;
@@ -74,7 +101,7 @@ export function readSeries(frame: ChartFrameData, model: ChartModel, hidden: rea
   const at = snapped;
   const lone = model.marks.find((m) => m.kind === "line")?.color ?? null;
   const rows = shown.flatMap(({ s, color }): TipRow[] => {
-    const i = nearestIndex(s.x, at);
+    const i = nearestDrawn(s, at);
     const [near, value] = [s.x[i], s.yText[i]];
     if (near === undefined || value === null || value === undefined || Math.abs(scale.map(near) - scale.map(at)) > NEAR) {
       return [];
@@ -172,54 +199,77 @@ function scalar(json: string | null | undefined): LayoutScalar | undefined {
   return typeof value === "string" || typeof value === "number" || typeof value === "boolean" ? value : undefined;
 }
 
-/**
- * The filters that select the data a brushed x range covers: from the first point or bucket inside it to the last,
- * with each bound the exact value the engine sent, so a linked view's rows are the chart's. Null if nothing is
- * inside.
- */
-export function brushFilters(frame: ChartFrameData, column: string, hidden: readonly string[], range: Range): readonly LayoutFilter[] | null {
-  const content = frame.content;
-  const [from, to] = range[0] <= range[1] ? range : [range[1], range[0]];
-  // The first and last point or bucket inside the range, with the values that bound it.
-  let first = Number.POSITIVE_INFINITY;
-  let last = Number.NEGATIVE_INFINITY;
-  let start: string | null = null;
-  let end: string | null = null;
-  const consider = (x: number, low: string | null, high: string | null): void => {
-    if (x < from || x > to) {
-      return;
-    }
-    if (x < first) {
-      first = x;
-      start = low;
-    }
-    if (x > last) {
-      last = x;
-      end = high;
-    }
-  };
-  if (content.kind === "series") {
-    for (const s of content.series) {
-      if (!hidden.includes(s.label)) {
-        s.x.forEach((x, i) => {
-          consider(x, s.xJson[i] ?? null, s.xJson[i] ?? null);
-        });
+/** A point or bucket a brush covers: where it starts and ends on the axis, and those bounds' exact values. */
+interface Span {
+  readonly from: number;
+  readonly to: number;
+  readonly fromJson: string | null;
+  readonly toJson: string | null;
+}
+
+/** The drawn points of the shown series inside `[from, to]`. */
+function pointsIn(series: readonly SeriesData[], hidden: readonly string[], from: number, to: number): Span[] {
+  const spans: Span[] = [];
+  for (const s of series.filter((s) => !hidden.includes(s.label))) {
+    s.x.forEach((x, i) => {
+      if (x >= from && x <= to && drawn(s, i)) {
+        const json = s.xJson[i] ?? null;
+        spans.push({ from: x, to: x, fromJson: json, toJson: json });
       }
-    }
-  } else if (content.kind === "candles") {
-    const c = content.candles;
-    c.from.forEach((x, i) => {
-      consider(x, c.xJson[i] ?? null, c.endJson[i] ?? null);
     });
   }
-  const [low, high] = [scalar(start), scalar(end)];
+  return spans;
+}
+
+/** The buckets that overlap `[from, to]`, each whole: from its start up to the next bucket's start. */
+function bucketsIn(c: CandleData, from: number, to: number): Span[] {
+  const spans: Span[] = [];
+  c.from.forEach((start, i) => {
+    const end = c.to[i] ?? start;
+    if (start <= to && end > from) {
+      spans.push({ from: start, to: end, fromJson: c.xJson[i] ?? null, toJson: c.endJson[i] ?? null });
+    }
+  });
+  return spans;
+}
+
+/** A brushed range's selection: the filters that select it, and the x range it covers, which the band snaps to. */
+export interface Brushed {
+  readonly filters: readonly LayoutFilter[];
+  readonly range: Range;
+}
+
+/**
+ * What a brushed x range selects: on a line or area chart, from the first drawn point inside it to the last; on candles,
+ * every bucket it touches, whole. Each bound is the exact value the engine sent, so a linked view's rows are those the
+ * chart drew there, and the band snaps to the selection so that it shows exactly what was selected. Null if nothing is
+ * selected.
+ */
+export function brushFilters(frame: ChartFrameData, column: string, hidden: readonly string[], range: Range): Brushed | null {
+  const content = frame.content;
+  const [from, to] = range[0] <= range[1] ? range : [range[1], range[0]];
+  let spans: Span[] = [];
+  if (content.kind === "series") {
+    spans = pointsIn(content.series, hidden, from, to);
+  } else if (content.kind === "candles") {
+    spans = bucketsIn(content.candles, from, to);
+  }
+  if (spans.length === 0) {
+    return null;
+  }
+  const first = spans.reduce((a, b) => (b.from < a.from ? b : a));
+  const last = spans.reduce((a, b) => (b.to > a.to ? b : a));
+  const [low, high] = [scalar(first.fromJson), scalar(last.toJson)];
   if (low === undefined || high === undefined) {
     return null;
   }
   // A bucket stops short of the next one's start; a point includes itself.
   const op = content.kind === "candles" ? "lt" : "le";
-  return [
-    { column, op: "ge", value: low, values: [] },
-    { column, op, value: high, values: [] }
-  ];
+  return {
+    filters: [
+      { column, op: "ge", value: low, values: [] },
+      { column, op, value: high, values: [] }
+    ],
+    range: [first.from, last.to]
+  };
 }

@@ -17,7 +17,7 @@ function chart(partial: Partial<LayoutChart> & Pick<LayoutChart, "kind">): Layou
 }
 
 function frame(content: ChartContent, xFrom = 0, xTo = 10): ChartFrameData {
-  return { viewId: 1, configVersion: 0n, loadVersion: 1n, sourceAsOfMicros: 0n, pushed: false, xFrom, xTo, ticks: [], content };
+  return { viewId: 1, configVersion: 0n, loadVersion: 1n, sourceAsOfMicros: 0n, pushed: false, xFrom, xTo, extentFrom: xFrom, extentTo: xTo, ticks: [], content };
 }
 
 function model(c: LayoutChart, f: ChartFrameData): ChartModel {
@@ -110,6 +110,28 @@ describe("readSeries", () => {
     expect(reading?.title).toBe("day 4");
     expect(reading?.rows).toEqual([{ value: "3.00", label: "AAPL", color: CHART_COLORS.light.series[0] }]);
     expect(readSeries(f, m, ["AAPL", "MSFT"], 3)).toBeNull();
+  });
+
+  it("never snaps to a break between segments, so the title is always a drawn point's", () => {
+    const gappy = frame(
+      {
+        kind: "series",
+        series: [
+          series("AAPL", [
+            [0, 1],
+            [1, null],
+            [2, null],
+            [3, 4]
+          ])
+        ]
+      },
+      0,
+      3
+    );
+    const m = model(chart({ kind: "line" }), gappy);
+    expect(readSeries(gappy, m, [], 1.1)?.title).toBe("day 0");
+    expect(readSeries(gappy, m, [], 1.9)?.title).toBe("day 3");
+    expect(readSeries(gappy, m, [], 1.9)?.rows).toEqual([{ value: "4.00", label: "AAPL", color: CHART_COLORS.light.series[0] }]);
   });
 
   it("reads another series' nearest point a pixel or two away under its own x", () => {
@@ -240,26 +262,53 @@ describe("brushFilters", () => {
   };
   const f = frame(content, 0, 5);
 
-  it("selects from the first point inside the range to the last, inclusive, with the exact values sent", () => {
-    expect(brushFilters(f, "date", [], [0.5, 4.2])).toEqual([
-      { column: "date", op: "ge", value: "2024-01-02", values: [] },
-      { column: "date", op: "le", value: "2024-01-05", values: [] }
-    ]);
+  it("selects from the first point inside the range to the last, inclusive, with the exact values sent, and snaps to them", () => {
+    expect(brushFilters(f, "date", [], [0.5, 4.2])).toEqual({
+      filters: [
+        { column: "date", op: "ge", value: "2024-01-02", values: [] },
+        { column: "date", op: "le", value: "2024-01-05", values: [] }
+      ],
+      range: [1, 4]
+    });
     // Brushed right to left, the same.
     expect(brushFilters(f, "date", [], [4.2, 0.5])).toEqual(brushFilters(f, "date", [], [0.5, 4.2]));
   });
 
   it("ignores hidden series and selects nothing from an empty range", () => {
-    expect(brushFilters(f, "date", ["AAPL"], [0.5, 4.2])?.map((x) => x.value)).toEqual(["2024-01-02", "2024-01-04"]);
+    expect(brushFilters(f, "date", ["AAPL"], [0.5, 4.2])?.filters.map((x) => x.value)).toEqual(["2024-01-02", "2024-01-04"]);
     expect(brushFilters(f, "date", [], [5.5, 9])).toBeNull();
   });
 
-  it("selects whole candle buckets, up to the next bucket's start", () => {
+  it("never bounds a selection by a break between segments", () => {
+    const gappy: ChartContent = {
+      kind: "series",
+      series: [
+        series("AAPL", [
+          [0, 1],
+          [1, null],
+          [2, 2],
+          [3, null],
+          [4, 3]
+        ])
+      ]
+    };
+    const brushed = brushFilters(frame(gappy), "date", [], [0.5, 3.5]);
+    expect(brushed?.filters.map((x) => x.value)).toEqual(["2024-01-03", "2024-01-03"]);
+    expect(brushed?.range).toEqual([2, 2]);
+    expect(brushFilters(frame(gappy), "date", [], [0.5, 1.5])).toBeNull();
+  });
+
+  it("selects every candle bucket the range touches, whole, up to the next bucket's start", () => {
     const candles = frame({ kind: "candles", candles: CANDLES }, 0, 3);
-    expect(brushFilters(candles, "date", [], [0.5, 2])).toEqual([
-      { column: "date", op: "ge", value: "2024-01-02", values: [] },
-      { column: "date", op: "lt", value: "2024-01-04", values: [] }
-    ]);
+    // From the middle of Monday's bucket to the middle of Tuesday's: both, whole.
+    expect(brushFilters(candles, "date", [], [0.5, 1.5])).toEqual({
+      filters: [
+        { column: "date", op: "ge", value: "2024-01-01", values: [] },
+        { column: "date", op: "lt", value: "2024-01-03", values: [] }
+      ],
+      range: [0, 2]
+    });
+    expect(brushFilters(candles, "date", [], [3.5, 9])).toBeNull();
   });
 
   it("selects nothing when a bound's value is unknown", () => {

@@ -23,7 +23,6 @@ import {
   model,
   output,
   signal,
-  untracked,
   viewChild
 } from "@angular/core";
 import type { ElementRef } from "@angular/core";
@@ -102,6 +101,7 @@ const CHART_STYLES = `
   px-chart .px-chart-plot {
     cursor: crosshair;
     outline: none;
+    touch-action: none;
   }
   px-chart .px-chart-plot:focus-visible {
     box-shadow: inset 0 0 0 2px var(--px-selection-border);
@@ -177,6 +177,21 @@ const COUNT = new Intl.NumberFormat("en-US");
 /** About how wide a tooltip is, to keep it on the plot's right edge. */
 const TIP_WIDTH = 200;
 
+/** How far a step of the wheel or a key zooms. */
+const ZOOM_IN = 0.8;
+const ZOOM_OUT = 1.25;
+
+/** What each key does to the plot. */
+const KEYS: Readonly<Partial<Record<string, "in" | "out" | "left" | "right" | "all" | "clear">>> = {
+  "+": "in",
+  "=": "in",
+  "-": "out",
+  ArrowLeft: "left",
+  ArrowRight: "right",
+  "0": "all",
+  Escape: "clear"
+};
+
 /** Words for what a chart shows, for its accessible name. */
 const KIND_NAMES: Readonly<Record<NonNullable<Layout["chart"]>["kind"], string>> = {
   line: "Line chart",
@@ -207,6 +222,7 @@ const KIND_NAMES: Readonly<Record<NonNullable<Layout["chart"]>["kind"], string>>
       (pointerdown)="onPointerDown($event)"
       (pointermove)="onPointerMove($event)"
       (pointerup)="onPointerUp($event)"
+      (pointercancel)="onPointerCancel($event)"
       (pointerleave)="onPointerLeave()"
       (wheel)="onWheel($event)"
       (dblclick)="reset()"
@@ -345,8 +361,9 @@ export class ChartComponent {
   private drag: { readonly start: number; readonly brush: boolean; readonly range: Range; readonly perPixel: number } | null = null;
   /** The brushed x range in axis positions, while dragging and after. */
   private readonly brush = signal<Range | null>(null);
-  /** The whole data's x range, learnt from a frame of everything, which zooming and panning stay within. */
-  private readonly full = signal<Range | null>(null);
+  /** A zoom or pan waiting for the next animation frame, so that a drag or a burst of wheel events moves the chart once a frame. */
+  private pending: { readonly range: Range | null } | null = null;
+  private frameRequest: number | null = null;
 
   /** The group whose crosshairs move with this one's, or null. */
   private readonly group = computed((): string | null => {
@@ -371,8 +388,13 @@ export class ChartComponent {
     if (hover !== null) {
       return model.x.invert(hover.x);
     }
+    // A chart in no group never reads the shared pointer, so other charts' pointers never recompute it.
+    const group = this.group();
+    if (group === null) {
+      return null;
+    }
     const pointer = this.syncing.pointer();
-    return pointer === null || pointer.source === this || pointer.group !== this.group() ? null : pointer.x;
+    return pointer === null || pointer.source === this || pointer.group !== group ? null : pointer.x;
   }
 
   /** What the pointer over this chart reads, or another chart of its group points at. */
@@ -433,19 +455,21 @@ export class ChartComponent {
       });
       this.size.set({ width: element.clientWidth, height: element.clientHeight });
     });
+    destroyRef.onDestroy(() => {
+      if (this.frameRequest !== null) {
+        cancelAnimationFrame(this.frameRequest);
+      }
+      // Other charts of the group must not keep following a pointer over a chart that is gone.
+      if (this.syncing.pointer()?.source === this) {
+        this.syncing.pointer.set(null);
+      }
+    });
     // The theme's tokens come from the page's styles, so they are read once rendered.
     afterRenderEffect(() => {
       this.theme();
       const element = this.canvas().nativeElement;
       this.colors.set(readChartColors(element));
       this.tokens.set(readTheme(element));
-    });
-    // A frame of the whole data gives the range zooming and panning stay within.
-    effect(() => {
-      const frame = this.source.frame();
-      if (frame !== null && (untracked(() => this.current()?.chart?.range) ?? null) === null) {
-        this.full.set([frame.xFrom, frame.xTo]);
-      }
     });
     // Ask for the chart at the plot's size, over the zoomed range if any.
     effect(() => {
@@ -463,14 +487,36 @@ export class ChartComponent {
     });
   }
 
-  /** The x range shown: the zoom in the layout, or what the latest frame spans. */
-  private shownRange(): Range | null {
-    const range = this.current()?.chart?.range;
-    if (range !== null && range !== undefined) {
-      return [range.from, range.to];
-    }
+  /** The data's whole x range, which the engine sends with each frame, and zooming and panning stay within. */
+  private extent(): Range | null {
     const frame = this.source.frame();
-    return frame === null ? null : [frame.xFrom, frame.xTo];
+    return frame === null ? null : [frame.extentFrom, frame.extentTo];
+  }
+
+  /** The x range shown, or about to be: a pending zoom or pan, the zoom in the layout, or everything. */
+  private shownRange(): Range | null {
+    if (this.pending !== null) {
+      return this.pending.range ?? this.extent();
+    }
+    const range = this.current()?.chart?.range;
+    return range === null || range === undefined ? this.extent() : [range.from, range.to];
+  }
+
+  /** Zooms or pans to `range`, or shows everything for null, at the next animation frame. */
+  private schedule(range: Range | null): void {
+    this.pending = { range };
+    this.frameRequest ??= requestAnimationFrame(() => {
+      this.frameRequest = null;
+      this.flush();
+    });
+  }
+
+  private flush(): void {
+    const pending = this.pending;
+    this.pending = null;
+    if (pending !== null) {
+      this.setRange(pending.range);
+    }
   }
 
   /** Records a zoomed range in the layout, or none for everything. */
@@ -524,28 +570,44 @@ export class ChartComponent {
       this.brush.set([x.invert(drag.start), x.invert(at.x)]);
       return;
     }
-    this.setRange(panRange(drag.range, (drag.start - at.x) * drag.perPixel, this.full()));
+    this.schedule(panRange(drag.range, (drag.start - at.x) * drag.perPixel, this.extent()));
   }
 
-  /** Ends a pan, or a brush, which then names the filters selecting its range. */
-  protected onPointerUp(event: PointerEvent): void {
+  /** Ends a drag, returning it. */
+  private endDrag(event: PointerEvent): { readonly brush: boolean } | null {
     const drag = this.drag;
     this.drag = null;
     this.panning.set(false);
+    this.flush();
     if (this.plot().nativeElement.hasPointerCapture(event.pointerId)) {
       this.plot().nativeElement.releasePointerCapture(event.pointerId);
     }
-    if (drag?.brush !== true) {
+    return drag;
+  }
+
+  /** Ends a pan, or a brush, which then snaps to what it selects and names the filters selecting it. */
+  protected onPointerUp(event: PointerEvent): void {
+    if (this.endDrag(event)?.brush !== true) {
       return;
     }
     const brush = this.brush();
     const frame = this.source.frame();
     const chart = this.current()?.chart;
-    const filters = brush === null || frame === null || chart === undefined || chart === null ? null : brushFilters(frame, chart.x, chart.hidden, brush);
-    if (filters === null) {
-      this.brush.set(null);
+    const brushed = brush === null || frame === null || chart === undefined || chart === null ? null : brushFilters(frame, chart.x, chart.hidden, brush);
+    this.brush.set(brushed?.range ?? null);
+    this.brushed.emit(brushed?.filters ?? null);
+  }
+
+  /** A drag the browser took over or the system interrupted ends without a pointerup; a brush it was making is dropped. */
+  protected onPointerCancel(event: PointerEvent): void {
+    if (this.endDrag(event)?.brush === true) {
+      this.clearBrush();
     }
-    this.brushed.emit(filters);
+  }
+
+  private clearBrush(): void {
+    this.brush.set(null);
+    this.brushed.emit(null);
   }
 
   protected onPointerLeave(): void {
@@ -563,50 +625,39 @@ export class ChartComponent {
       return;
     }
     event.preventDefault();
-    this.setRange(zoomRange(range, x.invert(this.local(event).x), event.deltaY < 0 ? 0.8 : 1.25, this.full()));
+    this.schedule(zoomRange(range, x.invert(this.local(event).x), event.deltaY < 0 ? ZOOM_IN : ZOOM_OUT, this.extent()));
   }
 
   /** Shows everything again. */
   protected reset(): void {
-    this.setRange(null);
+    this.pending = { range: null };
+    this.flush();
   }
 
   /** Plus and minus zoom, the arrows pan, 0 shows everything and Escape clears the brush. */
   protected onKeydown(event: KeyboardEvent): void {
+    const key = KEYS[event.key];
     const range = this.shownRange();
-    if (range === null) {
+    if (key === undefined || range === null) {
       return;
     }
-    const middle = (range[0] + range[1]) / 2;
-    const step = (range[1] - range[0]) / 10;
-    const actions: Readonly<Record<string, () => void>> = {
-      "+": () => {
-        this.setRange(zoomRange(range, middle, 0.8, this.full()));
-      },
-      "=": () => {
-        this.setRange(zoomRange(range, middle, 0.8, this.full()));
-      },
-      "-": () => {
-        this.setRange(zoomRange(range, middle, 1.25, this.full()));
-      },
-      ArrowLeft: () => {
-        this.setRange(panRange(range, -step, this.full()));
-      },
-      ArrowRight: () => {
-        this.setRange(panRange(range, step, this.full()));
-      },
-      "0": () => {
+    event.preventDefault();
+    const [middle, step, extent] = [(range[0] + range[1]) / 2, (range[1] - range[0]) / 10, this.extent()];
+    switch (key) {
+      case "in":
+      case "out":
+        this.schedule(zoomRange(range, middle, key === "in" ? ZOOM_IN : ZOOM_OUT, extent));
+        return;
+      case "left":
+      case "right":
+        this.schedule(panRange(range, key === "left" ? -step : step, extent));
+        return;
+      case "all":
         this.reset();
-      },
-      Escape: () => {
-        this.brush.set(null);
-        this.brushed.emit(null);
-      }
-    };
-    const action = actions[event.key];
-    if (action !== undefined) {
-      event.preventDefault();
-      action();
+        return;
+      case "clear":
+        this.clearBrush();
+        return;
     }
   }
 

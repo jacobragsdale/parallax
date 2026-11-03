@@ -228,6 +228,10 @@ message ChartFrame {
   // A candlestick or OHLC chart's bucket: minutes as "<n>m" (1, 5, 15, 30 or
   // 60), "day", "week", "month", "quarter", "year", or years as "<n>y".
   string interval = 15;
+  // The data's whole x range, in axis positions, which zooming and panning
+  // stay within. It equals x_from and x_to when the window names no range.
+  double extent_from = 16;
+  double extent_to = 17;
 }
 
 // A labelled tick on a chart's x axis.
