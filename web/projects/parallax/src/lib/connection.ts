@@ -3,12 +3,13 @@
  *
  * One connection carries every view over one transport, a WebSocket to the server
  * or a worker hosting the WebAssembly engine. Two rules keep stale data off the
- * screen:
+ * screen and the engine from being flooded:
  *
  * - A view drops any frame built from an older configuration than the one it last
  *   sent, or from an older table load than one it already showed.
- * - At most one viewport request per view is in flight. Scrolling faster than
- *   frames arrive replaces the pending request instead of queueing them.
+ * - At most one viewport request per view is in flight, matched to its reply by
+ *   request id. Scrolling faster than frames arrive replaces the pending request
+ *   instead of queueing them.
  */
 
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
@@ -36,7 +37,8 @@ export interface ViewListener {
   readonly error?: (message: string) => void;
 }
 
-interface Viewport {
+/** A window of rows and data columns. */
+export interface Viewport {
   readonly firstRow: number;
   readonly rowCount: number;
   readonly firstColumn: number;
@@ -51,7 +53,7 @@ function sameViewport(a: Viewport | null, b: Viewport): boolean {
 export class ViewHandle {
   private configVersion = 0n;
   private lastLoadVersion = 0n;
-  private inFlight: Viewport | null = null;
+  private inFlight: { readonly viewport: Viewport; readonly requestId: bigint } | null = null;
   private pending: Viewport | null = null;
   private closed = false;
 
@@ -61,28 +63,42 @@ export class ViewHandle {
     private readonly listener: ViewListener
   ) {}
 
+  /** The most recent window asked for, whether answered yet or not. */
+  public requested(): Viewport | null {
+    return this.pending ?? this.inFlight?.viewport ?? null;
+  }
+
   /** Asks for a window of rows and data columns. */
-  public setViewport(firstRow: number, rowCount: number, firstColumn = 0, columnCount = 64): void {
-    const next: Viewport = { firstRow: Math.max(0, Math.floor(firstRow)), rowCount: Math.max(0, Math.ceil(rowCount)), firstColumn, columnCount };
-    if (sameViewport(this.inFlight, next) || sameViewport(this.pending, next)) {
+  public setViewport(viewport: Viewport): void {
+    if (this.closed || sameViewport(this.inFlight?.viewport ?? null, viewport) || sameViewport(this.pending, viewport)) {
       return;
     }
     if (this.inFlight !== null) {
-      this.pending = next;
+      this.pending = viewport;
       return;
     }
-    this.sendViewport(next);
+    this.sendViewport(viewport);
   }
 
   /** Replaces the view's layout. Frames from the old layout are dropped from now on. */
   public update(layoutJson: string): void {
+    if (this.closed) {
+      return;
+    }
     this.configVersion += 1n;
     this.connection.send({ case: "updateView", value: { viewId: this.id, layoutJson, configVersion: this.configVersion } });
   }
 
   /** Expands or collapses the group at `path`. */
   public setExpanded(path: readonly (string | number | boolean | null)[], expanded: boolean): void {
-    this.connection.send({ case: "setExpanded", value: { viewId: this.id, pathJson: JSON.stringify(path), expanded } });
+    if (!this.closed) {
+      this.connection.send({ case: "setExpanded", value: { viewId: this.id, pathJson: JSON.stringify(path), expanded } });
+    }
+  }
+
+  /** `true` once the view is closed. */
+  public get isClosed(): boolean {
+    return this.closed;
   }
 
   /** Closes the view. */
@@ -95,23 +111,29 @@ export class ViewHandle {
   }
 
   private sendViewport(viewport: Viewport): void {
-    this.inFlight = viewport;
-    this.connection.send({
+    const requestId = this.connection.send({
       case: "setViewport",
       value: { viewId: this.id, firstRow: BigInt(viewport.firstRow), rowCount: BigInt(viewport.rowCount), firstColumn: viewport.firstColumn, columnCount: viewport.columnCount }
     });
+    this.inFlight = { viewport, requestId };
+  }
+
+  /** Releases the in-flight viewport if `requestId` answers it, and sends any pending one. */
+  private settle(requestId: bigint): void {
+    if (this.inFlight?.requestId !== requestId) {
+      return;
+    }
+    this.inFlight = null;
+    const next = this.pending;
+    this.pending = null;
+    if (next !== null) {
+      this.sendViewport(next);
+    }
   }
 
   /** @internal Called by the connection. */
-  public receiveFrame(frame: FrameData): void {
-    if (!frame.pushed) {
-      this.inFlight = null;
-      if (this.pending !== null) {
-        const next = this.pending;
-        this.pending = null;
-        this.sendViewport(next);
-      }
-    }
+  public receiveFrame(frame: FrameData, requestId: bigint): void {
+    this.settle(requestId);
     if (frame.configVersion < this.configVersion || frame.loadVersion < this.lastLoadVersion) {
       return;
     }
@@ -130,8 +152,8 @@ export class ViewHandle {
   }
 
   /** @internal Called by the connection. */
-  public receiveError(message: string): void {
-    this.inFlight = null;
+  public receiveError(message: string, requestId: bigint): void {
+    this.settle(requestId);
     this.listener.error?.(message);
   }
 }
@@ -202,11 +224,12 @@ export class Connection {
     this.transport.close();
   }
 
-  /** @internal Encodes and sends a message. */
-  public send(body: ClientBody): void {
-    const message = create(ClientMessageSchema, { requestId: this.nextRequest, body });
+  /** @internal Encodes and sends a message, returning its request id. */
+  public send(body: ClientBody): bigint {
+    const requestId = this.nextRequest;
     this.nextRequest += 1n;
-    this.transport.send(toBinary(ClientMessageSchema, message));
+    this.transport.send(toBinary(ClientMessageSchema, create(ClientMessageSchema, { requestId, body })));
+    return requestId;
   }
 
   /** @internal Forgets a closed view. */
@@ -217,6 +240,7 @@ export class Connection {
   /** Handles one encoded server message. */
   public receive(bytes: Uint8Array): void {
     const message = fromBinary(ServerMessageSchema, bytes);
+    const requestId = message.requestId;
     const body = message.body;
     switch (body.case) {
       case "welcome":
@@ -230,11 +254,14 @@ export class Connection {
         if (view === undefined) {
           return;
         }
+        let frame: FrameData;
         try {
-          view.receiveFrame(decodeFrame(body.value));
+          frame = decodeFrame(body.value);
         } catch (error: unknown) {
-          view.receiveError(error instanceof FrameError ? error.message : String(error));
+          view.receiveError(error instanceof FrameError ? error.message : String(error), requestId);
+          return;
         }
+        view.receiveFrame(frame, requestId);
         return;
       }
       case "tableStatus":
@@ -247,7 +274,7 @@ export class Connection {
             listener(body.value.message);
           }
         } else {
-          view.receiveError(body.value.message);
+          view.receiveError(body.value.message, requestId);
         }
         return;
       }

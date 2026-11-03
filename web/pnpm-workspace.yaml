@@ -1,0 +1,8 @@
+# Dependency install scripts stay off. Each of these ships prebuilt binaries for
+# its platform, and the builds and tests pass without running its script.
+allowBuilds:
+  "@bufbuild/buf": false
+  "@parcel/watcher": false
+  esbuild: false
+  lmdb: false
+  msgpackr-extract: false

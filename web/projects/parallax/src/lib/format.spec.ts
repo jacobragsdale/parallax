@@ -53,5 +53,12 @@ describe("pathValue", () => {
     expect(pathValue({ kind: "number", value: Number.POSITIVE_INFINITY })).toBe("inf");
     expect(pathValue({ kind: "integer", value: 2n ** 60n })).toBe("1152921504606846976");
     expect(pathValue({ kind: "null" })).toBeNull();
+    expect(pathValue({ kind: "number", value: Number.NaN })).toBe("NaN");
+  });
+
+  it("keeps timestamps to the microsecond, with Z only for instants", () => {
+    expect(pathValue({ kind: "timestamp", micros: 1_793_511_000_123_456n, zoned: true })).toBe("2026-11-01T05:30:00.123456Z");
+    expect(pathValue({ kind: "timestamp", micros: 1_793_496_600_123_456n, zoned: false })).toBe("2026-11-01T01:30:00.123456");
+    expect(pathValue({ kind: "timestamp", micros: -1n, zoned: true })).toBe("1969-12-31T23:59:59.999999Z");
   });
 });

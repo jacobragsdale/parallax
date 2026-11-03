@@ -1,20 +1,21 @@
 /**
  * A grid drawn on a Canvas 2D surface, for GPU-less desktops.
  *
- * Only the visible rows are drawn. When a frame arrives for rows already on screen,
- * only the cells whose text changed are redrawn, which keeps both the CPU and a
- * remote-display protocol such as Citrix's busy for as little as possible. Numbers
- * too wide for their cell show `###`, as Excel does, rather than losing digits.
+ * Only the visible rows and columns are drawn. When a frame arrives for rows already
+ * on screen, only the cells whose text changed are redrawn, which keeps both the CPU
+ * and a remote-display protocol such as Citrix's busy for as little as possible. The
+ * tree column of a grouped view stays pinned while data columns scroll. Numbers too
+ * wide for their cell show `###`, as Excel does, rather than losing digits.
  */
 
 import { ChangeDetectionStrategy, Component, DestroyRef, afterNextRender, afterRenderEffect, computed, inject, input, signal, viewChild } from "@angular/core";
 import type { ElementRef } from "@angular/core";
 
-import { cellText, isNegative, pathValue } from "../format";
+import { cellText, isNegative } from "../format";
 import type { FrameColumn, FrameData, TreeRows } from "../frame";
 import { readTheme } from "../theme";
 import type { Theme } from "../theme";
-import { gridSource, scrollGeometry } from "./grid-source";
+import { CELL_WIDTH, TREE_WIDTH, gridSource, scrollGeometry, visibleWindow } from "./grid-source";
 
 /** Counters the grid experiment reads. */
 export interface DrawStats {
@@ -24,16 +25,14 @@ export interface DrawStats {
   readonly drawMs: number;
 }
 
-const TREE_WIDTH = 260;
-const CELL_WIDTH = 140;
 const PADDING = 6;
 const INDENT = 14;
 
+/** A data column placed in content coordinates. */
 interface Column {
   readonly frameIndex: number;
   readonly title: string;
   readonly x: number;
-  readonly width: number;
   readonly numeric: boolean;
 }
 
@@ -43,6 +42,31 @@ interface Pass {
   readonly theme: Theme;
   readonly rowPx: number;
   readonly full: boolean;
+  readonly treePx: number;
+  readonly scrollLeft: number;
+  readonly width: number;
+}
+
+/** What a full redraw depends on; any change forces one. */
+interface Shape {
+  readonly first: number;
+  readonly scrollLeft: number;
+  readonly configVersion: bigint;
+  readonly loadVersion: bigint;
+  readonly totalRows: number;
+  readonly firstColumn: number;
+}
+
+function sameShape(a: Shape | null, b: Shape): boolean {
+  return (
+    a !== null &&
+    a.first === b.first &&
+    a.scrollLeft === b.scrollLeft &&
+    a.configVersion === b.configVersion &&
+    a.loadVersion === b.loadVersion &&
+    a.totalRows === b.totalRows &&
+    a.firstColumn === b.firstColumn
+  );
 }
 
 @Component({
@@ -102,22 +126,22 @@ export class CanvasGridComponent {
   private readonly scroll = viewChild.required<ElementRef<HTMLDivElement>>("scroll");
   private readonly canvas = viewChild.required<ElementRef<HTMLCanvasElement>>("canvas");
   private readonly scrollTop = signal(0);
+  private readonly scrollLeft = signal(0);
   private readonly viewportPx = signal(600);
   private readonly widthPx = signal(800);
 
   protected readonly totalRows = computed(() => this.source.frame()?.totalRows ?? 0);
+  private readonly treePx = computed(() => ((this.source.frame()?.tree ?? null) === null ? 0 : TREE_WIDTH));
   private readonly geometry = computed(() => scrollGeometry(this.totalRows() + 1, this.rowHeight()));
   protected readonly spacerHeight = computed(() => this.geometry().spacerPx);
-  private readonly columns = computed(() => layoutColumns(this.source.frame(), this.source.groupBy()));
-  protected readonly contentWidth = computed(() => {
-    const last = this.columns().at(-1);
-    return last === undefined ? 0 : last.x + last.width;
-  });
+  protected readonly contentWidth = computed(() => this.treePx() + (this.source.frame()?.totalColumns ?? 0) * CELL_WIDTH);
+  private readonly columns = computed(() => placeColumns(this.source.frame(), this.source.groupBy(), this.treePx()));
 
   private stats: DrawStats = { frames: 0, fullDraws: 0, cellDraws: 0, drawMs: 0 };
   private drawn = new Map<string, string>();
-  private lastFrame: FrameData | null = null;
-  private lastFirst = -1;
+  private drawnRows = new Set<number>();
+  private shape: Shape | null = null;
+  private theme: Theme | null = null;
   private readonly textWidths = new Map<string, number>();
 
   constructor() {
@@ -134,7 +158,7 @@ export class CanvasGridComponent {
       this.onScroll();
     });
     afterRenderEffect(() => {
-      this.draw(this.source.frame(), this.scrollTop(), this.viewportPx(), this.widthPx());
+      this.draw(this.source.frame(), this.scrollTop(), this.scrollLeft(), this.viewportPx(), this.widthPx());
     });
   }
 
@@ -146,35 +170,26 @@ export class CanvasGridComponent {
   protected onScroll(): void {
     const element = this.scroll().nativeElement;
     this.scrollTop.set(element.scrollTop);
+    this.scrollLeft.set(element.scrollLeft);
     this.viewportPx.set(element.clientHeight);
     this.widthPx.set(element.clientWidth);
-    const rows = Math.ceil(element.clientHeight / this.rowHeight()) + 1;
-    this.source.request(this.geometry().firstRow(element.scrollTop, element.clientHeight), rows);
+    this.source.show(visibleWindow(this.geometry(), element, this.rowHeight(), this.treePx()));
   }
 
   protected onClick(event: MouseEvent): void {
     const frame = this.source.frame();
-    const tree = frame?.tree ?? null;
-    if (frame === null || tree === null || event.offsetX > TREE_WIDTH) {
+    const rowPx = this.rowHeight();
+    if (frame === null) {
       return;
     }
-    const row = this.lastFirst + Math.floor((event.offsetY - this.rowHeight()) / this.rowHeight());
+    if (frame.tree === null || event.offsetX > TREE_WIDTH || event.offsetY < rowPx) {
+      return;
+    }
+    const row = (this.shape?.first ?? 0) + Math.floor((event.offsetY - rowPx) / rowPx);
     const local = row - frame.firstRow;
-    if (local < 0 || local >= frame.rowCount) {
-      return;
+    if (local >= 0 && local < frame.rowCount) {
+      this.source.toggle(frame, local);
     }
-    const expanded = tree.expanded(local);
-    if (expanded === null) {
-      return;
-    }
-    const path = this.source
-      .groupBy()
-      .slice(0, tree.depth(local))
-      .map((name) => {
-        const column = frame.columns.find((c) => c.name === name);
-        return column === undefined ? null : pathValue(column.value(local));
-      });
-    this.source.expand(path, !expanded);
   }
 
   private measure(context: CanvasRenderingContext2D, text: string): number {
@@ -201,74 +216,121 @@ export class CanvasGridComponent {
       element.height = Math.round(height * ratio);
       element.style.width = `${String(width)}px`;
       element.style.height = `${String(height)}px`;
-      this.lastFirst = -1;
+      this.shape = null;
     }
     context.setTransform(ratio, 0, 0, ratio, 0, 0);
     return context;
   }
 
-  private draw(frame: FrameData | null, scrollTop: number, viewportPx: number, widthPx: number): void {
+  private draw(frame: FrameData | null, scrollTop: number, scrollLeft: number, viewportPx: number, widthPx: number): void {
     const started = performance.now();
-    const element = this.canvas().nativeElement;
     const height = Math.max(1, viewportPx);
     const width = Math.max(1, widthPx);
     const context = this.prepare(width, height);
     if (context === null) {
       return;
     }
-    const theme = readTheme(element);
+    const first = this.geometry().firstRow(scrollTop, height);
+    const pass = this.begin(context, frame, { first, scrollLeft, width, height });
+    if (frame !== null) {
+      const cells = this.drawRows(pass, frame, first, height);
+      this.stats = { frames: this.stats.frames + 1, fullDraws: this.stats.fullDraws, cellDraws: this.stats.cellDraws + cells, drawMs: this.stats.drawMs + performance.now() - started };
+    }
+  }
+
+  /** Decides whether this pass redraws everything, and if so clears and draws the header. */
+  private begin(target: CanvasRenderingContext2D, frame: FrameData | null, at: { readonly first: number; readonly scrollLeft: number; readonly width: number; readonly height: number }): Pass {
+    const shape: Shape = {
+      first: at.first,
+      scrollLeft: at.scrollLeft,
+      configVersion: frame?.configVersion ?? -1n,
+      loadVersion: frame?.loadVersion ?? -1n,
+      totalRows: frame?.totalRows ?? -1,
+      firstColumn: frame?.firstColumn ?? -1
+    };
+    const full = this.theme === null || !sameShape(this.shape, shape);
+    const theme = full || this.theme === null ? readTheme(this.canvas().nativeElement) : this.theme;
+    this.theme = theme;
+    this.shape = shape;
+    const pass: Pass = { context: target, theme, rowPx: this.rowHeight(), full, treePx: this.treePx(), scrollLeft: at.scrollLeft, width: at.width };
+    const { context } = pass;
     context.font = theme.font;
     context.textBaseline = "middle";
-    const rowPx = this.rowHeight();
-    const first = this.geometry().firstRow(scrollTop, height);
-    const full = first !== this.lastFirst || frame?.configVersion !== this.lastFrame?.configVersion || frame?.loadVersion !== this.lastFrame?.loadVersion;
-    const pass: Pass = { context, theme, rowPx, full };
     if (full) {
       this.drawn = new Map();
+      this.drawnRows = new Set();
       context.fillStyle = theme.background;
-      context.fillRect(0, 0, width, height);
-      this.drawHeader(pass, frame, width);
+      context.fillRect(0, 0, at.width, at.height);
+      this.drawHeader(pass, frame);
       this.stats = { ...this.stats, fullDraws: this.stats.fullDraws + 1 };
     }
-    this.lastFirst = first;
-    this.lastFrame = frame;
-    if (frame === null) {
-      return;
-    }
+    return pass;
+  }
+
+  private drawRows(pass: Pass, frame: FrameData, first: number, height: number): number {
     let cells = 0;
-    const visible = Math.ceil(height / rowPx);
+    const visible = Math.ceil(height / pass.rowPx);
     for (let i = 0; i < visible; i += 1) {
       const row = first + i;
       const local = row - frame.firstRow;
+      const y = pass.rowPx * (i + 1);
       if (local >= 0 && local < frame.rowCount) {
-        cells += this.drawRow(pass, frame, local, row, rowPx * (i + 1));
+        cells += this.drawRow(pass, frame, local, row, y);
+        this.drawnRows.add(row);
+      } else if (this.drawnRows.delete(row)) {
+        // The row no longer has data, such as after a group collapsed: clear it.
+        const { context, theme } = pass;
+        context.fillStyle = theme.background;
+        context.fillRect(0, y, pass.width, pass.rowPx);
       }
     }
-    this.stats = { frames: this.stats.frames + 1, fullDraws: this.stats.fullDraws, cellDraws: this.stats.cellDraws + cells, drawMs: this.stats.drawMs + performance.now() - started };
+    return cells;
   }
 
-  private drawHeader(pass: Pass, frame: FrameData | null, width: number): void {
+  /** Columns that intersect the visible part of the data area. */
+  private visibleColumns(pass: Pass): readonly Column[] {
+    const left = pass.treePx + pass.scrollLeft;
+    const right = pass.scrollLeft + pass.width;
+    return this.columns().filter((c) => c.x + CELL_WIDTH > left && c.x < right);
+  }
+
+  /** Runs `paint` clipped to the data area, which scrolls under the pinned tree column. */
+  private inDataArea(pass: Pass, top: number, height: number, paint: () => void): void {
+    const { context } = pass;
+    context.save();
+    context.beginPath();
+    context.rect(pass.treePx, top, Math.max(0, pass.width - pass.treePx), height);
+    context.clip();
+    paint();
+    context.restore();
+  }
+
+  private drawHeader(pass: Pass, frame: FrameData | null): void {
     const { context, theme, rowPx } = pass;
     context.fillStyle = theme.headerBackground;
-    context.fillRect(0, 0, width, rowPx);
+    context.fillRect(0, 0, pass.width, rowPx);
     context.fillStyle = theme.headerForeground;
     if ((frame?.tree ?? null) !== null) {
       context.fillText("Group", PADDING, rowPx / 2);
     }
-    for (const column of this.columns()) {
-      this.clipText(context, column.title, column.x, column.width, rowPx / 2, false);
-    }
+    this.inDataArea(pass, 0, rowPx, () => {
+      for (const column of this.visibleColumns(pass)) {
+        this.clipText(context, column.title, column.x - pass.scrollLeft, CELL_WIDTH, rowPx / 2, false);
+      }
+    });
   }
 
   private drawRow(pass: Pass, frame: FrameData, local: number, row: number, y: number): number {
     const stripe = row % 2 === 0 ? pass.theme.background : pass.theme.stripe;
     let cells = frame.tree === null ? 0 : this.drawTreeCell(pass, frame.tree, local, row, y, stripe);
-    for (const column of this.columns()) {
-      const data = frame.columns[column.frameIndex];
-      if (data !== undefined && this.drawCell(pass, column, data, local, row, y, stripe)) {
-        cells += 1;
+    this.inDataArea(pass, y, pass.rowPx, () => {
+      for (const column of this.visibleColumns(pass)) {
+        const data = frame.columns[column.frameIndex];
+        if (data !== undefined && this.drawCell(pass, column, data, local, row, y, stripe)) {
+          cells += 1;
+        }
       }
-    }
+    });
     return cells;
   }
 
@@ -293,15 +355,16 @@ export class CanvasGridComponent {
   private drawCell(pass: Pass, column: Column, data: FrameColumn, local: number, row: number, y: number, stripe: string): boolean {
     const value = data.value(local);
     const text = cellText(value, data.flag(local));
-    const key = `${String(row)}:${String(column.frameIndex)}`;
+    const key = `${String(row)}:${String(column.x)}`;
     if (!pass.full && this.drawn.get(key) === text) {
       return false;
     }
     const { context, theme, rowPx } = pass;
+    const x = column.x - pass.scrollLeft;
     context.fillStyle = stripe;
-    context.fillRect(column.x, y, column.width, rowPx);
+    context.fillRect(x, y, CELL_WIDTH, rowPx);
     context.fillStyle = isNegative(value) ? theme.negative : theme.foreground;
-    this.clipText(context, text, column.x, column.width, y + rowPx / 2, column.numeric);
+    this.clipText(context, text, x, CELL_WIDTH, y + rowPx / 2, column.numeric);
     this.drawn.set(key, text);
     return true;
   }
@@ -327,16 +390,17 @@ export class CanvasGridComponent {
   }
 }
 
-function layoutColumns(frame: FrameData | null, groupBy: readonly string[]): readonly Column[] {
+/** Places a frame's data columns at their absolute positions in the content. */
+function placeColumns(frame: FrameData | null, groupBy: readonly string[], treePx: number): readonly Column[] {
   if (frame === null) {
     return [];
   }
   const columns: Column[] = [];
-  let x = frame.tree === null ? 0 : TREE_WIDTH;
+  let index = frame.firstColumn;
   frame.columns.forEach((column, frameIndex) => {
     if (!groupBy.includes(column.name)) {
-      columns.push({ frameIndex, title: column.name, x, width: CELL_WIDTH, numeric: column.numeric });
-      x += CELL_WIDTH;
+      columns.push({ frameIndex, title: column.name, x: treePx + index * CELL_WIDTH, numeric: column.numeric });
+      index += 1;
     }
   });
   return columns;

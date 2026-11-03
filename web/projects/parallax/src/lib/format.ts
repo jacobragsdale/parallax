@@ -45,6 +45,19 @@ function formatNumber(value: number): string {
 
 const DAY_MS = 86_400_000;
 
+/** Formats microseconds since the epoch exactly: RFC 3339 with `Z` for instants, a civil date-time for wall-clock values. */
+export function timestampText(micros: bigint, zoned: boolean): string {
+  const million = 1_000_000n;
+  let seconds = micros / million;
+  let fraction = micros % million;
+  if (fraction < 0n) {
+    fraction += million;
+    seconds -= 1n;
+  }
+  const whole = new Date(Number(seconds) * 1000).toISOString().slice(0, 19);
+  return `${whole}.${fraction.toString().padStart(6, "0")}${zoned ? "Z" : ""}`;
+}
+
 /** Returns the display text of a value. */
 export function formatCell(value: CellValue): string {
   switch (value.kind) {
@@ -70,29 +83,33 @@ export function formatCell(value: CellValue): string {
   }
 }
 
-/** Converts a group value to the JSON a layout path holds. Decimals stay exact strings. */
+/**
+ * Converts a group value to the JSON a layout path holds, exactly: decimals and
+ * integers beyond 2^53 as strings, infinities as `"inf"` and `"-inf"`, timestamps
+ * to the microsecond. NaN cannot be a group value, so it becomes `"NaN"`, which the
+ * engine rejects rather than matching another group.
+ */
 export function pathValue(value: CellValue): string | number | boolean | null {
   switch (value.kind) {
     case "null":
       return null;
     case "number":
+      if (Number.isNaN(value.value)) {
+        return "NaN";
+      }
       return Number.isFinite(value.value) ? value.value : value.value > 0 ? "inf" : "-inf";
     case "integer":
       return Number.isSafeInteger(Number(value.value)) ? Number(value.value) : value.value.toString();
-    case "decimal": {
-      const text = formatDecimal(value.unscaled, value.scale);
-      return text.replaceAll(",", "");
-    }
+    case "decimal":
+      return formatDecimal(value.unscaled, value.scale).replaceAll(",", "");
     case "text":
       return value.value;
     case "boolean":
       return value.value;
     case "date":
       return new Date(value.days * DAY_MS).toISOString().slice(0, 10);
-    case "timestamp": {
-      const ms = Number(value.micros / 1000n);
-      return new Date(ms).toISOString();
-    }
+    case "timestamp":
+      return timestampText(value.micros, value.zoned);
   }
 }
 

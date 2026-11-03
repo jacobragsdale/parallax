@@ -226,11 +226,14 @@ function treeRows(table: Table): TreeRows | null {
     throw new FrameError("__depth must be 32-bit integers");
   }
   const kinds = only(kind);
+  // Every row kind is checked here, at decode time, so a frame the client does not
+  // understand is refused before any grid draws it.
+  const rowKinds = Array.from({ length: table.numRows }, (_, row) => rowKind(kinds.get(row)));
   const flags = only(expanded);
   const labels = only(label);
   return {
     depth: (row) => depths[row] ?? 0,
-    kind: (row) => rowKind(kinds.get(row)),
+    kind: (row) => rowKinds[row] ?? "leaf",
     expanded: (row) => {
       const value = flags.get(row);
       return typeof value === "boolean" ? value : null;

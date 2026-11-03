@@ -308,12 +308,11 @@ call and make theming harder.
 
 The grid draws on a canvas too. A virtualized DOM grid, Perspective's choice, was
 measured against it on the same views in Chromium with the GPU disabled and the
-CPU throttled four times. The DOM grid spent 1.5 to 2.7 times as much main-thread
-time per frame, and dropped to 30 to 40 frames per second where the canvas grid
-held about 60. [The grid experiment](grid-experiment.md) has the method and the
-numbers. The DOM grid brings native text selection and accessibility, which the
-canvas grid provides separately; screen-reader support isn't a first-milestone
-requirement.
+CPU throttled four times. The DOM grid spent 1.1 to 2 times as much main-thread
+time per frame, which is the headroom a slow desktop has before frames drop.
+[The grid experiment](grid-experiment.md) has the method and the numbers. The DOM
+grid brings native text selection and accessibility, which the canvas grid
+provides separately; screen-reader support isn't a first-milestone requirement.
 
 ## The wire protocol
 

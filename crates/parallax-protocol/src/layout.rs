@@ -365,6 +365,11 @@ fn scalar(column: &str, ty: &ColumnType, value: &Value) -> Result<Scalar, Layout
         (ColumnType::Int64, Value::Number(n)) => {
             Scalar::Int64(n.as_str().parse().map_err(|_| mismatch())?)
         }
+        // JavaScript numbers hold integers exactly only up to 2^53, so larger ones
+        // travel as strings.
+        (ColumnType::Int64, Value::String(s)) => {
+            Scalar::Int64(s.trim().parse().map_err(|_| mismatch())?)
+        }
         (ColumnType::Float64, Value::Number(n)) => {
             Scalar::Float64(n.as_str().parse().map_err(|_| mismatch())?)
         }
@@ -763,6 +768,42 @@ mod tests {
             "hostile exponent"
         );
         assert!(parse_decimal("x", "1e-9223372036854775808", 2).is_err());
+    }
+
+    #[test]
+    fn large_integers_arrive_as_strings() {
+        let ty = ColumnType::Int64;
+        assert_eq!(
+            scalar("id", &ty, &Value::String("1152921504606846976".into())).unwrap(),
+            Scalar::Int64(1 << 60)
+        );
+        assert!(scalar("id", &ty, &Value::String("1.5".into())).is_err());
+    }
+
+    #[test]
+    fn microsecond_timestamps_round_trip_through_text() {
+        let zoned = ColumnType::Timestamp {
+            timezone: Some("UTC".into()),
+        };
+        let naive = ColumnType::Timestamp { timezone: None };
+        assert_eq!(
+            scalar(
+                "t",
+                &zoned,
+                &Value::String("2026-11-01T05:30:00.123456Z".into())
+            )
+            .unwrap(),
+            Scalar::Timestamp(1_793_511_000_123_456)
+        );
+        assert_eq!(
+            scalar(
+                "t",
+                &naive,
+                &Value::String("2026-11-01T01:30:00.123456".into())
+            )
+            .unwrap(),
+            Scalar::Timestamp(1_793_496_600_123_456)
+        );
     }
 
     #[test]
