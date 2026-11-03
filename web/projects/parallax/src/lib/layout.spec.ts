@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
+import * as z from "zod/mini";
 
-import { layoutSchema, parseLayout } from "./layout";
+import { checkLayout, layoutSchema, parseLayout } from "./layout";
 import fixtures from "./testing/layouts.json";
 
 // The fixtures are written by parallax-protocol's tests, from the Rust types.
@@ -32,5 +33,15 @@ describe("layoutSchema", () => {
 
   it("brings older versions up to date, as the Rust crate does", () => {
     expect(parseLayout({ version: 0 }).version).toBe(1);
+  });
+
+  it("says what is wrong in English, without changing Zod's settings for the host", () => {
+    const checked = checkLayout({ version: 1.5, colour: "red" });
+    expect(checked.ok).toBe(false);
+    expect(checked.ok ? "" : checked.error).toContain('Unrecognized key: "colour"');
+    expect(checked.ok ? "" : checked.error).toContain("Invalid input: expected int, received number");
+    expect(() => parseLayout({ expand_depth: -1 })).toThrow("Too small: expected number to be >=0");
+    // Zod Mini's own default, which a host's schemas still get.
+    expect(z.int().safeParse(1.5).error?.issues[0]?.message).toBe("Invalid input");
   });
 });

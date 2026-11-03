@@ -39,7 +39,7 @@ import type { DistinctValues, Viewport } from "../connection";
 import { isNegativeText } from "../format";
 import { CellFlag } from "../frame";
 import type { FrameData, TreeRows } from "../frame";
-import { TREE_WIDTH_KEY, layoutSchema } from "../layout";
+import { TREE_WIDTH_KEY, checkLayout } from "../layout";
 import type { Layout, LayoutInput, LayoutScalar } from "../layout";
 import { ParallaxClient } from "../client";
 import { installThemeStyles, readTheme } from "../theme";
@@ -139,8 +139,8 @@ function isGrouped(layout: Layout): boolean {
 }
 
 function parse(input: LayoutInput): Parsed {
-  const result = layoutSchema.safeParse(input);
-  return result.success ? { ok: true, layout: result.data } : { ok: false, error: `Invalid layout: ${z.prettifyError(result.error)}` };
+  const checked = checkLayout(input);
+  return checked.ok ? checked : { ok: false, error: `Invalid layout: ${checked.error}` };
 }
 
 const GRID_STYLES = `

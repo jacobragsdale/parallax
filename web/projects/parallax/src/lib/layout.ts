@@ -8,12 +8,13 @@
  */
 
 import * as z from "zod/mini";
-import en from "zod/v4/locales/en.js";
+import { en } from "zod/locales";
 
-// The tree-shakable build of Zod speaks only once given a locale. This sets
-// English for every Zod Mini schema in the application, which is also Zod's
-// default elsewhere.
-z.config(en());
+/**
+ * English messages for the library's own parses. Zod's tree-shakable build has none until given a locale, and
+ * setting one globally would override whatever the host application chose.
+ */
+const ENGLISH = { error: en().localeError };
 
 /** The layout version this library writes. */
 export const LAYOUT_VERSION = 1;
@@ -75,7 +76,7 @@ const expandedSchema = z.strictObject({ path: z.array(scalar), expanded: z.boole
 export const layoutSchema = z.strictObject({
   // Older versions are read and brought up to date, as the Rust crate does.
   version: z.pipe(
-    z._default(z.int().check(z.minimum(0), z.maximum(LAYOUT_VERSION)), LAYOUT_VERSION),
+    z.optional(z.int().check(z.minimum(0), z.maximum(LAYOUT_VERSION))),
     z.transform((): typeof LAYOUT_VERSION => LAYOUT_VERSION)
   ),
   dataset: z._default(z.string(), ""),
@@ -108,9 +109,18 @@ export type LayoutFormat = z.output<typeof formatSchema>;
 /** A JSON scalar in a filter or group path. */
 export type LayoutScalar = z.output<typeof scalar>;
 
-/** Reads and checks a layout from any source, filling in defaults. */
+/** Reads and checks a layout from any source, filling in defaults. Throws a Zod error with English messages. */
 export function parseLayout(value: unknown): Layout {
-  return layoutSchema.parse(value);
+  return layoutSchema.parse(value, ENGLISH);
+}
+
+/** The result of checking a layout: the layout with its defaults, or what is wrong with it, in English. */
+export type LayoutCheck = { readonly ok: true; readonly layout: Layout } | { readonly ok: false; readonly error: string };
+
+/** Checks a layout from any source, filling in defaults, and describes any problem in English. */
+export function checkLayout(value: unknown): LayoutCheck {
+  const result = layoutSchema.safeParse(value, ENGLISH);
+  return result.success ? { ok: true, layout: result.data } : { ok: false, error: z.prettifyError(result.error) };
 }
 
 /** The prefix of measure keys in `column_widths`, which no column name is expected to start with. */

@@ -10,7 +10,7 @@ import { ChangeDetectionStrategy, Component, DOCUMENT, ViewEncapsulation, comput
 import type { DistinctValues } from "../connection";
 import { GridComponent } from "../grid/grid.component";
 import type { Density, DrawStats, DrillRequest } from "../grid/grid.component";
-import { layoutSchema } from "../layout";
+import { checkLayout } from "../layout";
 import type { Layout, LayoutInput } from "../layout";
 import { installThemeStyles } from "../theme";
 import type { ThemeName } from "../theme";
@@ -263,8 +263,8 @@ export class PivotComponent {
   protected readonly panelOpen = signal(true);
   protected readonly drill = signal<{ readonly label: string; readonly layout: Layout; readonly source: string } | null>(null);
   protected readonly current = computed((): Layout | null => {
-    const parsed = layoutSchema.safeParse(this.layout());
-    return parsed.success ? parsed.data : null;
+    const checked = checkLayout(this.layout());
+    return checked.ok ? checked.layout : null;
   });
   /** Lists values for filter pick-lists from the grid's view. */
   protected readonly values: ValueSource = (column: string, search: string, limit: number): Promise<DistinctValues> => this.gridRef().distinctValues(column, search, limit);
@@ -284,9 +284,9 @@ export class PivotComponent {
 
   protected updateDrill(layout: LayoutInput): void {
     const open = this.drill();
-    const parsed = layoutSchema.safeParse(layout);
-    if (open !== null && parsed.success) {
-      this.drill.set({ ...open, layout: parsed.data });
+    const checked = checkLayout(layout);
+    if (open !== null && checked.ok) {
+      this.drill.set({ ...open, layout: checked.layout });
     }
   }
 
