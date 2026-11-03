@@ -3,7 +3,7 @@
  *
  * Display text is not made here: the engine formats every cell with the rules
  * the Excel export uses and sends the text in the frame. These helpers only turn
- * values into exact JSON for layout paths and decide which cells are negative.
+ * values into exact JSON for layout paths and read the sign of display text.
  */
 
 import type { CellValue } from "./frame";
@@ -62,7 +62,11 @@ export function pathValue(value: CellValue): string | number | boolean | null {
   }
 }
 
-/** Returns `true` for negative numbers, which show in the negative colour. */
-export function isNegative(value: CellValue): boolean {
-  return (value.kind === "number" && value.value < 0) || (value.kind === "decimal" && value.unscaled < 0n) || (value.kind === "integer" && value.value < 0n);
+/**
+ * Returns `true` when display text shows a negative number, which draws in the
+ * negative colour. The text decides, not the value: -0.001 at two decimals shows
+ * as an unsigned 0.00 and is not coloured.
+ */
+export function isNegativeText(text: string): boolean {
+  return text.startsWith("-") || text.startsWith("(");
 }

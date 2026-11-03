@@ -7,7 +7,7 @@
 import { ChangeDetectionStrategy, Component, DestroyRef, afterNextRender, computed, inject, input, signal, viewChild } from "@angular/core";
 import type { ElementRef } from "@angular/core";
 
-import { isNegative } from "../format";
+import { isNegativeText } from "../format";
 import type { FrameData } from "../frame";
 import { CELL_WIDTH, TREE_WIDTH, gridSource, scrollGeometry, visibleWindow } from "./grid-source";
 
@@ -235,8 +235,8 @@ export class DomGridComponent {
       total: tree?.kind(local) === "total",
       expandable: expanded !== null,
       cells: this.placed().map(({ x, column }) => {
-        const value = column.value(local);
-        return { x, text: column.text(local), numeric: column.numeric, negative: isNegative(value) };
+        const text = column.text(local);
+        return { x, text, numeric: column.numeric, negative: column.numeric && isNegativeText(text) };
       })
     };
   }

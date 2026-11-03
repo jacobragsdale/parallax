@@ -25,7 +25,7 @@ use arrow_array::cast::AsArray;
 use arrow_array::types::{
     Date32Type, Decimal128Type, Float64Type, Int64Type, TimestampMicrosecondType,
 };
-use arrow_array::{Array, ArrayRef, StringArray};
+use arrow_array::{Array, ArrayRef};
 use arrow_schema::{DataType, TimeUnit};
 use jiff::tz::TimeZone;
 
@@ -314,22 +314,39 @@ impl Formatter {
     ///
     /// Panics for Arrow types the engine never produces.
     #[must_use]
-    pub fn array(&self, array: &ArrayRef) -> StringArray {
-        self.map(array, |f, i| match array.data_type() {
-            DataType::Boolean => Self::boolean(array.as_boolean().value(i)).to_owned(),
-            DataType::Int64 => f.integer(array.as_primitive::<Int64Type>().value(i)),
-            DataType::Float64 => f.float(array.as_primitive::<Float64Type>().value(i)),
-            DataType::Decimal128(_, scale) => {
-                f.decimal(array.as_primitive::<Decimal128Type>().value(i), *scale)
+    pub fn texts(&self, array: &ArrayRef) -> Vec<String> {
+        match array.data_type() {
+            DataType::Boolean => {
+                let a = array.as_boolean();
+                each(array, |i| Self::boolean(a.value(i)).to_owned())
             }
-            DataType::Utf8 => array.as_string::<i32>().value(i).to_owned(),
-            DataType::Date32 => f.date(array.as_primitive::<Date32Type>().value(i)),
-            DataType::Timestamp(TimeUnit::Microsecond, zone) => f.timestamp(
-                array.as_primitive::<TimestampMicrosecondType>().value(i),
-                zone.is_some(),
-            ),
+            DataType::Int64 => {
+                let a = array.as_primitive::<Int64Type>();
+                each(array, |i| self.integer(a.value(i)))
+            }
+            DataType::Float64 => {
+                let a = array.as_primitive::<Float64Type>();
+                each(array, |i| self.float(a.value(i)))
+            }
+            DataType::Decimal128(_, scale) => {
+                let a = array.as_primitive::<Decimal128Type>();
+                each(array, |i| self.decimal(a.value(i), *scale))
+            }
+            DataType::Utf8 => {
+                let a = array.as_string::<i32>();
+                each(array, |i| a.value(i).to_owned())
+            }
+            DataType::Date32 => {
+                let a = array.as_primitive::<Date32Type>();
+                each(array, |i| self.date(a.value(i)))
+            }
+            DataType::Timestamp(TimeUnit::Microsecond, zone) => {
+                let a = array.as_primitive::<TimestampMicrosecondType>();
+                let zoned = zone.is_some();
+                each(array, |i| self.timestamp(a.value(i), zoned))
+            }
             other => panic!("the engine does not produce {other} columns"),
-        })
+        }
     }
 
     /// Formats every timestamp of an array with every stored digit.
@@ -338,25 +355,13 @@ impl Formatter {
     ///
     /// Panics unless `array` holds microsecond timestamps.
     #[must_use]
-    pub fn timestamps_full(&self, array: &ArrayRef) -> StringArray {
+    pub fn timestamps_full(&self, array: &ArrayRef) -> Vec<String> {
         let DataType::Timestamp(TimeUnit::Microsecond, zone) = array.data_type() else {
             panic!("not a microsecond timestamp array");
         };
         let zoned = zone.is_some();
         let values = array.as_primitive::<TimestampMicrosecondType>();
-        self.map(array, |f, i| f.timestamp_full(values.value(i), zoned))
-    }
-
-    fn map(&self, array: &ArrayRef, text: impl Fn(&Self, usize) -> String) -> StringArray {
-        (0..array.len())
-            .map(|i| {
-                Some(if array.is_null(i) {
-                    NULL_TEXT.to_owned()
-                } else {
-                    text(self, i)
-                })
-            })
-            .collect()
+        each(array, |i| self.timestamp_full(values.value(i), zoned))
     }
 
     fn signed(&self, negative: bool, body: String) -> String {
@@ -398,6 +403,19 @@ impl Formatter {
         }
         self.signed(negative && !is_zero, body)
     }
+}
+
+/// Applies `text` to every non-null position of `array`; nulls become empty text.
+fn each(array: &ArrayRef, text: impl Fn(usize) -> String) -> Vec<String> {
+    (0..array.len())
+        .map(|i| {
+            if array.is_null(i) {
+                NULL_TEXT.to_owned()
+            } else {
+                text(i)
+            }
+        })
+        .collect()
 }
 
 /// The digits and exponent of a positive finite double rounded to 15 significant
@@ -521,7 +539,8 @@ fn civil_text(micros: i64, zone: &TimeZone, precision: TimePrecision) -> String 
 /// Canonical text for a value, used for column identities such as column-pivot
 /// names. Unlike display text it never merges distinct non-null values of one
 /// column: floats keep every digit, decimals their scale, and timestamps their
-/// microseconds, in UTC with a `Z` for instants.
+/// microseconds, in UTC with a `Z` for instants. Dates and times beyond what a
+/// calendar can show fall back to their stored integer.
 #[must_use]
 pub fn canonical(ty: &ColumnType, value: &Scalar) -> String {
     let mut out = String::new();
@@ -532,15 +551,23 @@ pub fn canonical(ty: &ColumnType, value: &Scalar) -> String {
         Scalar::Float64(f) => write!(out, "{f:?}").expect("writes to a string"),
         Scalar::Decimal(d) => {
             let scale = match ty {
-                ColumnType::Decimal { scale, .. } => (*scale).max(0) as u32,
+                ColumnType::Decimal { scale, .. } => i32::from(*scale),
                 _ => 0,
             };
             out.push_str(&exact_decimal(*d, scale));
         }
         Scalar::Utf8(s) => out.push_str(s),
-        Scalar::Date32(d) => out.push_str(&date_text(*d)),
+        Scalar::Date32(d) => match date_text(*d) {
+            t if t == OUT_OF_RANGE_TEXT => write!(out, "days:{d}").expect("writes to a string"),
+            t => out.push_str(&t),
+        },
         Scalar::Timestamp(t) => {
-            out.push_str(&civil_text(*t, &TimeZone::UTC, TimePrecision::Microseconds));
+            match civil_text(*t, &TimeZone::UTC, TimePrecision::Microseconds) {
+                text if text == OUT_OF_RANGE_TEXT => {
+                    write!(out, "micros:{t}").expect("writes to a string");
+                }
+                text => out.push_str(&text),
+            }
             if matches!(ty, ColumnType::Timestamp { timezone: Some(_) }) {
                 out.push('Z');
             }
@@ -549,12 +576,16 @@ pub fn canonical(ty: &ColumnType, value: &Scalar) -> String {
     out
 }
 
-/// An exact decimal with no grouping, such as `-1234.50`.
+/// An exact decimal, `unscaled × 10^-scale`, with no grouping, such as
+/// `-1234.50`. A negative scale appends zeros.
 #[must_use]
-pub fn exact_decimal(unscaled: i128, scale: u32) -> String {
+pub fn exact_decimal(unscaled: i128, scale: i32) -> String {
     let negative = unscaled < 0;
-    let digits = unscaled.unsigned_abs().to_string();
-    let scale = scale as usize;
+    let mut digits = unscaled.unsigned_abs().to_string();
+    if scale < 0 && unscaled != 0 {
+        digits.extend(std::iter::repeat_n('0', scale.unsigned_abs() as usize));
+    }
+    let scale = usize::try_from(scale.max(0)).expect("non-negative");
     let padded = format!("{digits:0>width$}", width = scale + 1);
     let (whole, fraction) = padded.split_at(padded.len() - scale);
     let mut out = String::new();
@@ -790,6 +821,23 @@ mod tests {
             scale: 2,
         };
         assert_eq!(canonical(&dec, &Scalar::Decimal(-5)), "-0.05");
+        let hundreds = ColumnType::Decimal {
+            precision: 10,
+            scale: -2,
+        };
+        assert_eq!(canonical(&hundreds, &Scalar::Decimal(5)), "500");
+        // Values beyond the calendar keep their stored integers, so they stay apart.
+        assert_ne!(
+            canonical(&ColumnType::Date32, &Scalar::Date32(i32::MAX)),
+            canonical(&ColumnType::Date32, &Scalar::Date32(i32::MAX - 1))
+        );
+        let instant = ColumnType::Timestamp {
+            timezone: Some("UTC".into()),
+        };
+        assert_eq!(
+            canonical(&instant, &Scalar::Timestamp(i64::MAX)),
+            format!("micros:{}Z", i64::MAX)
+        );
         assert_eq!(
             canonical(&ColumnType::Date32, &Scalar::Date32(0)),
             "1970-01-01"

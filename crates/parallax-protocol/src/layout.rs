@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 
 use parallax_engine::aggregate::{Aggregate, Measure, ShowAs};
 use parallax_engine::filter::{Filter, FilterOp};
-use parallax_engine::format::{Abbreviation, Format, Negative, TimePrecision};
+use parallax_engine::format::{Abbreviation, Format, Negative, TimePrecision, exact_decimal};
 use parallax_engine::view::{Comparison, GroupOrder, GroupSort, Having, Sort, TopN, ViewConfig};
 use parallax_engine::{ColumnType, Scalar, Table};
 use schemars::JsonSchema;
@@ -762,10 +762,10 @@ pub fn scalar_to_json(table: &Table, column: &str, value: &Scalar) -> Value {
         Scalar::Float64(f) => serde_json::Number::from_f64(*f).map_or(Value::Null, Value::Number),
         Scalar::Decimal(d) => {
             let scale = match column_type(table, column) {
-                Ok(ColumnType::Decimal { scale, .. }) => scale as u32,
+                Ok(ColumnType::Decimal { scale, .. }) => i32::from(scale),
                 _ => 0,
             };
-            Value::String(format_decimal(*d, scale))
+            Value::String(exact_decimal(*d, scale))
         }
         Scalar::Utf8(t) => Value::String(t.clone()),
         Scalar::Date32(d) => Value::String(
@@ -870,18 +870,6 @@ impl Layout {
     }
 }
 
-/// Formats an unscaled decimal exactly.
-#[must_use]
-pub fn format_decimal(unscaled: i128, scale: u32) -> String {
-    let sign = if unscaled < 0 { "-" } else { "" };
-    let m = unscaled.unsigned_abs();
-    if scale == 0 {
-        return format!("{sign}{m}");
-    }
-    let p = 10u128.pow(scale);
-    format!("{sign}{}.{:0width$}", m / p, m % p, width = scale as usize)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -942,9 +930,10 @@ mod tests {
 
     #[test]
     fn decimals_format_exactly() {
-        assert_eq!(format_decimal(12_345, 2), "123.45");
-        assert_eq!(format_decimal(-5, 3), "-0.005");
-        assert_eq!(format_decimal(42, 0), "42");
+        assert_eq!(exact_decimal(12_345, 2), "123.45");
+        assert_eq!(exact_decimal(5, -2), "500");
+        assert_eq!(exact_decimal(-5, 3), "-0.005");
+        assert_eq!(exact_decimal(42, 0), "42");
     }
 
     #[test]
@@ -963,5 +952,44 @@ mod tests {
             Layout::from_json(r#"{"version":1,"grup_by":[]}"#).is_err(),
             "unknown fields"
         );
+    }
+
+    #[test]
+    fn formats_round_trip_through_the_engine() {
+        let mut formats = Vec::new();
+        for decimals in [None, Some(0), Some(30)] {
+            for thousands in [None, Some(false), Some(true)] {
+                for (percent, abbreviate) in [
+                    (false, None),
+                    (true, None),
+                    (false, Some(AbbreviationName::Thousands)),
+                    (false, Some(AbbreviationName::Millions)),
+                    (false, Some(AbbreviationName::Billions)),
+                ] {
+                    for negative in [NegativeName::Minus, NegativeName::Parentheses] {
+                        for precision in [
+                            PrecisionName::Seconds,
+                            PrecisionName::Milliseconds,
+                            PrecisionName::Microseconds,
+                        ] {
+                            for zone in [None, Some("Europe/London".to_owned())] {
+                                formats.push(LayoutFormat {
+                                    decimals,
+                                    thousands,
+                                    percent,
+                                    abbreviate,
+                                    negative,
+                                    zone,
+                                    precision,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        for f in formats {
+            assert_eq!(LayoutFormat::from_engine(&f.to_engine()), f);
+        }
     }
 }

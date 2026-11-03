@@ -685,8 +685,9 @@ impl Session {
                 .cloned()
                 .ok_or_else(|| format!("the distinct-values window has no {name} column"))
         };
+        // Fixed names, so no source column name can collide with them.
         let out = RecordBatch::try_from_iter([
-            (request.column.as_str(), column(&request.column)?),
+            ("value", column(&request.column)?),
             ("text", column("__label")?),
             ("count", column("count(*)")?),
         ])

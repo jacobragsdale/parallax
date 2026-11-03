@@ -212,3 +212,28 @@ fn bad_formats_are_configuration_errors() {
         Err(ConfigError::Format { .. })
     ));
 }
+
+#[test]
+fn flat_columns_keep_their_source_metadata() {
+    let schema = Schema::new(vec![
+        Field::new("pnl", DataType::Float64, false).with_metadata(
+            [("unit".to_owned(), "USD".to_owned())]
+                .into_iter()
+                .collect(),
+        ),
+    ]);
+    let batch = RecordBatch::try_new(
+        Arc::new(schema.clone()),
+        vec![Arc::new(Float64Array::from(vec![1.0])) as ArrayRef],
+    )
+    .unwrap();
+    let mut t = Table::new(&schema, TableOptions::default()).unwrap();
+    t.load(&[batch]).unwrap();
+    let mut view = View::new(&t, ViewConfig::default()).unwrap();
+    let frame = view.window(&t, 0..1, 0..1);
+    let schema = frame.batch.schema();
+    let field = schema.field(fields_with(&frame.batch, role::VALUE)[0]);
+    assert_eq!(field.metadata()["unit"], "USD");
+    assert_eq!(field.metadata()[meta::ROLE], role::VALUE);
+    assert!(!field.is_nullable());
+}

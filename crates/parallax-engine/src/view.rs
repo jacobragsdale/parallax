@@ -915,7 +915,7 @@ fn flat_window(
         let formatter = &formatters.columns[c];
         out.data_column(
             index,
-            field.name(),
+            field,
             field.name().clone(),
             table.column(c).to_arrow(slots),
             None,
@@ -954,27 +954,26 @@ impl FrameBuilder {
     }
 
     /// Adds a data column: its values, its flags if it has any, its display text,
-    /// and for timestamps its full-precision text.
+    /// and for timestamps its full-precision text. `source` is the table field of a
+    /// flat view's column, whose nullability and metadata the values keep, or a new
+    /// field for a measure.
     fn data_column(
         &mut self,
         index: usize,
-        name: &str,
+        source: &Field,
         title: String,
         values: ArrayRef,
         flags: Option<Vec<u8>>,
         formatter: &Formatter,
     ) {
+        let name = source.name().as_str();
         let data_type = values.data_type().clone();
         let title = match &data_type {
             DataType::Timestamp(_, Some(_)) => format!("{title} ({})", formatter.zone_name()),
             _ => title,
         };
         let at = [(meta::INDEX, index.to_string())];
-        let mut text: Vec<String> = formatter
-            .array(&values)
-            .iter()
-            .map(|t| t.unwrap_or_default().to_owned())
-            .collect();
+        let mut text = formatter.texts(&values);
         if let Some(flags) = &flags {
             for (t, &f) in text.iter_mut().zip(flags) {
                 match f {
@@ -987,14 +986,12 @@ impl FrameBuilder {
         }
         let copy = matches!(data_type, DataType::Timestamp(..))
             .then(|| formatter.timestamps_full(&values));
+        let mut metadata = source.metadata().clone();
+        metadata.insert(meta::ROLE.to_owned(), role::VALUE.to_owned());
+        metadata.insert(meta::INDEX.to_owned(), index.to_string());
+        metadata.insert(meta::TITLE.to_owned(), title);
         self.push(
-            role_field(
-                name,
-                data_type,
-                true,
-                role::VALUE,
-                &[(meta::INDEX, index.to_string()), (meta::TITLE, title)],
-            ),
+            Field::new(name, data_type, source.is_nullable()).with_metadata(metadata),
             values,
         );
         if let Some(flags) = flags {
@@ -1028,7 +1025,7 @@ impl FrameBuilder {
                     role::COPY,
                     &at,
                 ),
-                Arc::new(copy),
+                Arc::new(StringArray::from(copy)),
             );
         }
     }
@@ -1702,7 +1699,7 @@ impl Grouped {
                     (name, title)
                 }
             };
-            let (array, _) = values_to_arrow(table, &measure, &values);
+            let (array, data_type) = values_to_arrow(table, &measure, &values);
             let flags = values
                 .iter()
                 .map(|v| match v {
@@ -1715,7 +1712,7 @@ impl Grouped {
                 .collect();
             out.data_column(
                 index,
-                &name,
+                &Field::new(name, data_type, true),
                 title,
                 array,
                 Some(flags),

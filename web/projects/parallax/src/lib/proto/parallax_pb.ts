@@ -483,8 +483,8 @@ export type DistinctValuesResult = Message<"parallax.v1.DistinctValuesResult"> &
   column: string;
 
   /**
-   * One Arrow IPC stream with the values, their display text ("text") and their
-   * row counts ("count").
+   * One Arrow IPC stream with three columns: "value", the values in the
+   * column's type; "text", their display text; and "count", their row counts.
    *
    * @generated from field: bytes values = 3;
    */

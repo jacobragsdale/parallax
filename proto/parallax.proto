@@ -118,8 +118,8 @@ message DistinctValues {
 message DistinctValuesResult {
   uint32 view_id = 1;
   string column = 2;
-  // One Arrow IPC stream with the values, their display text ("text") and their
-  // row counts ("count").
+  // One Arrow IPC stream with three columns: "value", the values in the
+  // column's type; "text", their display text; and "count", their row counts.
   bytes values = 3;
   bool truncated = 4;
 }

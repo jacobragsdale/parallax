@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { exactDecimal, pathValue } from "./format";
+import { exactDecimal, isNegativeText, pathValue } from "./format";
 import { decimalFromWords } from "./frame";
 
 function words(value: bigint): Uint32Array {
@@ -50,5 +50,18 @@ describe("pathValue", () => {
     expect(pathValue({ kind: "timestamp", micros: 1_793_511_000_123_456n, zoned: true })).toBe("2026-11-01T05:30:00.123456Z");
     expect(pathValue({ kind: "timestamp", micros: 1_793_496_600_123_456n, zoned: false })).toBe("2026-11-01T01:30:00.123456");
     expect(pathValue({ kind: "timestamp", micros: -1n, zoned: true })).toBe("1969-12-31T23:59:59.999999Z");
+  });
+});
+
+describe("isNegativeText", () => {
+  it.each([
+    ["-1.00", true],
+    ["(1.00)", true],
+    ["-∞", true],
+    ["0.00", false],
+    ["1.2M", false],
+    ["", false]
+  ])("reads %s as negative: %s", (text, expected) => {
+    expect(isNegativeText(text)).toBe(expected);
   });
 });

@@ -11,7 +11,7 @@
 import { ChangeDetectionStrategy, Component, DestroyRef, afterNextRender, afterRenderEffect, computed, inject, input, signal, viewChild } from "@angular/core";
 import type { ElementRef } from "@angular/core";
 
-import { isNegative } from "../format";
+import { isNegativeText } from "../format";
 import type { FrameColumn, FrameData, TreeRows } from "../frame";
 import { readTheme } from "../theme";
 import type { Theme } from "../theme";
@@ -353,7 +353,6 @@ export class CanvasGridComponent {
   }
 
   private drawCell(pass: Pass, column: Column, data: FrameColumn, local: number, row: number, y: number, stripe: string): boolean {
-    const value = data.value(local);
     const text = data.text(local);
     const key = `${String(row)}:${String(column.x)}`;
     if (!pass.full && this.drawn.get(key) === text) {
@@ -363,7 +362,7 @@ export class CanvasGridComponent {
     const x = column.x - pass.scrollLeft;
     context.fillStyle = stripe;
     context.fillRect(x, y, CELL_WIDTH, rowPx);
-    context.fillStyle = isNegative(value) ? theme.negative : theme.foreground;
+    context.fillStyle = column.numeric && isNegativeText(text) ? theme.negative : theme.foreground;
     this.clipText(context, text, x, CELL_WIDTH, y + rowPx / 2, column.numeric);
     this.drawn.set(key, text);
     return true;
