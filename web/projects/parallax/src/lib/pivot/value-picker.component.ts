@@ -4,7 +4,7 @@
  * travel as exact JSON, so a decimal or a large integer matches what was picked.
  */
 
-import { ChangeDetectionStrategy, Component, DestroyRef, inject, input, output, signal } from "@angular/core";
+import { ChangeDetectionStrategy, Component, DestroyRef, computed, effect, inject, input, output, signal, untracked } from "@angular/core";
 
 import type { DistinctValues } from "../connection";
 import { pathValue } from "../format";
@@ -27,7 +27,9 @@ interface Option {
   selector: "px-value-picker",
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <input type="search" aria-label="Search values" placeholder="Search…" [value]="search()" (input)="onSearch($event)" />
+    @if (searchable()) {
+      <input type="search" aria-label="Search values" placeholder="Search…" [value]="search()" (input)="onSearch($event)" />
+    }
     <ul role="listbox" aria-multiselectable="true">
       @for (option of options(); track option.key) {
         <li>
@@ -53,6 +55,8 @@ export class ValuePickerComponent {
   public readonly source = input.required<ValueSource>();
   /** The values already chosen. */
   public readonly values = input.required<readonly LayoutScalar[]>();
+  /** Whether the list can be searched: the engine searches text columns only. */
+  public readonly searchable = input(true);
   /** Fires with the chosen values. */
   public readonly changed = output<readonly LayoutScalar[]>();
 
@@ -61,7 +65,7 @@ export class ValuePickerComponent {
   protected readonly options = signal<readonly Option[]>([]);
   protected readonly truncated = signal(false);
   protected readonly note = signal("Loading…");
-  protected readonly chosen = signal<ReadonlySet<string>>(new Set());
+  protected readonly chosen = computed((): ReadonlySet<string> => new Set(this.values().map((v) => JSON.stringify(v))));
   private generation = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
 
@@ -72,9 +76,14 @@ export class ValuePickerComponent {
         clearTimeout(this.timer);
       }
     });
-    queueMicrotask(() => {
-      this.chosen.set(new Set(this.values().map((v) => JSON.stringify(v))));
-      this.load("");
+    // A new column starts a new list, unsearched.
+    effect(() => {
+      const column = this.column();
+      untracked(() => {
+        this.search.set("");
+        this.options.set([]);
+        this.load(column, "");
+      });
     });
   }
 
@@ -85,7 +94,7 @@ export class ValuePickerComponent {
       clearTimeout(this.timer);
     }
     this.timer = setTimeout(() => {
-      this.load(text);
+      this.load(this.column(), text);
     }, 200);
   }
 
@@ -96,16 +105,15 @@ export class ValuePickerComponent {
     } else {
       next.add(option.key);
     }
-    this.chosen.set(next);
     const known = new Map([...this.values().map((v): [string, LayoutScalar] => [JSON.stringify(v), v]), ...this.options().map((o): [string, LayoutScalar] => [o.key, o.value])]);
     this.changed.emit([...next].flatMap((key) => (known.has(key) ? [known.get(key) ?? null] : [])));
   }
 
-  private load(search: string): void {
+  private load(column: string, search: string): void {
     this.generation += 1;
     const mine = this.generation;
     this.note.set("Loading…");
-    this.source()(this.column(), search, LIMIT).then(
+    this.source()(column, search, LIMIT).then(
       (result) => {
         if (mine !== this.generation) {
           return;

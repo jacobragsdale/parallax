@@ -23,7 +23,8 @@ pub enum FilterOp {
     Gt(Scalar),
     /// Greater than or equal to the value.
     Ge(Scalar),
-    /// One of the values.
+    /// One of the values. A null in the list matches nulls, as "(blank)" does in a
+    /// spreadsheet's filter list.
     In(Vec<Scalar>),
     /// None of the values. Nulls do not match.
     NotIn(Vec<Scalar>),
@@ -67,7 +68,8 @@ enum Operand {
 #[derive(Clone, Debug)]
 enum Test {
     Compare(std::cmp::Ordering, bool, Operand),
-    In(FxHashSet<Key>, FxHashSet<String>, bool),
+    /// Keys, texts, whether nulls match, and whether the test is negated.
+    In(FxHashSet<Key>, FxHashSet<String>, bool, bool),
     Null(bool),
     Contains(String),
     StartsWith(String),
@@ -120,9 +122,17 @@ impl CompiledFilter {
             FilterOp::Gt(v) => Test::Compare(Greater, false, operand(name, &ty, v)?),
             FilterOp::Le(v) => Test::Compare(Greater, true, operand(name, &ty, v)?),
             FilterOp::In(values) | FilterOp::NotIn(values) => {
+                let negate = matches!(filter.op, FilterOp::NotIn(_));
                 let mut keys = FxHashSet::default();
                 let mut texts = FxHashSet::default();
+                let mut nulls = false;
                 for v in values {
+                    // "In" may list null to match nulls; "not in" keeps SQL's rule
+                    // that nulls never match, so a null there is refused.
+                    if *v == Scalar::Null && !negate {
+                        nulls = true;
+                        continue;
+                    }
                     match operand(name, &ty, v)? {
                         Operand::Key(k) => {
                             keys.insert(k);
@@ -132,7 +142,7 @@ impl CompiledFilter {
                         }
                     }
                 }
-                Test::In(keys, texts, matches!(filter.op, FilterOp::NotIn(_)))
+                Test::In(keys, texts, nulls, negate)
             }
             FilterOp::IsNull => Test::Null(false),
             FilterOp::IsNotNull => Test::Null(true),
@@ -158,6 +168,7 @@ impl CompiledFilter {
         let key = column.key(row);
         match &self.test {
             Test::Null(negate) => (key == Key::Null) == !*negate,
+            Test::In(_, _, nulls, _) if key == Key::Null => *nulls,
             _ if key == Key::Null => false,
             Test::Compare(ordering, negate, operand) => {
                 let actual = match operand {
@@ -166,7 +177,7 @@ impl CompiledFilter {
                 };
                 (actual == *ordering) != *negate
             }
-            Test::In(keys, texts, negate) => {
+            Test::In(keys, texts, _, negate) => {
                 let found = match column.text(key) {
                     Some(t) => texts.contains(t),
                     None => keys.contains(&key),

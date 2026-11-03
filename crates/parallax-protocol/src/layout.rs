@@ -60,9 +60,9 @@ pub struct Layout {
     /// unless they set their own.
     pub formats: BTreeMap<String, LayoutFormat>,
     /// Column widths in CSS pixels, chosen by the user. Keys are source column
-    /// names for flat views, measure positions (`"0"`, `"1"`, ...) for the data
-    /// columns of grouped views, and `"__tree"` for the group column. The engine
-    /// ignores them.
+    /// names for flat views, `"__measure:0"`, `"__measure:1"` and so on for the
+    /// data columns of grouped views, and `"__tree"` for the group column. The
+    /// engine ignores them.
     pub column_widths: BTreeMap<String, u32>,
 }
 
@@ -1060,7 +1060,7 @@ mod tests {
             "expand_depth": 2,
             "expanded": [{"path": ["Atlas", null, 1.5, true], "expanded": false}],
             "formats": {"quantity": {"abbreviate": "thousands"}, "trade_time": {"precision": "microseconds"}},
-            "column_widths": {"fund": 180, "__tree": 300, "0": 120, "region": 0}
+            "column_widths": {"fund": 180, "__tree": 300, "__measure:0": 120, "region": 0}
         }"#;
         [Layout::default(), Layout::from_json(full).unwrap()]
             .iter()

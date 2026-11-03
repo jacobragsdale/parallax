@@ -576,6 +576,63 @@ pub fn canonical(ty: &ColumnType, value: &Scalar) -> String {
     out
 }
 
+/// A value as the JSON a layout's paths and filters hold, for a browser: exact,
+/// and readable back by the layout parser. Integers beyond 2^53 and decimals are
+/// strings, because JavaScript numbers would round them; infinities are `"inf"`
+/// and `"-inf"`; dates are `YYYY-MM-DD`; instants are RFC 3339 in UTC with a `Z`,
+/// and wall-clock times have no zone.
+#[must_use]
+pub fn scalar_json(ty: &ColumnType, value: &Scalar) -> String {
+    const SAFE: i64 = 1 << 53;
+    match value {
+        Scalar::Null => "null".to_owned(),
+        Scalar::Boolean(b) => b.to_string(),
+        Scalar::Int64(i) if (-SAFE..=SAFE).contains(i) => i.to_string(),
+        Scalar::Int64(i) => format!("\"{i}\""),
+        Scalar::Float64(f) if f.is_nan() => "\"NaN\"".to_owned(),
+        Scalar::Float64(f) if f.is_infinite() => {
+            if *f > 0.0 { "\"inf\"" } else { "\"-inf\"" }.to_owned()
+        }
+        Scalar::Float64(f) => format!("{f:?}"),
+        Scalar::Decimal(d) => {
+            let scale = match ty {
+                ColumnType::Decimal { scale, .. } => i32::from(*scale),
+                _ => 0,
+            };
+            format!("\"{}\"", exact_decimal(*d, scale))
+        }
+        Scalar::Utf8(s) => json_string(s),
+        Scalar::Date32(d) => json_string(&date_text(*d)),
+        Scalar::Timestamp(t) => {
+            let zoned = matches!(ty, ColumnType::Timestamp { timezone: Some(_) });
+            let text =
+                civil_text(*t, &TimeZone::UTC, TimePrecision::Microseconds).replacen(' ', "T", 1);
+            json_string(&if zoned { format!("{text}Z") } else { text })
+        }
+    }
+}
+
+/// Writes text as a JSON string.
+fn json_string(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 2);
+    out.push('"');
+    for c in text.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if u32::from(c) < 0x20 => {
+                write!(out, "\\u{:04x}", u32::from(c)).expect("writes to a string")
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 /// An exact decimal, `unscaled × 10^-scale`, with no grouping, such as
 /// `-1234.50`. A negative scale appends zeros.
 #[must_use]
@@ -807,6 +864,44 @@ mod tests {
             })
             .is_err()
         );
+    }
+
+    #[test]
+    fn scalars_become_exact_json() {
+        let instant = ColumnType::Timestamp {
+            timezone: Some("UTC".into()),
+        };
+        let dec = ColumnType::Decimal {
+            precision: 20,
+            scale: 2,
+        };
+        assert_eq!(scalar_json(&ColumnType::Int64, &Scalar::Int64(42)), "42");
+        assert_eq!(
+            scalar_json(&ColumnType::Int64, &Scalar::Int64(1 << 60)),
+            "\"1152921504606846976\""
+        );
+        assert_eq!(
+            scalar_json(&ColumnType::Float64, &Scalar::Float64(0.1)),
+            "0.1"
+        );
+        assert_eq!(
+            scalar_json(&ColumnType::Float64, &Scalar::Float64(f64::NEG_INFINITY)),
+            "\"-inf\""
+        );
+        assert_eq!(scalar_json(&dec, &Scalar::Decimal(-5)), "\"-0.05\"");
+        assert_eq!(
+            scalar_json(&ColumnType::Utf8, &Scalar::Utf8("a\"b\\c\n\u{1}".into())),
+            "\"a\\\"b\\\\c\\n\\u0001\""
+        );
+        assert_eq!(
+            scalar_json(&ColumnType::Date32, &Scalar::Date32(0)),
+            "\"1970-01-01\""
+        );
+        assert_eq!(
+            scalar_json(&instant, &Scalar::Timestamp(-1)),
+            "\"1969-12-31T23:59:59.999999Z\""
+        );
+        assert_eq!(scalar_json(&ColumnType::Utf8, &Scalar::Null), "null");
     }
 
     #[test]

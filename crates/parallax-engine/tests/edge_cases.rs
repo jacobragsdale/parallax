@@ -182,3 +182,41 @@ fn text_min_and_max_follow_the_engine_collation() {
     );
     let _ = DataType::Utf8;
 }
+
+#[test]
+fn an_in_list_can_match_blanks() {
+    use parallax_engine::{Filter, FilterOp};
+    let t = table(vec![(
+        "desk",
+        Arc::new(StringArray::from(vec![Some("Rates"), None, Some("FX")])) as ArrayRef,
+    )]);
+    let count = |op: FilterOp| {
+        let mut view = View::new(
+            &t,
+            ViewConfig {
+                filters: vec![Filter::new("desk", op)],
+                ..ViewConfig::default()
+            },
+        )
+        .unwrap();
+        view.num_rows(&t)
+    };
+    assert_eq!(count(FilterOp::In(vec![Scalar::Null])), 1);
+    assert_eq!(
+        count(FilterOp::In(vec![Scalar::Null, Scalar::Utf8("FX".into())])),
+        2
+    );
+    assert_eq!(count(FilterOp::In(vec![Scalar::Utf8("FX".into())])), 1);
+    // "Not in" keeps SQL's rule: nulls never match, and listing null is an error.
+    assert_eq!(count(FilterOp::NotIn(vec![Scalar::Utf8("FX".into())])), 1);
+    assert!(
+        View::new(
+            &t,
+            ViewConfig {
+                filters: vec![Filter::new("desk", FilterOp::NotIn(vec![Scalar::Null]))],
+                ..ViewConfig::default()
+            },
+        )
+        .is_err()
+    );
+}

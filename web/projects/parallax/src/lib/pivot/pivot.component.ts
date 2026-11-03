@@ -5,7 +5,7 @@
  * clicking a value opens the rows behind its group in a drawer below.
  */
 
-import { ChangeDetectionStrategy, Component, DOCUMENT, ViewEncapsulation, computed, inject, input, model, signal, viewChild } from "@angular/core";
+import { ChangeDetectionStrategy, Component, DOCUMENT, ViewEncapsulation, computed, effect, inject, input, model, signal, untracked, viewChild } from "@angular/core";
 
 import type { DistinctValues } from "../connection";
 import { GridComponent } from "../grid/grid.component";
@@ -17,6 +17,11 @@ import type { ThemeName } from "../theme";
 import { drillLayout } from "./edit";
 import { PivotPanelComponent } from "./pivot-panel.component";
 import type { ValueSource } from "./value-picker.component";
+
+/** What decides the rows behind a group: the dataset, filters and groups. */
+function computedKey(layout: Layout): string {
+  return JSON.stringify([layout.dataset, layout.parameters, layout.filters, layout.group_by, layout.split_by]);
+}
 
 const PIVOT_STYLES = `
   px-pivot {
@@ -251,7 +256,7 @@ export class PivotComponent {
 
   private readonly gridRef = viewChild.required<GridComponent>("grid");
   protected readonly panelOpen = signal(true);
-  protected readonly drill = signal<{ readonly label: string; readonly layout: Layout } | null>(null);
+  protected readonly drill = signal<{ readonly label: string; readonly layout: Layout; readonly source: string } | null>(null);
   protected readonly current = computed((): Layout | null => {
     const parsed = layoutSchema.safeParse(this.layout());
     return parsed.success ? parsed.data : null;
@@ -261,20 +266,29 @@ export class PivotComponent {
 
   constructor() {
     installThemeStyles(inject(DOCUMENT));
+    // The drawer's rows follow from the pivot's filters and groups; once those
+    // change it would show rows that no longer add up to the cells above, so it closes.
+    effect(() => {
+      const layout = this.current();
+      const open = untracked(() => this.drill());
+      if (open !== null && (layout === null || computedKey(layout) !== open.source)) {
+        this.drill.set(null);
+      }
+    });
   }
 
   protected updateDrill(layout: LayoutInput): void {
     const open = this.drill();
     const parsed = layoutSchema.safeParse(layout);
     if (open !== null && parsed.success) {
-      this.drill.set({ label: open.label, layout: parsed.data });
+      this.drill.set({ ...open, layout: parsed.data });
     }
   }
 
   protected openDrill(request: DrillRequest): void {
     const layout = this.current();
     if (layout !== null) {
-      this.drill.set({ label: request.label, layout: drillLayout(layout, request.path) });
+      this.drill.set({ label: request.label, layout: drillLayout(layout, request.path, request.split), source: computedKey(layout) });
     }
   }
 }

@@ -28,7 +28,7 @@ describe("flatGeometry", () => {
 
 describe("groupedGeometry", () => {
   // Three measures repeated for 1,000 pivot values and the row total.
-  const g = groupedGeometry(3003, 3, { "0": 100, "2": 50, __tree: 200 });
+  const g = groupedGeometry(3003, 3, { "__measure:0": 100, "__measure:2": 50, __tree: 200 });
   const span = 100 + DEFAULT_WIDTH + 50;
 
   it("repeats measure widths after the pinned group column", () => {
@@ -46,7 +46,7 @@ describe("groupedGeometry", () => {
     expect(g.indexAt(g.x(column) + g.width(column) - 1)).toBe(column);
     expect(g.indexAt(0)).toBe(0);
     expect(g.indexAt(1e12)).toBe(3002);
-    expect(g.widthKey(column)).toBe("2");
+    expect(g.widthKey(column)).toBe("__measure:2");
   });
 
   it("defaults the group column's width", () => {

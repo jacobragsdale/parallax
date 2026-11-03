@@ -206,6 +206,8 @@ pub mod meta {
     pub const TITLE: &str = "parallax.title";
     /// For values of grouped views, the position of the measure in the layout.
     pub const MEASURE: &str = "parallax.measure";
+    /// For values under column pivots, the pivot values as a JSON array.
+    pub const SPLIT: &str = "parallax.split";
 }
 
 /// The roles a frame field can have.
@@ -950,6 +952,7 @@ fn flat_window(
             None,
             formatter,
             None,
+            None,
         );
     }
     (out.finish(), flat.order.len(), flat.columns.len())
@@ -997,6 +1000,7 @@ impl FrameBuilder {
         flags: Option<Vec<u8>>,
         formatter: &Formatter,
         measure: Option<usize>,
+        split: Option<String>,
     ) {
         let name = source.name().as_str();
         let data_type = values.data_type().clone();
@@ -1024,6 +1028,9 @@ impl FrameBuilder {
         metadata.insert(meta::TITLE.to_owned(), title);
         if let Some(m) = measure {
             metadata.insert(meta::MEASURE.to_owned(), m.to_string());
+        }
+        if let Some(split) = split {
+            metadata.insert(meta::SPLIT.to_owned(), split);
         }
         self.push(
             Field::new(name, data_type, source.is_nullable()).with_metadata(metadata),
@@ -1712,13 +1719,19 @@ impl Grouped {
                 .map(|v| self.shown(table, &ids_of(v), split, m))
                 .collect();
             let label = config.measures[m].label();
-            let (name, title) = match split {
-                ROW_TOTAL if self.split_columns.is_empty() => (label.clone(), label),
-                ROW_TOTAL => (format!("Total | {label}"), format!("Total | {label}")),
+            let (name, title, split_json) = match split {
+                ROW_TOTAL if self.split_columns.is_empty() => (label.clone(), label, None),
+                ROW_TOTAL => (format!("Total | {label}"), format!("Total | {label}"), None),
                 s => {
                     let scalars = self.split_scalars(table, s);
                     let mut name = String::new();
                     let mut title = String::new();
+                    let json: Vec<String> = self
+                        .split_columns
+                        .iter()
+                        .zip(&scalars)
+                        .map(|(&c, v)| format::scalar_json(table.column(c).column_type(), v))
+                        .collect();
                     for (&c, value) in self.split_columns.iter().zip(&scalars) {
                         let ty = table.column(c).column_type();
                         match value {
@@ -1731,7 +1744,7 @@ impl Grouped {
                     }
                     name.push_str(&label);
                     title.push_str(&label);
-                    (name, title)
+                    (name, title, Some(format!("[{}]", json.join(","))))
                 }
             };
             let (array, data_type) = values_to_arrow(table, &measure, &values);
@@ -1753,6 +1766,7 @@ impl Grouped {
                 Some(flags),
                 &formatters.measures[m],
                 Some(m),
+                split_json,
             );
         }
         (out.finish(), total_rows, total_columns)

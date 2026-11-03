@@ -216,7 +216,8 @@ test.describe("px-pivot", () => {
       .first()
       .dblclick({ position: { x: 320, y: ROW * 2 + ROW / 2 } });
     const drawer = page.locator(".px-drill");
-    await expect(drawer).toContainText("Rows behind Atlas Global Macro");
+    // The first value column sits under the Bond pivot, so the drawer is the fund's bonds.
+    await expect(drawer).toContainText("Rows behind Atlas Global Macro, Bond");
     await expect(drawer.locator(".px-status-rows")).toContainText("rows", { timeout: 30_000 });
     await expect(drawer.locator(".px-error")).toHaveCount(0);
   });
@@ -230,5 +231,40 @@ test.describe("px-pivot", () => {
     expect(url).toContain("layout=1.");
     await page.goto(url);
     await expect.poll(async () => layout(page)).toMatchObject({ group_by: ["fund", "strategy", "sector"] });
+  });
+
+  test("a link to a flat view opens a grid, whatever the preset", async ({ page }) => {
+    await open(page, "preset=trades");
+    await page.getByRole("button", { name: "Copy link to this view" }).click();
+    await expect(page.getByRole("status").first()).toContainText("links to this view");
+    const link = new URL(page.url()).searchParams.get("layout") ?? "";
+    await page.goto(`/?preset=pivot&layout=${link}`);
+    await expect(page.locator(".px-status-dataset")).toHaveText("trades", { timeout: 60_000 });
+    await expect(page.locator("px-pivot")).toHaveCount(0);
+  });
+
+  test("a value picked as blank matches the empty groups", async ({ page }) => {
+    await open(page, "preset=pivot");
+    // sector has blanks in the generated positions.
+    await page.getByRole("button", { name: "Remove fund" }).click();
+    await page.getByRole("button", { name: "Remove strategy" }).click();
+    await page.getByRole("button", { name: "Add filter" }).click();
+    const blank = page.locator(".px-popover label", { hasText: "(blank)" }).locator("input");
+    await expect(blank).toBeVisible({ timeout: 30_000 });
+    await blank.check();
+    await expect.poll(async () => layout(page)).toMatchObject({ filters: [{ column: "sector", op: "in", values: [null] }] });
+    await expect(page.locator(".px-error")).toHaveCount(0);
+  });
+
+  test("changing a filter to a list keeps every row until a value is picked", async ({ page }) => {
+    await open(page, "preset=pivot");
+    const before = await rowCount(page);
+    await page.getByRole("button", { name: "Add filter" }).click();
+    await page.locator(".px-popover input[type=checkbox]").first().check();
+    await expect.poll(() => rowCount(page)).toBeLessThan(before);
+    // Moving the committed filter to another column clears its values, so it becomes a draft again.
+    await page.getByRole("combobox", { name: "Filter column" }).first().selectOption("strategy");
+    await expect.poll(() => rowCount(page)).toBe(before);
+    expect(await layout(page)).toMatchObject({ filters: [] });
   });
 });

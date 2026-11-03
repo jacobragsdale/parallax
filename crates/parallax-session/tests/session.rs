@@ -223,7 +223,7 @@ fn errors_name_the_problem() {
 
 /// The WebAssembly test suite checks the same value, so both builds must answer
 /// byte for byte the same.
-pub const TRANSCRIPT_FINGERPRINT: u64 = 7_641_691_102_802_052_240;
+pub const TRANSCRIPT_FINGERPRINT: u64 = 14_296_254_853_414_913_943;
 
 #[test]
 fn transcript_fingerprint_is_stable() {

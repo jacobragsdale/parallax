@@ -4,7 +4,7 @@ import { ChangeDetectionStrategy, Component, computed, input, output } from "@an
 
 import { AGGREGATES, SHOW_AS } from "../layout";
 import type { Layout, LayoutMeasure } from "../layout";
-import { moveMeasure, removeMeasure, updateMeasure } from "./edit";
+import { measure, moveMeasure, removeMeasure, updateMeasure } from "./edit";
 import { NUMERIC_AGGREGATES, NUMERIC_KINDS, choices, fieldChoices } from "./labels";
 import type { PivotField } from "./labels";
 import { SelectComponent } from "./select.component";
@@ -44,9 +44,7 @@ export class PivotMeasureComponent {
 
   protected readonly aggregates = choices(AGGREGATES);
   protected readonly showAs = choices(SHOW_AS);
-  protected readonly measure = computed(
-    (): LayoutMeasure => this.layout().measures[this.index()] ?? { column: null, aggregate: "count_all", percentile: null, weight: null, unit_column: null, show_as: "value", format: null }
-  );
+  protected readonly measure = computed((): LayoutMeasure => this.layout().measures[this.index()] ?? measure("count_all", null));
   private readonly numeric = computed(() => this.fields().filter((f) => NUMERIC_KINDS.includes(f.kind)));
   protected readonly columns = computed(() => fieldChoices(NUMERIC_AGGREGATES.includes(this.measure().aggregate) ? this.numeric() : this.fields()));
   protected readonly weights = computed(() => [{ value: "", text: "weight…" }, ...fieldChoices(this.numeric())]);

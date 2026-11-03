@@ -112,10 +112,19 @@ fn filter_sql(table: &Table, f: &Filter) -> String {
         FilterOp::Le(v) => format!("{c} <= {}", lit(v)),
         FilterOp::Gt(v) => format!("{c} > {}", lit(v)),
         FilterOp::Ge(v) => format!("{c} >= {}", lit(v)),
-        FilterOp::In(vs) => format!(
-            "{c} IN ({})",
-            vs.iter().map(lit).collect::<Vec<_>>().join(", ")
-        ),
+        FilterOp::In(vs) => {
+            let listed: Vec<String> = vs.iter().filter(|v| **v != Scalar::Null).map(lit).collect();
+            let values = if listed.is_empty() {
+                "FALSE".to_owned()
+            } else {
+                format!("{c} IN ({})", listed.join(", "))
+            };
+            if vs.contains(&Scalar::Null) {
+                format!("({values} OR {c} IS NULL)")
+            } else {
+                values
+            }
+        }
         FilterOp::NotIn(vs) => {
             format!(
                 "{c} NOT IN ({})",
@@ -412,15 +421,8 @@ fn random_filter(table: &Table, picker: &mut Picker) -> Option<Filter> {
     let op = match picker.below(9) {
         0 if v != Scalar::Null => FilterOp::Eq(v),
         1 if v != Scalar::Null => FilterOp::Ne(v),
-        2 if v != Scalar::Null => {
-            let w = value_of(table, column, picker);
-            FilterOp::In(
-                vec![v, w]
-                    .into_iter()
-                    .filter(|s| *s != Scalar::Null)
-                    .collect(),
-            )
-        }
+        // Either value may be null, which an "in" list matches as blank.
+        2 => FilterOp::In(vec![v, value_of(table, column, picker)]),
         3 if v != Scalar::Null => FilterOp::NotIn(vec![v]),
         4 => FilterOp::IsNull,
         5 => FilterOp::IsNotNull,

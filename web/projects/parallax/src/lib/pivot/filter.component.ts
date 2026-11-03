@@ -17,7 +17,7 @@ import type { ValueSource } from "./value-picker.component";
   imports: [SelectComponent, ValuePickerComponent],
   template: `
     <px-select label="Filter column" [choices]="columns()" [value]="filter().column" (picked)="patch({ column: $event, value: null, values: [] })" />
-    <px-select label="Operator" [choices]="ops" [value]="filter().op" (picked)="setOp($event)" />
+    <px-select label="Operator" [choices]="ops()" [value]="filter().op" (picked)="setOp($event)" />
     @if (operand() === "one") {
       <input aria-label="Value" [value]="valueText()" (change)="setValue($event)" />
     } @else if (operand() === "many") {
@@ -25,7 +25,7 @@ import type { ValueSource } from "./value-picker.component";
     }
     <button type="button" aria-label="Remove filter" (click)="removed.emit()">×</button>
     @if (picking() && operand() === "many") {
-      <px-value-picker class="px-popover" [column]="filter().column" [source]="source()" [values]="filter().values" (changed)="setValues($event)" />
+      <px-value-picker class="px-popover" [column]="filter().column" [source]="source()" [values]="filter().values" [searchable]="kind() === 'text'" (changed)="setValues($event)" />
     }
   `
 })
@@ -43,7 +43,9 @@ export class PivotFilterComponent {
   /** Fires when the user removes the filter. */
   public readonly removed = output();
 
-  protected readonly ops = choices(FILTER_OPS);
+  private readonly kind = computed(() => this.fields().find((f) => f.name === this.filter().column)?.kind ?? "text");
+  /** Text matching applies to text columns only. */
+  protected readonly ops = computed(() => choices(this.kind() === "text" ? FILTER_OPS : FILTER_OPS.filter((op) => op !== "contains" && op !== "starts_with")));
   protected readonly picking = linkedSignal(() => this.startPicking());
   protected readonly columns = computed(() => fieldChoices(this.fields()));
   protected readonly operand = computed(() => operandOf(this.filter().op));
@@ -68,13 +70,14 @@ export class PivotFilterComponent {
   protected setOp(value: string): void {
     const op = FILTER_OPS.find((o) => o === value);
     if (op !== undefined) {
+      // A list operator opens its value list, since it matches nothing until values are picked.
+      this.picking.set(operandOf(op) === "many");
       this.patch({ op });
     }
   }
 
   protected setValue(event: Event): void {
     const text = event.target instanceof HTMLInputElement ? event.target.value : "";
-    const kind = this.fields().find((f) => f.name === this.filter().column)?.kind ?? "text";
-    this.patch({ value: filterValue(kind, text) });
+    this.patch({ value: filterValue(this.kind(), text) });
   }
 }

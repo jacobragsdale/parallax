@@ -12,6 +12,12 @@ import { PivotMeasureComponent } from "./measure.component";
 import { PivotOptionsComponent } from "./options.component";
 import type { ValueSource } from "./value-picker.component";
 
+/** Whether a filter says what to match: an empty list or a missing value would hide every row. */
+function complete(f: LayoutFilter): boolean {
+  const operand = operandOf(f.op);
+  return operand === "none" || (operand === "one" ? f.value !== null : f.values.length > 0);
+}
+
 @Component({
   selector: "px-pivot-panel",
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -84,15 +90,19 @@ export class PivotPanelComponent {
     }
   }
 
+  /** Edits a filter in the layout; one that no longer says what to match goes back to being a draft. */
   protected editFilter(index: number, edited: LayoutFilter): void {
-    this.changed.emit(updateFilter(this.layout(), index, edited));
+    if (complete(edited)) {
+      this.changed.emit(updateFilter(this.layout(), index, edited));
+    } else {
+      this.draft.set(edited);
+      this.changed.emit(removeFilter(this.layout(), index));
+    }
   }
 
   /** Adds the draft to the layout once it says what to match. */
   protected editDraft(edited: LayoutFilter): void {
-    const operand = operandOf(edited.op);
-    const complete = operand === "none" || (operand === "one" ? edited.value !== null : edited.values.length > 0);
-    if (complete) {
+    if (complete(edited)) {
       this.draft.set(null);
       this.picking.set(this.layout().filters.length);
       this.changed.emit(addFilter(this.layout(), edited));

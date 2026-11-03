@@ -62,6 +62,8 @@ export interface DrawStats {
 export interface DrillRequest {
   /** The group's values from the outermost level; empty for the grand total. */
   readonly path: readonly LayoutScalar[];
+  /** The pivot values of the cell's column, or null for a row total or a flat column. */
+  readonly split: readonly LayoutScalar[] | null;
   /** The group's label as shown. */
   readonly label: string;
 }
@@ -610,19 +612,22 @@ export class GridComponent {
       // The marker toggles on a single click, so only the label toggles here.
       this.toggleRow(hit.row);
     } else if (!hit.header && hit.column !== null && hit.column >= 0 && hit.row !== null) {
-      this.requestDrill(hit.row);
+      this.requestDrill(hit.row, hit.column);
     }
   }
 
-  /** Asks for the rows behind the group in view row `row`, if it is one group rather than an Other row. */
-  private requestDrill(row: number): void {
+  /** Asks for the rows behind the cell at view row `row` and data column `column`, if its row is one group rather than an Other row. */
+  private requestDrill(row: number, column: number): void {
     const frame = this.source.frame();
     const tree = frame?.tree ?? null;
     const local = frame === null ? -1 : row - frame.firstRow;
     if (frame === null || tree === null || local < 0 || local >= frame.rowCount || tree.kind(local) === "other") {
       return;
     }
-    this.drill.emit({ path: groupPath(frame, local), label: tree.label(local) });
+    const data = frame.columns[column - frame.firstColumn];
+    const split = data?.split ?? null;
+    const label = split === null || data === undefined ? tree.label(local) : `${tree.label(local)}, ${data.title.slice(0, data.title.lastIndexOf(" | "))}`;
+    this.drill.emit({ path: groupPath(frame, local), split, label });
   }
 
   // ---- Layout changes ----------------------------------------------------

@@ -109,6 +109,15 @@ fn pivot_columns_that_display_alike_stay_distinct() {
     assert_eq!(title_of(&frame.batch, 0), "1.00 | sum(pnl)");
     assert_eq!(title_of(&frame.batch, 1), "1.00 | sum(pnl)");
     assert_eq!(title_of(&frame.batch, 2), "Total | sum(pnl)");
+    // Each pivot column carries its pivot values as exact JSON; the total has none.
+    let splits: Vec<Option<String>> = values
+        .iter()
+        .map(|&i| schema.field(i).metadata().get(meta::SPLIT).cloned())
+        .collect();
+    assert_eq!(
+        splits,
+        [Some("[1.001]".to_owned()), Some("[1.004]".to_owned()), None]
+    );
 }
 
 #[test]

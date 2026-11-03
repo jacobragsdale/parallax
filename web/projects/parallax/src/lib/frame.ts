@@ -14,6 +14,7 @@
  */
 
 import { DataType, Table, tableFromIPC } from "apache-arrow";
+import { z } from "zod";
 import type { Field, Vector } from "apache-arrow";
 
 import { exactDecimal } from "./format";
@@ -54,6 +55,8 @@ export interface FrameColumn {
   readonly copy: (row: number) => string;
   /** `true` for numbers, which align right. */
   readonly numeric: boolean;
+  /** For a column under column pivots, its pivot values as exact JSON; null otherwise. */
+  readonly split: readonly (string | number | boolean | null)[] | null;
 }
 
 /** The key of one group level, on every row of a grouped view. */
@@ -337,6 +340,32 @@ interface DataParts {
   copy?: Vector;
 }
 
+/** Returns `true` for the Arrow types that hold numbers. */
+export function isNumericType(type: unknown): boolean {
+  return DataType.isFloat(type) || DataType.isInt(type) || DataType.isDecimal(type);
+}
+
+const splitSchema = z.array(z.union([z.string(), z.number(), z.boolean(), z.null()]));
+
+/** Reads a column's pivot values from its metadata. */
+function splitOf(field: Field): FrameColumn["split"] {
+  const text = field.metadata.get("parallax.split");
+  if (text === undefined) {
+    return null;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new FrameError(`${field.name}: pivot values are not JSON`);
+  }
+  const result = splitSchema.safeParse(parsed);
+  if (!result.success) {
+    throw new FrameError(`${field.name}: pivot values must be a list of plain values`);
+  }
+  return result.data;
+}
+
 function dataColumn(index: number, parts: DataParts, rowCount: number): FrameColumn {
   const { value, text } = parts;
   if (value === undefined || text === undefined) {
@@ -363,7 +392,8 @@ function dataColumn(index: number, parts: DataParts, rowCount: number): FrameCol
       }
       return exactText(read(row)) ?? shown(row);
     },
-    numeric: DataType.isFloat(field.type) || DataType.isInt(field.type) || DataType.isDecimal(field.type)
+    numeric: isNumericType(field.type),
+    split: splitOf(field)
   };
 }
 

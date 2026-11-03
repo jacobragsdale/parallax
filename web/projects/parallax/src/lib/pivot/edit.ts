@@ -7,7 +7,7 @@
  */
 
 import type { FieldKind } from "../grid/grid-source";
-import { measureWidthKey } from "../layout";
+import { measureOfWidthKey, measureWidthKey } from "../layout";
 import type { Layout, LayoutFilter, LayoutMeasure, LayoutScalar } from "../layout";
 
 /** Which list of group columns an edit applies to. */
@@ -57,7 +57,7 @@ function renumber(layout: Layout, measures: readonly LayoutMeasure[], from: read
   const sortedBy = by === "key" ? null : at(by.measure);
   const widths: Record<string, number> = {};
   for (const [key, width] of Object.entries(layout.column_widths)) {
-    const old = /^\d+$/.test(key) ? Number(key) : null;
+    const old = measureOfWidthKey(key);
     if (old === null) {
       widths[key] = width;
     } else {
@@ -205,16 +205,19 @@ export function setExpandDepth(layout: Layout, depth: number): Layout {
 
 /**
  * A flat view of the rows behind one group: the pivot's filters plus one filter
- * per group level, with the pivot's formats. An empty path is the grand total.
+ * per group level and, for a cell under column pivots, one per pivot level, with
+ * the pivot's formats. An empty path is the grand total.
  */
-export function drillLayout(layout: Layout, path: readonly LayoutScalar[]): Layout {
-  const levels = path.map((value, i): LayoutFilter | null => {
-    const column = layout.group_by[i];
-    if (column === undefined) {
-      return null;
-    }
-    return value === null ? filter(column, "is_null") : { ...filter(column, "eq"), value };
-  });
+export function drillLayout(layout: Layout, path: readonly LayoutScalar[], split: readonly LayoutScalar[] | null = null): Layout {
+  const match = (columns: readonly string[], values: readonly LayoutScalar[]): (LayoutFilter | null)[] =>
+    values.map((value, i) => {
+      const column = columns[i];
+      if (column === undefined) {
+        return null;
+      }
+      return value === null ? filter(column, "is_null") : { ...filter(column, "eq"), value };
+    });
+  const levels = [...match(layout.group_by, path), ...match(layout.split_by, split ?? [])];
   return {
     ...layout,
     columns: [],

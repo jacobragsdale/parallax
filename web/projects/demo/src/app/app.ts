@@ -41,10 +41,12 @@ function readSearch(): Search {
       </details>
     </header>
     <main>
-      @if (grouped()) {
-        <px-pivot [(layout)]="layout" [theme]="search.theme" />
-      } @else {
-        <px-grid [(layout)]="layout" [theme]="search.theme" />
+      @if (ready()) {
+        @if (grouped()) {
+          <px-pivot [(layout)]="layout" [theme]="search.theme" />
+        } @else {
+          <px-grid [(layout)]="layout" [theme]="search.theme" />
+        }
       }
     </main>
   `,
@@ -87,8 +89,14 @@ export class App {
   protected readonly search = readSearch();
   protected readonly layout = signal<LayoutInput>(PRESETS[this.search.preset]);
   protected readonly layoutJson = computed(() => JSON.stringify(this.layout(), null, 2));
-  protected readonly grouped = computed(() => this.search.preset === "pivot");
+  /** A linked layout opens as a pivot if it groups, and as a grid otherwise. */
+  protected readonly grouped = computed(() => {
+    const layout = this.layout();
+    return (layout.group_by?.length ?? 0) > 0 || (layout.split_by?.length ?? 0) > 0 || (layout.measures?.length ?? 0) > 0;
+  });
   protected readonly note = signal("");
+  /** False while a linked layout is being read, so the preset never opens in its place. */
+  protected readonly ready = signal(this.search.layout === undefined);
 
   constructor() {
     const link = this.search.layout;
@@ -96,9 +104,11 @@ export class App {
       decodeLayout(link).then(
         (layout) => {
           this.layout.set(layout);
+          this.ready.set(true);
         },
         (failure: unknown) => {
-          this.note.set(`The link's layout could not be read: ${failure instanceof Error ? failure.message : String(failure)}`);
+          this.note.set(`The link's layout could not be read, so the preset is shown: ${failure instanceof Error ? failure.message : String(failure)}`);
+          this.ready.set(true);
         }
       );
     }

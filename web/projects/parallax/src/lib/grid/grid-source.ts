@@ -15,6 +15,7 @@ import { DataType, Table, tableFromIPC } from "apache-arrow";
 import { ParallaxClient } from "../client";
 import type { DistinctValues, Viewport, ViewHandle } from "../connection";
 import { pathValue } from "../format";
+import { isNumericType } from "../frame";
 import type { FrameData } from "../frame";
 import type { Layout, LayoutScalar } from "../layout";
 import type { TableStatus } from "../proto/parallax_pb";
@@ -36,14 +37,8 @@ function kindOf(type: unknown): FieldKind {
   if (DataType.isBool(type)) {
     return "boolean";
   }
-  if (DataType.isInt(type)) {
-    return "integer";
-  }
-  if (DataType.isFloat(type)) {
-    return "float";
-  }
-  if (DataType.isDecimal(type)) {
-    return "decimal";
+  if (isNumericType(type)) {
+    return DataType.isInt(type) ? "integer" : DataType.isFloat(type) ? "float" : "decimal";
   }
   if (DataType.isDate(type)) {
     return "date";

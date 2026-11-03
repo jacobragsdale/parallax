@@ -15,7 +15,7 @@ const base = parseLayout({
   ],
   top_n: { n: 5, measure: 2 },
   expanded: [{ path: ["Atlas"], expanded: false }],
-  column_widths: { "0": 100, "1": 110, "2": 120, __tree: 300 }
+  column_widths: { "__measure:0": 100, "__measure:1": 110, "__measure:2": 120, __tree: 300, "2024": 90 }
 });
 
 describe("row and column groups", () => {
@@ -46,7 +46,7 @@ describe("measures", () => {
       { measure: 1, op: "ge", value: 10 }
     ]);
     expect(removed.top_n?.measure).toBe(1);
-    expect(removed.column_widths).toEqual({ "0": 100, "1": 120, __tree: 300 });
+    expect(removed.column_widths).toEqual({ "__measure:0": 100, "__measure:1": 120, __tree: 300, "2024": 90 });
   });
 
   it("removing the top-N measure clears top-N", () => {
@@ -58,7 +58,7 @@ describe("measures", () => {
     expect(moved.measures.map((m) => m.column)).toEqual(["daily_pnl_usd", "market_value_usd", null]);
     expect(moved.group_sort).toEqual({ by: { measure: 0 }, descending: true });
     expect(moved.having[0]).toEqual({ measure: 1, op: "gt", value: 0 });
-    expect(moved.column_widths).toEqual({ "0": 110, "1": 100, "2": 120, __tree: 300 });
+    expect(moved.column_widths).toEqual({ "__measure:0": 110, "__measure:1": 100, "__measure:2": 120, __tree: 300, "2024": 90 });
     expect(moveMeasure(base, 0, -1)).toBe(base);
   });
 
@@ -104,6 +104,14 @@ describe("drillLayout", () => {
     expect(drilled.formats).toEqual(withFilter.formats);
     expect(drilled.dataset).toBe("positions");
     expect(parseLayout(drilled)).toEqual(drilled);
+  });
+
+  it("adds the pivot values of a cell under column pivots", () => {
+    const drilled = drillLayout(base, ["Atlas"], ["Bond"]);
+    expect(drilled.filters.slice(-2)).toEqual([
+      { column: "fund", op: "eq", value: "Atlas", values: [] },
+      { column: "asset_class", op: "eq", value: "Bond", values: [] }
+    ]);
   });
 
   it("drills into every row for the grand total", () => {

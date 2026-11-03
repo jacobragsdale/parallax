@@ -567,7 +567,7 @@
         "type": "integer"
       },
       "default": {},
-      "description": "Column widths in CSS pixels, chosen by the user. Keys are source column\nnames for flat views, measure positions (`\"0\"`, `\"1\"`, ...) for the data\ncolumns of grouped views, and `\"__tree\"` for the group column. The engine\nignores them.",
+      "description": "Column widths in CSS pixels, chosen by the user. Keys are source column\nnames for flat views, `\"__measure:0\"`, `\"__measure:1\"` and so on for the\ndata columns of grouped views, and `\"__tree\"` for the group column. The\nengine ignores them.",
       "type": "object"
     },
     "columns": {

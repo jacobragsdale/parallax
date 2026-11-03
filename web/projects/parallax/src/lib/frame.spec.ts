@@ -61,7 +61,7 @@ const pivot: readonly Column[] = [
   // The second data column comes first in the batch: order is by index, not position.
   column("sum(pnl)", new Float64(), "value", makeData({ type: new Float64(), length: 2, data: new Float64Array([0.1, 1e-7]) }), { "parallax.index": "1", "parallax.title": "sum(pnl)" }),
   column("sum(pnl)#text", new Utf8(), "text", text(["0.10", "0.00"]), { "parallax.index": "1" }),
-  column("sum(mv)", new Decimal(2, 38, 128), "value", decimals([123_456_789_012_345_678_901n, -5n]), { "parallax.index": "0", "parallax.title": "Total | sum(mv)" }),
+  column("sum(mv)", new Decimal(2, 38, 128), "value", decimals([123_456_789_012_345_678_901n, -5n]), { "parallax.index": "0", "parallax.title": "Bond | sum(mv)", "parallax.split": '["Bond"]' }),
   column("sum(mv)#flag", new Uint8(), "flag", makeData({ type: new Uint8(), length: 2, data: new Uint8Array([0, 2]) }), { "parallax.index": "0" }),
   column("sum(mv)#text", new Utf8(), "text", text(["1,234,567,890,123,456,789.01", "mixed"]), { "parallax.index": "0" })
 ];
@@ -69,7 +69,8 @@ const pivot: readonly Column[] = [
 describe("decodeFrame", () => {
   it("matches data columns to their text and flags by index", () => {
     const frame = decode(pivot, 2);
-    expect(frame.columns.map((c) => c.title)).toEqual(["Total | sum(mv)", "sum(pnl)"]);
+    expect(frame.columns.map((c) => c.title)).toEqual(["Bond | sum(mv)", "sum(pnl)"]);
+    expect(frame.columns.map((c) => c.split)).toEqual([["Bond"], null]);
     const [mv, pnl] = frame.columns;
     expect(mv?.text(0)).toBe("1,234,567,890,123,456,789.01");
     expect(mv?.flag(1)).toBe(CellFlag.Mixed);
@@ -97,6 +98,13 @@ describe("decodeFrame", () => {
       c.field.name === "sum(mv)#flag" ? column("sum(mv)#flag", new Uint8(), "flag", makeData({ type: new Uint8(), length: 2, data: new Uint8Array([0, 9]) }), { "parallax.index": "0" }) : c
     );
     expect(() => decode(badFlag, 2)).toThrow(/unknown cell flag/);
+  });
+
+  it("refuses pivot values that are not a list of plain values", () => {
+    const bad = pivot.map((c) =>
+      c.field.name === "sum(mv)" ? { field: new Field(c.field.name, c.field.type, true, new Map([...c.field.metadata, ["parallax.split", '[{"a":1}]']])), data: c.data } : c
+    );
+    expect(() => decode(bad, 2)).toThrow(/plain values/);
   });
 
   it("refuses gaps in data column numbering", () => {

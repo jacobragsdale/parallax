@@ -105,9 +105,18 @@ export function parseLayout(value: unknown): Layout {
   return layoutSchema.parse(value);
 }
 
+/** The prefix of measure keys in `column_widths`, which no column name is expected to start with. */
+export const MEASURE_WIDTH_PREFIX = "__measure:";
+
 /** The key a measure's width is stored under in `column_widths`. */
 export function measureWidthKey(measure: number): string {
-  return String(measure);
+  return `${MEASURE_WIDTH_PREFIX}${String(measure)}`;
+}
+
+/** The measure a `column_widths` key belongs to, or null for a column name. */
+export function measureOfWidthKey(key: string): number | null {
+  const rest = key.startsWith(MEASURE_WIDTH_PREFIX) ? key.slice(MEASURE_WIDTH_PREFIX.length) : "";
+  return /^\d+$/.test(rest) ? Number(rest) : null;
 }
 
 /** The key the group column's width is stored under in `column_widths`. */
