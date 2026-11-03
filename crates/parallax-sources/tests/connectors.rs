@@ -106,6 +106,7 @@ fn http(url: String) -> HttpConfig {
         columns: Vec::new(),
         key: None,
         timeout_seconds: 10,
+        max_bytes: 1 << 20,
     }
 }
 
@@ -289,4 +290,31 @@ fn parameters_cannot_leave_the_directory() {
             "{bad}: {error}"
         );
     }
+}
+
+#[test]
+fn a_response_larger_than_the_limit_is_refused() {
+    let (base, _) = serve(200, "application/json", vec![b' '; 4_096]);
+    let mut config = http(format!("{base}/x"));
+    config.columns = vec![JsonField::new("id", FieldType::Integer)];
+    config.max_bytes = 1_024;
+    let error = Http::new(config).fetch(&BTreeMap::new()).unwrap_err();
+    assert!(
+        error.to_lowercase().contains("limit") || error.contains("reading the response"),
+        "{error}"
+    );
+}
+
+#[test]
+fn parameters_the_path_does_not_use_may_hold_anything() {
+    let share = tempfile::tempdir().unwrap();
+    let file = share.path().join("positions.parquet");
+    write_parquet(&file, &batch());
+    let connector = Parquet::new(ParquetConfig {
+        path: file.display().to_string(),
+        cache_dir: None,
+    });
+    connector
+        .fetch(&parameters(&[("user", "CORP\\jdoe"), ("note", "")]))
+        .unwrap();
 }

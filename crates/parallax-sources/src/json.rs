@@ -189,8 +189,13 @@ impl JsonField {
     }
 }
 
+/// Marks the strings [`quote_bare_numbers`] makes: a control character no JSON
+/// text can hold unescaped.
+const BARE_MARKER: &str = "\u{1}bare:";
+
 /// Rewrites bare `NaN`, `Infinity` and `-Infinity` tokens outside strings as
-/// strings, so that a standard parser reads Python's output.
+/// marked strings, so that a standard parser reads Python's output and only
+/// number columns accept them.
 #[must_use]
 pub fn quote_bare_numbers(text: &str) -> std::borrow::Cow<'_, str> {
     if !text.contains("NaN") && !text.contains("Infinity") {
@@ -223,7 +228,11 @@ pub fn quote_bare_numbers(text: &str) -> std::borrow::Cow<'_, str> {
             .into_iter()
             .find(|t| rest.starts_with(t));
         if let Some(token) = token {
+            // A marker no real string can hold, so text columns refuse it as a
+            // number rather than taking "NaN" as a name.
             out.push('"');
+            // The marker written as a JSON escape, which parses into BARE_MARKER.
+            out.push_str("\\u0001bare:");
             out.push_str(token);
             out.push('"');
             rest = &rest[token.len()..];
@@ -242,14 +251,23 @@ pub fn quote_bare_numbers(text: &str) -> std::borrow::Cow<'_, str> {
 ///
 /// Returns a message for malformed JSON or when no array is found.
 pub fn parse_records(text: &str, records: Option<&str>) -> Result<Vec<Value>, String> {
-    let value: Value = serde_json::from_str(&quote_bare_numbers(text))
+    let mut value: Value = serde_json::from_str(&quote_bare_numbers(text))
         .map_err(|e| format!("malformed JSON: {e}"))?;
     let found = match records {
-        Some(path) => lookup(&value, path).ok_or_else(|| format!("no {path} in the response"))?,
-        None => &value,
+        Some(path) => {
+            let pointer = format!(
+                "/{}",
+                path.replace('~', "~0").replace('/', "~1").replace('.', "/")
+            );
+            value
+                .pointer_mut(&pointer)
+                .ok_or_else(|| format!("no {path} in the response"))?
+        }
+        None => &mut value,
     };
-    match found {
-        Value::Array(items) => Ok(items.clone()),
+    // The records move out of the parsed document rather than being copied.
+    match found.take() {
+        Value::Array(items) => Ok(items),
         _ => Err(format!(
             "expected an array of records at {}",
             records.unwrap_or("the top level")
@@ -334,6 +352,7 @@ fn number_text(value: &Value) -> Option<String> {
 /// Reads a float from a number or numeric text, including NaN and infinities.
 fn read_float(value: &Value) -> Option<f64> {
     let text = number_text(value)?;
+    let text = text.strip_prefix(BARE_MARKER).unwrap_or(&text);
     match text.to_ascii_lowercase().as_str() {
         "nan" => Some(f64::NAN),
         "infinity" | "inf" | "+infinity" | "+inf" => Some(f64::INFINITY),
@@ -407,6 +426,14 @@ fn append(
                 field.field_type.describe()
             ));
         }
+        (_, Value::String(s))
+            if s.starts_with(BARE_MARKER) && !matches!(field.field_type, FieldType::Float) =>
+        {
+            return Err(format!(
+                "is a bare {}, which only a number column accepts",
+                &s[BARE_MARKER.len()..]
+            ));
+        }
         (Builder::Text(b), Value::String(s)) => b.append_value(s),
         (Builder::Boolean(b), Value::Bool(v)) => b.append_value(*v),
         (Builder::Integer(b), v) => {
@@ -415,11 +442,18 @@ fn append(
         }
         (Builder::Float(b), v) => b.append_value(read_float(v).ok_or_else(mismatch)?),
         (Builder::Decimal(b), v) => {
-            let FieldType::Decimal(_, scale) = field.field_type else {
+            let FieldType::Decimal(precision, scale) = field.field_type else {
                 return Err(mismatch());
             };
             let text = number_text(v).ok_or_else(mismatch)?;
-            b.append_value(parse_exact_decimal(&text, scale)?);
+            let unscaled = parse_exact_decimal(&text, scale)?;
+            // The precision bounds the digits, which the array itself does not check.
+            if unscaled.unsigned_abs() >= 10u128.pow(u32::from(precision)) {
+                return Err(format!(
+                    "has more digits than decimal({precision}, {scale}) holds"
+                ));
+            }
+            b.append_value(unscaled);
         }
         (Builder::Date(b), Value::String(s)) => b.append_value(read_date(s)?),
         (Builder::Timestamp(b), Value::String(s)) => {

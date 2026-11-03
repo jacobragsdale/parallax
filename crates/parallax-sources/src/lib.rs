@@ -43,20 +43,32 @@ pub trait Source: Send + Sync {
     fn fetch(&self, parameters: &BTreeMap<String, String>) -> Result<Fetched, String>;
 }
 
-/// Fills `{name}` placeholders in `template` from `parameters`.
+/// A filled template and the parameters it used.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Filled {
+    /// The text with every placeholder replaced.
+    pub text: String,
+    /// The parameters the template named.
+    pub used: std::collections::BTreeSet<String>,
+}
+
+/// Fills `{name}` placeholders in `template` from `parameters`, passing each value
+/// through `escape`, which may refuse it.
 ///
 /// # Errors
 ///
-/// Returns a message naming a placeholder without a parameter.
+/// Returns a message naming a placeholder without a parameter, an unclosed
+/// brace, or a value `escape` refuses.
 pub fn fill(
     template: &str,
     parameters: &BTreeMap<String, String>,
-    escape: impl Fn(&str) -> String,
-) -> Result<String, String> {
-    let mut out = String::with_capacity(template.len());
+    escape: impl Fn(&str) -> Result<String, String>,
+) -> Result<Filled, String> {
+    let mut text = String::with_capacity(template.len());
+    let mut used = std::collections::BTreeSet::new();
     let mut rest = template;
     while let Some(open) = rest.find('{') {
-        out.push_str(&rest[..open]);
+        text.push_str(&rest[..open]);
         let close = rest[open..]
             .find('}')
             .ok_or_else(|| format!("unclosed {{ in {template}"))?
@@ -65,11 +77,12 @@ pub fn fill(
         let value = parameters
             .get(name)
             .ok_or_else(|| format!("the parameter {name} is missing"))?;
-        out.push_str(&escape(value));
+        text.push_str(&escape(value)?);
+        used.insert(name.to_owned());
         rest = &rest[close + 1..];
     }
-    out.push_str(rest);
-    Ok(out)
+    text.push_str(rest);
+    Ok(Filled { text, used })
 }
 
 /// Percent-encodes text for a URL path segment or query value.

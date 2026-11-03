@@ -8,7 +8,6 @@
 
 use std::collections::BTreeMap;
 use std::fs::File;
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -52,26 +51,40 @@ fn path_component(value: &str) -> Result<String, String> {
     Ok(value.to_owned())
 }
 
-/// The cached copy of `source`, made if it is missing or out of date.
+/// FNV-1a: a hash that stays the same across Rust releases, so cache names do.
+fn stable_hash(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |h, &b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+    })
+}
+
+/// The cached copy of `source`, made if it is missing or out of date. Each copy
+/// is written under a name of its own and renamed into place, so concurrent
+/// fetches, even from several processes, never see a partial file.
 fn cached(dir: &Path, source: &Path, size: u64, modified: i128) -> Result<PathBuf, String> {
-    let mut hasher = DefaultHasher::new();
-    source.hash(&mut hasher);
-    let prefix = format!("{:016x}-", hasher.finish());
+    let prefix = format!(
+        "{:016x}-",
+        stable_hash(source.as_os_str().as_encoded_bytes())
+    );
     let local = dir.join(format!("{prefix}{size}-{modified}.parquet"));
     if std::fs::metadata(&local).is_ok_and(|m| m.len() == size) {
         return Ok(local);
     }
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let partial = dir.join(format!("{prefix}{size}-{modified}.partial"));
-    std::fs::copy(source, &partial)
-        .map_err(|e| format!("copying {} to the cache: {e}", source.display()))?;
+    let unique = format!("{}-{}", std::process::id(), crate::now_micros());
+    let partial = dir.join(format!("{prefix}{size}-{modified}.{unique}.partial"));
+    if let Err(e) = std::fs::copy(source, &partial) {
+        let _ = std::fs::remove_file(&partial);
+        return Err(format!("copying {} to the cache: {e}", source.display()));
+    }
     std::fs::rename(&partial, &local).map_err(|e| format!("{}: {e}", local.display()))?;
-    // Older copies of the same file are no longer needed.
+    // Older finished copies of the same file are no longer needed; partial copies
+    // belong to fetches still running and are left alone.
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            if name.starts_with(&prefix) && entry.path() != local {
+            if name.starts_with(&prefix) && name.ends_with(".parquet") && entry.path() != local {
                 let _ = std::fs::remove_file(entry.path());
             }
         }
@@ -81,11 +94,8 @@ fn cached(dir: &Path, source: &Path, size: u64, modified: i128) -> Result<PathBu
 
 impl Source for Parquet {
     fn fetch(&self, parameters: &BTreeMap<String, String>) -> Result<Fetched, String> {
-        let mut checked = BTreeMap::new();
-        for (k, v) in parameters {
-            checked.insert(k.clone(), path_component(v)?);
-        }
-        let path = PathBuf::from(fill(&self.config.path, &checked, str::to_owned)?);
+        // Only parameters the path uses are checked; others may hold anything.
+        let path = PathBuf::from(fill(&self.config.path, parameters, path_component)?.text);
         let metadata = std::fs::metadata(&path).map_err(|e| format!("{}: {e}", path.display()))?;
         let modified = metadata
             .modified()

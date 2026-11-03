@@ -65,13 +65,16 @@ pub struct Dataset {
     pub max_tables: usize,
 }
 
-/// A cached table. The slot's own lock serializes loading, so concurrent first
-/// opens load once and reloads never overlap.
+/// A cached table. The slot's own lock serializes first loads, so concurrent
+/// first opens load once. A reload fetches without holding it, so opens of a
+/// table being reloaded get the current rows at once, and `reloading` keeps two
+/// reloads from overlapping.
 #[derive(Default)]
 struct Slot {
     table: Option<SharedTable>,
     loaded: Option<Instant>,
     used: Option<Instant>,
+    reloading: bool,
 }
 
 type CacheKey = (String, BTreeMap<String, String>);
@@ -131,40 +134,50 @@ impl Registry {
         Ok(Arc::new(RwLock::new(state)))
     }
 
-    /// Reloads the slot's table. A failure keeps the previous rows and records the
-    /// error on the table, where views show it. A table poisoned by an earlier panic
-    /// is replaced by a fresh load.
-    fn reload(&self, dataset: &Dataset, parameters: &BTreeMap<String, String>, slot: &mut Slot) {
-        let Some(table) = slot.table.clone() else {
-            return;
+    /// Reloads a slot's table. The fetch runs without the slot's lock, so other
+    /// connections keep reading the current rows meanwhile; a reload already in
+    /// progress makes this one do nothing. A failure keeps the previous rows and
+    /// records the error on the table, where views show it. A table poisoned by
+    /// an earlier panic is replaced by a fresh load.
+    fn reload(&self, dataset: &Dataset, parameters: &BTreeMap<String, String>, slot: &Mutex<Slot>) {
+        let table = {
+            let mut slot = lock(slot);
+            let Some(table) = slot.table.clone() else {
+                return;
+            };
+            if slot.reloading {
+                return;
+            }
+            slot.reloading = true;
+            slot.loaded = Some(Instant::now());
+            table
         };
-        slot.loaded = Some(Instant::now());
         if table.is_poisoned() {
             match Self::load(dataset, parameters) {
-                Ok(fresh) => slot.table = Some(fresh),
+                Ok(fresh) => lock(slot).table = Some(fresh),
                 Err(message) => {
-                    tracing::warn!(dataset = %dataset.name, error = %message, "reload failed")
+                    tracing::warn!(dataset = %dataset.name, error = %message, "reload failed");
                 }
             }
-            let _ = self.changes.send(());
-            return;
-        }
-        let result = dataset.source.fetch(parameters);
-        let Ok(mut state) = table.write() else {
-            return;
-        };
-        match result {
-            Ok(fetched) => {
-                if let Err(e) = state.reload(&fetched.batches, now_micros(), fetched.as_of_micros) {
-                    tracing::warn!(dataset = %dataset.name, error = %e, "reload refused");
+        } else {
+            let result = dataset.source.fetch(parameters);
+            if let Ok(mut state) = table.write() {
+                match result {
+                    Ok(fetched) => {
+                        if let Err(e) =
+                            state.reload(&fetched.batches, now_micros(), fetched.as_of_micros)
+                        {
+                            tracing::warn!(dataset = %dataset.name, error = %e, "reload refused");
+                        }
+                    }
+                    Err(message) => {
+                        tracing::warn!(dataset = %dataset.name, error = %message, "source failed");
+                        state.record_failure(message, now_micros());
+                    }
                 }
             }
-            Err(message) => {
-                tracing::warn!(dataset = %dataset.name, error = %message, "source failed");
-                state.record_failure(message, now_micros());
-            }
         }
-        drop(state);
+        lock(slot).reloading = false;
         let _ = self.changes.send(());
     }
 
@@ -176,57 +189,64 @@ impl Registry {
     }
 
     /// Reloads tables due under their dataset's `every` interval, and drops tables
-    /// no view has used for the dataset's idle time.
+    /// no view has used for the dataset's idle time. Due tables reload in
+    /// parallel, so one slow source does not delay the others.
     pub fn refresh_due(&self) {
+        let mut due = Vec::new();
         for ((name, parameters), slot) in self.slots() {
             let Some(dataset) = self.datasets.get(&name) else {
                 continue;
             };
-            let mut slot = lock(&slot);
-            let in_use = slot
+            let mut guard = lock(&slot);
+            let in_use = guard
                 .table
                 .as_ref()
                 .is_some_and(|t| Arc::strong_count(t) > 1);
             if in_use {
-                slot.used = Some(Instant::now());
+                guard.used = Some(Instant::now());
             }
-            let idle = slot
+            let idle = guard
                 .used
                 .is_some_and(|u| u.elapsed() >= dataset.refresh.idle);
-            if !in_use && idle {
-                slot.table = None;
+            if !in_use && idle && !guard.reloading {
+                guard.table = None;
                 continue;
             }
-            let due = dataset
+            let is_due = dataset
                 .refresh
                 .every
-                .is_some_and(|every| slot.loaded.is_some_and(|l| l.elapsed() >= every));
-            if in_use && due {
-                self.reload(dataset, &parameters, &mut slot);
+                .is_some_and(|every| guard.loaded.is_some_and(|l| l.elapsed() >= every));
+            drop(guard);
+            if in_use && is_due {
+                due.push((dataset, parameters, slot));
             }
         }
+        std::thread::scope(|scope| {
+            for (dataset, parameters, slot) in &due {
+                scope.spawn(|| self.reload(dataset, parameters, slot));
+            }
+        });
         lock(&self.cache)
             .retain(|_, slot| lock(slot).table.is_some() || Arc::strong_count(slot) > 1);
     }
 
-    /// Reloads every cached table of `dataset` now, for publishers that know the
-    /// data changed. Returns how many tables were reloaded, or `None` for an
-    /// unknown dataset.
+    /// Reloads every cached table of `dataset` now, in parallel, for publishers
+    /// that know the data changed. Returns how many tables were reloaded, or
+    /// `None` for an unknown dataset.
     #[must_use]
     pub fn invalidate(&self, dataset: &str) -> Option<usize> {
         let definition = self.datasets.get(dataset)?;
-        let mut reloaded = 0;
-        for ((name, parameters), slot) in self.slots() {
-            if name != dataset {
-                continue;
+        let cached: Vec<_> = self
+            .slots()
+            .into_iter()
+            .filter(|((name, _), slot)| name == dataset && lock(slot).table.is_some())
+            .collect();
+        std::thread::scope(|scope| {
+            for ((_, parameters), slot) in &cached {
+                scope.spawn(|| self.reload(definition, parameters, slot));
             }
-            let mut slot = lock(&slot);
-            if slot.table.is_some() {
-                self.reload(definition, &parameters, &mut slot);
-                reloaded += 1;
-            }
-        }
-        Some(reloaded)
+        });
+        Some(cached.len())
     }
 }
 
@@ -273,25 +293,29 @@ impl Catalog for Registry {
             }
             Arc::clone(cache.entry(key).or_default())
         };
-        let mut slot = lock(&slot);
-        slot.used = Some(Instant::now());
-        match slot.table.clone() {
+        let mut guard = lock(&slot);
+        guard.used = Some(Instant::now());
+        match guard.table.clone() {
             Some(table) => {
                 let stale = dataset
                     .refresh
                     .max_age
-                    .is_some_and(|age| slot.loaded.is_some_and(|l| l.elapsed() >= age));
+                    .is_some_and(|age| guard.loaded.is_some_and(|l| l.elapsed() >= age));
+                drop(guard);
+                // A stale table reloads before this view opens on it; other views
+                // keep reading the current rows meanwhile.
                 if stale || table.is_poisoned() {
-                    self.reload(dataset, &resolved, &mut slot);
+                    self.reload(dataset, &resolved, &slot);
                 }
-                slot.table
+                lock(&slot)
+                    .table
                     .clone()
                     .ok_or_else(|| format!("{name} could not be reloaded"))
             }
             None => {
                 let table = Self::load(dataset, &resolved)?;
-                slot.table = Some(Arc::clone(&table));
-                slot.loaded = Some(Instant::now());
+                guard.table = Some(Arc::clone(&table));
+                guard.loaded = Some(Instant::now());
                 Ok(table)
             }
         }

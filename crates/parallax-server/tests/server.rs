@@ -385,3 +385,64 @@ async fn a_refusal_for_a_page_posts_its_reason_to_the_parent_window() {
     // The reason cannot end the script early.
     assert_eq!(page.matches("</script>").count(), 1, "{page}");
 }
+
+/// Answers at once the first time and slowly afterwards, as a source under load.
+struct SlowAfterFirst {
+    fetches: std::sync::atomic::AtomicUsize,
+}
+
+impl parallax_server::Source for SlowAfterFirst {
+    fn fetch(&self, _: &BTreeMap<String, String>) -> Result<parallax_server::Fetched, String> {
+        if self
+            .fetches
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            > 0
+        {
+            std::thread::sleep(Duration::from_millis(1_500));
+        }
+        let batch = arrow_array::RecordBatch::try_new(
+            Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new(
+                "x",
+                arrow_schema::DataType::Int64,
+                false,
+            )])),
+            vec![Arc::new(arrow_array::Int64Array::from(vec![1, 2, 3]))],
+        )
+        .unwrap();
+        Ok(parallax_server::Fetched {
+            schema: batch.schema(),
+            batches: vec![batch],
+            as_of_micros: 1,
+        })
+    }
+}
+
+#[test]
+fn opening_a_table_does_not_wait_for_its_reload() {
+    let registry = Arc::new(Registry::new(vec![Dataset {
+        name: "slow".into(),
+        parameters: Vec::new(),
+        source: Box::new(SlowAfterFirst {
+            fetches: std::sync::atomic::AtomicUsize::new(0),
+        }),
+        primary_key: None,
+        duplicates: DuplicatePolicy::Error,
+        refresh: RefreshPolicy::default(),
+        resolve: None,
+        max_tables: 4,
+    }]));
+    let context = parallax_session::no_context();
+    let first = registry.open("slow", &BTreeMap::new(), &context).unwrap();
+    let reloading = Arc::clone(&registry);
+    let reload = std::thread::spawn(move || reloading.invalidate("slow"));
+    std::thread::sleep(Duration::from_millis(200));
+    let started = std::time::Instant::now();
+    let again = registry.open("slow", &BTreeMap::new(), &context).unwrap();
+    assert!(
+        started.elapsed() < Duration::from_millis(500),
+        "the open waited {:?} for the reload",
+        started.elapsed()
+    );
+    assert!(Arc::ptr_eq(&first, &again));
+    assert_eq!(reload.join().unwrap(), Some(1));
+}

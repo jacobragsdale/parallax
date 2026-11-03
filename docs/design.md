@@ -392,8 +392,11 @@ refreshes in one of three cases:
 - its schedule says so
 - a publisher calls an invalidation endpoint
 
-Each refresh applies as a diff. A memory budget evicts the least recently used
-tables, and an Arrow copy on local SSD makes reloading fast. Existing Python
+Each refresh applies as a diff. A reload fetches without holding up readers:
+views keep showing the current rows until the new ones apply, and tables due at
+the same time reload in parallel, so one slow source does not delay the others.
+A memory budget evicts the least recently used tables, and an Arrow copy on
+local SSD makes reloading fast. Existing Python
 and C# services keep their business logic. parallax pulls from their existing
 GET endpoints through the HTTP connector, and live sources push Arrow batches
 through an ingest API.
@@ -441,6 +444,9 @@ connectors cover where the data already lives:
   - The host supplies a service credential, as it supplies the per-connection
     value: a header read from an environment variable at each fetch, or a
     function that returns headers. The library still contains no auth code.
+  - Certificates are checked against the operating system's trust store, so
+    endpoints signed by the company's own authority work. A response larger
+    than the dataset's limit, 2 GiB by default, refuses the load.
   - The connector asks for an Arrow IPC stream with
     `Accept: application/vnd.apache.arrow.stream`, the
     [IANA-registered type](https://www.iana.org/assignments/media-types/application/vnd.apache.arrow.stream),

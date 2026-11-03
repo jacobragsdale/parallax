@@ -111,9 +111,11 @@ fn wrong_types_name_the_row_path_and_value() {
 
 #[test]
 fn pythons_bare_nan_and_infinity_are_read() {
-    assert_eq!(
-        quote_bare_numbers(r#"{"a": NaN, "b": "NaN text", "c": -Infinity}"#),
-        r#"{"a": "NaN", "b": "NaN text", "c": "-Infinity"}"#
+    let quoted = quote_bare_numbers(r#"{"a": NaN, "b": "NaN text", "c": -Infinity}"#);
+    assert!(quoted.contains(r#""b": "NaN text""#), "{quoted}");
+    assert!(
+        !quoted.contains(": NaN") && !quoted.contains(": -Infinity"),
+        "{quoted}"
     );
     let docs = parse_records(r#"[{"x": NaN}, {"x": Infinity}, {"x": -Infinity}]"#, None).unwrap();
     let batch = to_batch(&[field("x", "float")], &docs, None).unwrap();
@@ -184,4 +186,27 @@ fn types_parse_from_configuration_text() {
     );
     assert!(FieldType::try_from("decimal(40, 2)".to_owned()).is_err());
     assert!(FieldType::try_from("money".to_owned()).is_err());
+}
+
+#[test]
+fn decimals_longer_than_their_precision_are_refused() {
+    let docs = parse_records(r#"[{"amt": 1e30}]"#, None).unwrap();
+    let error = to_batch(&[field("amt", "decimal(20, 2)")], &docs, None).unwrap_err();
+    assert!(error.contains("more digits than decimal(20, 2)"), "{error}");
+    let fits = parse_records(r#"[{"amt": "999999999999999999.99"}]"#, None).unwrap();
+    to_batch(&[field("amt", "decimal(20, 2)")], &fits, None).unwrap();
+}
+
+#[test]
+fn a_bare_nan_is_not_text() {
+    let docs = parse_records(r#"[{"ticker": NaN}]"#, None).unwrap();
+    let error = to_batch(&[field("ticker", "text")], &docs, None).unwrap_err();
+    assert!(error.contains("bare NaN"), "{error}");
+    // A real string "NaN" is still text.
+    let docs = parse_records(r#"[{"ticker": "NaN"}]"#, None).unwrap();
+    let batch = to_batch(&[field("ticker", "text")], &docs, None).unwrap();
+    assert_eq!(
+        arrow_array::cast::AsArray::as_string::<i32>(batch.column(0).as_ref()).value(0),
+        "NaN"
+    );
 }
