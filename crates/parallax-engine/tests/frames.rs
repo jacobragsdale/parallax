@@ -214,26 +214,20 @@ fn bad_formats_are_configuration_errors() {
 }
 
 #[test]
-fn flat_columns_keep_their_source_metadata() {
-    let schema = Schema::new(vec![
-        Field::new("pnl", DataType::Float64, false).with_metadata(
-            [("unit".to_owned(), "USD".to_owned())]
-                .into_iter()
-                .collect(),
-        ),
-    ]);
-    let batch = RecordBatch::try_new(
-        Arc::new(schema.clone()),
-        vec![Arc::new(Float64Array::from(vec![1.0])) as ArrayRef],
-    )
-    .unwrap();
-    let mut t = Table::new(&schema, TableOptions::default()).unwrap();
-    t.load(&[batch]).unwrap();
+fn flat_columns_keep_the_table_fields_properties() {
+    let t = table();
     let mut view = View::new(&t, ViewConfig::default()).unwrap();
-    let frame = view.window(&t, 0..1, 0..1);
+    let frame = view.window(&t, 0..1, 0..4);
     let schema = frame.batch.schema();
-    let field = schema.field(fields_with(&frame.batch, role::VALUE)[0]);
-    assert_eq!(field.metadata()["unit"], "USD");
-    assert_eq!(field.metadata()[meta::ROLE], role::VALUE);
-    assert!(!field.is_nullable());
+    for (k, i) in fields_with(&frame.batch, role::VALUE)
+        .into_iter()
+        .enumerate()
+    {
+        let field = schema.field(i);
+        let source = t.schema().field(k);
+        assert_eq!(field.name(), source.name());
+        assert_eq!(field.data_type(), source.data_type());
+        assert_eq!(field.is_nullable(), source.is_nullable());
+        assert_eq!(field.metadata()[meta::INDEX], k.to_string());
+    }
 }
