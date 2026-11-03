@@ -443,3 +443,40 @@ export function decodeFrame(frame: Frame): FrameData {
     tree: treeRows(table.numRows, byRole)
   };
 }
+
+/** One value of a column with its display text and how many rows hold it. */
+export interface DistinctValue {
+  readonly value: CellValue;
+  readonly text: string;
+  readonly rows: bigint;
+}
+
+/** Decodes and checks the values the engine lists for a filter. */
+export function decodeDistinct(bytes: Uint8Array): readonly DistinctValue[] {
+  const decoded = tableFromIPC(bytes);
+  if (!(decoded instanceof Table)) {
+    throw new FrameError("distinct values must decode synchronously");
+  }
+  const table = decoded;
+  const field = (name: string): { readonly field: Field; readonly vector: Vector } => {
+    const index = table.schema.fields.findIndex((f) => f.name === name);
+    const vector = table.getChildAt(index);
+    const found = table.schema.fields[index];
+    if (found === undefined || vector === null) {
+      throw new FrameError(`distinct values need a ${name} column`);
+    }
+    return { field: found, vector };
+  };
+  const value = field("value");
+  const read = reader(value.field, value.vector);
+  const text = textReader("text", field("text").vector, table.numRows);
+  const count = field("count");
+  const counts = reader(count.field, count.vector);
+  return Array.from({ length: table.numRows }, (_, row) => {
+    const rows = counts(row);
+    if (rows.kind !== "integer") {
+      throw new FrameError("distinct-value counts must be integers");
+    }
+    return { value: read(row), text: text(row), rows: rows.value };
+  });
+}

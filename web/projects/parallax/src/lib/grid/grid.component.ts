@@ -28,23 +28,24 @@ import {
   inject,
   input,
   model,
+  output,
   signal,
   viewChild
 } from "@angular/core";
 import type { ElementRef } from "@angular/core";
 import { z } from "zod";
 
-import type { Viewport } from "../connection";
+import type { DistinctValues, Viewport } from "../connection";
 import { isNegativeText } from "../format";
 import { CellFlag } from "../frame";
 import type { FrameData, TreeRows } from "../frame";
 import { TREE_WIDTH_KEY, layoutSchema } from "../layout";
-import type { Layout, LayoutInput } from "../layout";
+import type { Layout, LayoutInput, LayoutScalar } from "../layout";
 import { installThemeStyles, readTheme } from "../theme";
 import type { Theme, ThemeName } from "../theme";
 import { DEFAULT_TREE_WIDTH, DEFAULT_WIDTH, MIN_WIDTH, flatGeometry, groupedGeometry, rowGeometry } from "./geometry";
 import type { ColumnGeometry } from "./geometry";
-import { gridSource, withExpanded } from "./grid-source";
+import { groupPath, gridSource, withExpanded } from "./grid-source";
 import { contains, moveFocus, rangeOf, selectAll, toTsv } from "./selection";
 import type { CellRange, CellRef, Extent, Selection } from "./selection";
 import { StatusBarComponent } from "./status-bar.component";
@@ -55,6 +56,14 @@ export interface DrawStats {
   readonly fullDraws: number;
   readonly cellDraws: number;
   readonly drawMs: number;
+}
+
+/** A request for the rows behind one group. */
+export interface DrillRequest {
+  /** The group's values from the outermost level; empty for the grand total. */
+  readonly path: readonly LayoutScalar[];
+  /** The group's label as shown. */
+  readonly label: string;
 }
 
 /** Row heights by density. */
@@ -305,6 +314,8 @@ export class GridComponent {
   public readonly theme = input<ThemeName>("light");
   /** How tightly rows are packed. */
   public readonly density = input<Density>("compact");
+  /** Fires when the user double-clicks a value in a grouped view, asking for the rows behind its group. */
+  public readonly drill = output<DrillRequest>();
 
   private readonly parsed = computed(() => parse(this.layout()));
   protected readonly current = computed(() => {
@@ -312,6 +323,8 @@ export class GridComponent {
     return parsed.ok ? parsed.layout : null;
   });
   protected readonly source = gridSource(this.current);
+  /** The dataset's columns, once the view has opened. */
+  public readonly fields = this.source.fields;
   protected readonly error = computed(() => {
     const parsed = this.parsed();
     return parsed.ok ? this.source.error() : parsed.error;
@@ -395,6 +408,11 @@ export class GridComponent {
   /** Drawing counters, for measurement. */
   public drawStats(): DrawStats {
     return this.stats;
+  }
+
+  /** Lists a column's values under the view's other filters, for filter pick-lists. */
+  public distinctValues(column: string, search: string, limit: number): Promise<DistinctValues> {
+    return this.source.distinct(column, search, limit);
   }
 
   // ---- Scrolling ---------------------------------------------------------
@@ -591,7 +609,20 @@ export class GridComponent {
     } else if (!hit.header && hit.column === -1 && hit.row !== null && !this.onMarker(hit.row, event.offsetX)) {
       // The marker toggles on a single click, so only the label toggles here.
       this.toggleRow(hit.row);
+    } else if (!hit.header && hit.column !== null && hit.column >= 0 && hit.row !== null) {
+      this.requestDrill(hit.row);
     }
+  }
+
+  /** Asks for the rows behind the group in view row `row`, if it is one group rather than an Other row. */
+  private requestDrill(row: number): void {
+    const frame = this.source.frame();
+    const tree = frame?.tree ?? null;
+    const local = frame === null ? -1 : row - frame.firstRow;
+    if (frame === null || tree === null || local < 0 || local >= frame.rowCount || tree.kind(local) === "other") {
+      return;
+    }
+    this.drill.emit({ path: groupPath(frame, local), label: tree.label(local) });
   }
 
   // ---- Layout changes ----------------------------------------------------

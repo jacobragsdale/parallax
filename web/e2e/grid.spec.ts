@@ -177,3 +177,58 @@ test("the dark theme sets its tokens", async ({ page }) => {
   const background = await page.locator("px-grid").evaluate((element) => getComputedStyle(element).getPropertyValue("--px-grid-bg").trim());
   expect(background).toBe("#16181d");
 });
+
+test.describe("px-pivot", () => {
+  test("removing a row group from the settings regroups the pivot", async ({ page }) => {
+    await open(page, "preset=pivot");
+    const before = await rowCount(page);
+    await page.getByRole("button", { name: "Remove ticker" }).click();
+    await expect.poll(async () => layout(page)).toMatchObject({ group_by: ["fund", "strategy", "sector"] });
+    await expect.poll(() => rowCount(page)).toBeLessThan(before);
+  });
+
+  test("a value added in the settings becomes a column", async ({ page }) => {
+    await open(page, "preset=pivot");
+    await page.getByRole("button", { name: "Add value" }).click();
+    await expect.poll(async () => layout(page)).toMatchObject({ measures: [{}, {}, {}, {}] });
+    await expect(page.locator(".px-error")).toHaveCount(0);
+  });
+
+  test("a filter picked from the column's values narrows the pivot", async ({ page }) => {
+    await open(page, "preset=pivot");
+    const before = await rowCount(page);
+    // A new filter opens its value list at once.
+    await page.getByRole("button", { name: "Add filter" }).click();
+    const first = page.locator(".px-popover input[type=checkbox]").first();
+    await expect(first).toBeVisible({ timeout: 30_000 });
+    await first.check();
+    await expect.poll(() => rowCount(page)).toBeLessThan(before);
+    // The list stays open, so a second value can be ticked straight away.
+    await expect(page.locator(".px-popover input[type=checkbox]").nth(1)).toBeVisible();
+    expect(await layout(page)).toMatchObject({ filters: [{ op: "in", values: [expect.any(String)] }] });
+  });
+
+  test("double-clicking a value opens the rows behind its group", async ({ page }) => {
+    await open(page, "preset=pivot");
+    // Row 1 is the first fund; its first value sits just right of the group column.
+    await page
+      .locator("px-pivot-main canvas.px-canvas, .px-pivot-main > px-grid canvas.px-canvas")
+      .first()
+      .dblclick({ position: { x: 320, y: ROW * 2 + ROW / 2 } });
+    const drawer = page.locator(".px-drill");
+    await expect(drawer).toContainText("Rows behind Atlas Global Macro");
+    await expect(drawer.locator(".px-status-rows")).toContainText("rows", { timeout: 30_000 });
+    await expect(drawer.locator(".px-error")).toHaveCount(0);
+  });
+
+  test("a shared link reopens the same view", async ({ page }) => {
+    await open(page, "preset=pivot");
+    await page.getByRole("button", { name: "Remove ticker" }).click();
+    await page.getByRole("button", { name: "Copy link to this view" }).click();
+    await expect(page.getByRole("status").first()).toContainText("links to this view");
+    const url = page.url();
+    expect(url).toContain("layout=1.");
+    await page.goto(url);
+    await expect.poll(async () => layout(page)).toMatchObject({ group_by: ["fund", "strategy", "sector"] });
+  });
+});

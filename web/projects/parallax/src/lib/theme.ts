@@ -119,7 +119,7 @@ function declarations(theme: Theme): string {
 }
 
 /** The stylesheet that defines the tokens for each theme, in the `parallax` layer. */
-export const THEME_STYLES = `@layer parallax { px-grid { ${declarations(THEMES.light)} } px-grid[data-px-theme="dark"] { ${declarations(THEMES.dark)} } }`;
+export const THEME_STYLES = `@layer parallax { px-grid, px-pivot { ${declarations(THEMES.light)} } px-grid[data-px-theme="dark"], px-pivot[data-px-theme="dark"] { ${declarations(THEMES.dark)} } }`;
 
 const STYLE_ID = "px-theme-tokens";
 

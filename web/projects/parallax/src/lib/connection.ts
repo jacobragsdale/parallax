@@ -18,10 +18,10 @@
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
 import type { MessageInitShape } from "@bufbuild/protobuf";
 
-import { decodeFrame, FrameError } from "./frame";
-import type { FrameData } from "./frame";
+import { decodeDistinct, decodeFrame, FrameError } from "./frame";
+import type { DistinctValue, FrameData } from "./frame";
 import { ClientMessageSchema, ServerMessageSchema } from "./proto/parallax_pb";
-import type { TableStatus, ViewOpened, Welcome } from "./proto/parallax_pb";
+import type { DistinctValuesResult, Frame, TableStatus, ViewOpened, Welcome } from "./proto/parallax_pb";
 
 /** The body of a client message, as plain values. */
 export type ClientBody = NonNullable<MessageInitShape<typeof ClientMessageSchema>["body"]>;
@@ -48,6 +48,18 @@ export interface Viewport {
   readonly columnCount: number;
 }
 
+/** A column's values for a filter pick-list. */
+export interface DistinctValues {
+  readonly values: readonly DistinctValue[];
+  /** More values match than were sent. */
+  readonly truncated: boolean;
+}
+
+interface Pending<T> {
+  readonly resolve: (value: T) => void;
+  readonly reject: (error: Error) => void;
+}
+
 function sameViewport(a: Viewport | null, b: Viewport): boolean {
   return a !== null && a.firstRow === b.firstRow && a.rowCount === b.rowCount && a.firstColumn === b.firstColumn && a.columnCount === b.columnCount;
 }
@@ -59,7 +71,8 @@ export class ViewHandle {
   private inFlight: { readonly viewport: Viewport; readonly requestId: bigint } | null = null;
   private pending: Viewport | null = null;
   private closed = false;
-  private readonly fetches = new Map<bigint, { readonly resolve: (frame: FrameData) => void; readonly reject: (error: Error) => void }>();
+  private readonly fetches = new Map<bigint, Pending<FrameData>>();
+  private readonly lists = new Map<bigint, Pending<DistinctValues>>();
 
   constructor(
     public readonly id: number,
@@ -98,6 +111,26 @@ export class ViewHandle {
     });
   }
 
+  /** Lists a column's values, with the view's other filters applied, for a filter pick-list. */
+  public distinctValues(column: string, search: string, limit: number): Promise<DistinctValues> {
+    if (this.closed) {
+      return Promise.reject(new Error("the view is closed"));
+    }
+    return new Promise((resolve, reject) => {
+      const requestId = this.connection.send({ case: "distinctValues", value: { viewId: this.id, column, search, limit } });
+      this.lists.set(requestId, { resolve, reject });
+    });
+  }
+
+  /** Fails every request still waiting for a reply. */
+  private failPending(reason: string): void {
+    for (const pending of [...this.fetches.values(), ...this.lists.values()]) {
+      pending.reject(new Error(reason));
+    }
+    this.fetches.clear();
+    this.lists.clear();
+  }
+
   /** Replaces the view's layout. Frames from the old layout are dropped from now on. */
   public update(layoutJson: string): void {
     if (this.closed) {
@@ -123,10 +156,7 @@ export class ViewHandle {
   public close(): void {
     if (!this.closed) {
       this.closed = true;
-      for (const pending of this.fetches.values()) {
-        pending.reject(new Error("the view is closed"));
-      }
-      this.fetches.clear();
+      this.failPending("the view is closed");
       this.connection.send({ case: "closeView", value: { viewId: this.id } });
       this.connection.forget(this.id);
     }
@@ -171,14 +201,25 @@ export class ViewHandle {
 
   /** @internal Called by the connection when the transport closes: fetches fail and the view reports why. */
   public receiveDisconnect(reason: string): void {
-    for (const pending of this.fetches.values()) {
-      pending.reject(new Error(reason));
-    }
-    this.fetches.clear();
+    this.failPending(reason);
     this.inFlight = null;
     this.pending = null;
     this.closed = true;
     this.listener.error?.(reason);
+  }
+
+  /** @internal Called by the connection. */
+  public receiveDistinct(result: DistinctValuesResult, requestId: bigint): void {
+    const pending = this.lists.get(requestId);
+    if (pending === undefined) {
+      return;
+    }
+    this.lists.delete(requestId);
+    try {
+      pending.resolve({ values: decodeDistinct(result.values), truncated: result.truncated });
+    } catch (error: unknown) {
+      pending.reject(error instanceof Error ? error : new Error(String(error)));
+    }
   }
 
   /** @internal Called by the connection. */
@@ -193,10 +234,11 @@ export class ViewHandle {
 
   /** @internal Called by the connection. */
   public receiveError(message: string, requestId: bigint): void {
-    const fetch = this.fetches.get(requestId);
-    if (fetch !== undefined) {
+    const pending = this.fetches.get(requestId) ?? this.lists.get(requestId);
+    if (pending !== undefined) {
       this.fetches.delete(requestId);
-      fetch.reject(new Error(message));
+      this.lists.delete(requestId);
+      pending.reject(new Error(message));
       return;
     }
     this.settle(requestId);
@@ -297,6 +339,22 @@ export class Connection {
     this.views.delete(id);
   }
 
+  /** Decodes a frame for its view, reporting a frame that fails its checks as that view's error. */
+  private receiveFrame(encoded: Frame, requestId: bigint): void {
+    const view = this.views.get(encoded.viewId);
+    if (view === undefined) {
+      return;
+    }
+    let frame: FrameData;
+    try {
+      frame = decodeFrame(encoded);
+    } catch (error: unknown) {
+      view.receiveError(error instanceof FrameError ? error.message : String(error), requestId);
+      return;
+    }
+    view.receiveFrame(frame, requestId);
+  }
+
   /** Handles one encoded server message. */
   public receive(bytes: Uint8Array): void {
     const message = fromBinary(ServerMessageSchema, bytes);
@@ -309,21 +367,9 @@ export class Connection {
       case "viewOpened":
         this.views.get(body.value.viewId)?.receiveOpened(body.value);
         return;
-      case "frame": {
-        const view = this.views.get(body.value.viewId);
-        if (view === undefined) {
-          return;
-        }
-        let frame: FrameData;
-        try {
-          frame = decodeFrame(body.value);
-        } catch (error: unknown) {
-          view.receiveError(error instanceof FrameError ? error.message : String(error), requestId);
-          return;
-        }
-        view.receiveFrame(frame, requestId);
+      case "frame":
+        this.receiveFrame(body.value, requestId);
         return;
-      }
       case "tableStatus":
         this.views.get(body.value.viewId)?.receiveStatus(body.value);
         return;
@@ -339,6 +385,8 @@ export class Connection {
         return;
       }
       case "distinctValues":
+        this.views.get(body.value.viewId)?.receiveDistinct(body.value, requestId);
+        return;
       case undefined:
         return;
     }

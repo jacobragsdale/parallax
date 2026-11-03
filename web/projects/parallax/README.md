@@ -39,6 +39,21 @@ The two-way binding keeps the layout current as the user sorts, resizes and
 expands groups, so saving the layout saves the view. `parseLayout` checks a
 layout read from storage or a URL before it is used.
 
+## Show a pivot with its settings
+
+`<px-pivot>` takes the same layout and adds a settings panel beside the grid:
+row and column groups, values, filters picked from the column's values, open
+levels and top-N. Double-clicking a value opens the rows behind its group.
+
+```html
+<px-pivot [(layout)]="layout" />
+```
+
+## Share a view
+
+`encodeLayout(layout)` returns text for a URL parameter, and
+`decodeLayout(text)` reads it back, refusing anything the schema rejects.
+
 ## Inputs
 
 | Input     | Type                         | Default     | Meaning                          |
