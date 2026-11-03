@@ -29,6 +29,62 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked
       - run: cargo test --workspace --locked
 
+  databases:
+    name: Databases (SQL Server, Oracle, MongoDB)
+    runs-on: ubuntu-24.04
+    services:
+      mssql:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: "Y"
+          MSSQL_SA_PASSWORD: Parallax-Test-1
+        ports: ["1433:1433"]
+      oracle:
+        image: gvenzl/oracle-free:23-slim-faststart
+        env:
+          ORACLE_PASSWORD: parallax
+          APP_USER: parallax
+          APP_USER_PASSWORD: parallax
+        ports: ["1521:1521"]
+        options: >-
+          --health-cmd healthcheck.sh --health-interval 10s --health-timeout 5s --health-retries 60
+      mongo:
+        image: mongo:8
+        ports: ["27017:27017"]
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: Install unixODBC and Microsoft ODBC Driver 18 for SQL Server
+        run: |
+          curl -sSL https://packages.microsoft.com/keys/microsoft.asc | sudo tee /etc/apt/trusted.gpg.d/microsoft.asc > /dev/null
+          curl -sSL "https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/prod.list" | sudo tee /etc/apt/sources.list.d/mssql-release.list > /dev/null
+          sudo apt-get update
+          sudo ACCEPT_EULA=Y apt-get install -y msodbcsql18 unixodbc-dev libaio1t64
+      - name: Install Oracle Instant Client ODBC
+        run: |
+          sudo mkdir -p /opt/oracle && cd /opt/oracle
+          sudo curl -sSLO https://download.oracle.com/otn_software/linux/instantclient/instantclient-basiclite-linuxx64.zip
+          sudo curl -sSLO https://download.oracle.com/otn_software/linux/instantclient/instantclient-odbc-linuxx64.zip
+          sudo unzip -qo instantclient-basiclite-linuxx64.zip && sudo unzip -qo instantclient-odbc-linuxx64.zip
+          client=$(ls -d /opt/oracle/instantclient_* | head -1)
+          # Ubuntu 24.04 renamed libaio; Instant Client looks for the old name.
+          sudo ln -sf /usr/lib/x86_64-linux-gnu/libaio.so.1t64 "$client/libaio.so.1"
+          printf '[Oracle ODBC]\nDriver=%s\n' "$(ls $client/libsqora.so.* | head -1)" | sudo tee -a /etc/odbcinst.ini
+          echo "LD_LIBRARY_PATH=$client" >> "$GITHUB_ENV"
+      - name: Wait for SQL Server
+        run: |
+          for i in $(seq 1 60); do
+            /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P Parallax-Test-1 -Q "SELECT 1" > /dev/null 2>&1 && exit 0
+            sleep 2
+          done
+          exit 1
+      - run: cargo test -p parallax-sources --features odbc,mongodb --test databases --locked -- --nocapture
+        env:
+          PARALLAX_TEST_MSSQL: "Driver={ODBC Driver 18 for SQL Server};Server=localhost,1433;UID=sa;PWD=Parallax-Test-1;TrustServerCertificate=yes;"
+          PARALLAX_TEST_ORACLE: "Driver={Oracle ODBC};DBQ=localhost:1521/FREEPDB1;UID=parallax;PWD=parallax;"
+          PARALLAX_TEST_MONGODB: "mongodb://localhost:27017"
+
   webassembly:
     name: WebAssembly (build and test in Node)
     runs-on: ubuntu-latest

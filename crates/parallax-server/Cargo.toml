@@ -33,6 +33,12 @@ tower-http = { version = "0.7", features = ["fs"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
+[features]
+# Datasets from SQL Server and Oracle through ODBC; needs unixODBC.
+odbc = ["parallax-sources/odbc"]
+# Datasets from MongoDB.
+mongodb = ["parallax-sources/mongodb"]
+
 [dev-dependencies]
 tokio-tungstenite = "0.29"
 tower = { version = "0.5", features = ["util"] }

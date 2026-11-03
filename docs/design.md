@@ -421,6 +421,16 @@ connectors cover where the data already lives:
     zoneless timestamps. `TIMESTAMP WITH TIME ZONE` is an instant.
   - Oracle stores an empty string as NULL, so text columns from Oracle can't
     distinguish the two.
+- Database connections and queries are configuration. A connection string may
+  name environment variables as `${NAME}`, so passwords stay out of files, and
+  dataset parameters bind to the query's `?` markers in a declared order. A
+  column fetched as text to stay exact, a zoneless time's zone and choice in the
+  repeated hour, a time kept as wall-clock, and a JSON column's fields are all
+  declared per dataset. Digits below the microsecond refuse the load rather than
+  being cut. The ODBC and MongoDB connectors are features of `parallax-sources`
+  and the server, because they need unixODBC and the database drivers
+  installed. CI runs them against SQL Server, Oracle Database and MongoDB in
+  service containers.
 - **JSON columns and MongoDB documents** go through one shared converter that
   maps declared paths to declared Arrow types.
   - Numbers are parsed from text straight into the declared type, and decimals
@@ -431,7 +441,10 @@ connectors cover where the data already lives:
     [Deferred work](future.md).
   - Wall-clock text without an offset follows the zoneless-timestamp rule in
     the column's zone.
-  - MongoDB uses the official `mongodb` driver.
+  - MongoDB uses the official `mongodb` driver. `Decimal128` values keep every
+    digit, dates become instants, and object ids become their hex text. The
+    filter is extended JSON with `{name}` placeholders, filled as JSON strings
+    so that a parameter cannot change the filter's shape.
 - **Parquet** goes through the `parquet` crate, behind a local SSD cache keyed
   by path, size and modification time, so the slow NFS share is read only once.
   Older copies of a file are removed when a newer one is cached. Dataset

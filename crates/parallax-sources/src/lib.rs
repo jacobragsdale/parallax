@@ -13,6 +13,10 @@ use arrow_schema::SchemaRef;
 #[cfg(feature = "http")]
 pub mod http;
 pub mod json;
+#[cfg(feature = "mongodb")]
+pub mod mongo;
+#[cfg(feature = "odbc")]
+pub mod odbc;
 #[cfg(feature = "parquet")]
 pub mod parquet;
 
@@ -53,33 +57,45 @@ pub struct Filled {
 }
 
 /// Fills `{name}` placeholders in `template` from `parameters`, passing each value
-/// through `escape`, which may refuse it.
+/// through `escape`, which may refuse it. A placeholder is a brace around a name
+/// of letters, digits and underscores; any other brace, such as one in a JSON
+/// filter, is copied as it is.
 ///
 /// # Errors
 ///
-/// Returns a message naming a placeholder without a parameter, an unclosed
-/// brace, or a value `escape` refuses.
+/// Returns a message naming a placeholder without a parameter, or a value
+/// `escape` refuses.
 pub fn fill(
     template: &str,
     parameters: &BTreeMap<String, String>,
     escape: impl Fn(&str) -> Result<String, String>,
 ) -> Result<Filled, String> {
+    let is_name = |s: &str| {
+        !s.is_empty()
+            && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            && !s.starts_with(|c: char| c.is_ascii_digit())
+    };
     let mut text = String::with_capacity(template.len());
     let mut used = std::collections::BTreeSet::new();
     let mut rest = template;
     while let Some(open) = rest.find('{') {
         text.push_str(&rest[..open]);
-        let close = rest[open..]
-            .find('}')
-            .ok_or_else(|| format!("unclosed {{ in {template}"))?
-            + open;
-        let name = &rest[open + 1..close];
-        let value = parameters
-            .get(name)
-            .ok_or_else(|| format!("the parameter {name} is missing"))?;
-        text.push_str(&escape(value)?);
-        used.insert(name.to_owned());
-        rest = &rest[close + 1..];
+        let after = &rest[open + 1..];
+        match after.find('}') {
+            Some(close) if is_name(&after[..close]) => {
+                let name = &after[..close];
+                let value = parameters
+                    .get(name)
+                    .ok_or_else(|| format!("the parameter {name} is missing"))?;
+                text.push_str(&escape(value)?);
+                used.insert(name.to_owned());
+                rest = &after[close + 1..];
+            }
+            _ => {
+                text.push('{');
+                rest = after;
+            }
+        }
     }
     text.push_str(rest);
     Ok(Filled { text, used })
@@ -97,4 +113,56 @@ pub fn percent_encode(text: &str) -> String {
         }
     }
     out
+}
+
+/// Replaces `${NAME}` with the environment variable `NAME`.
+///
+/// # Errors
+///
+/// Returns a message naming a variable that is not set.
+pub fn expand_environment(text: &str) -> Result<String, String> {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(open) = rest.find("${") {
+        out.push_str(&rest[..open]);
+        let close = rest[open..]
+            .find('}')
+            .ok_or_else(|| "an unclosed ${ in the text".to_owned())?
+            + open;
+        let name = &rest[open + 2..close];
+        out.push_str(
+            &std::env::var(name)
+                .map_err(|_| format!("the environment variable {name} is not set"))?,
+        );
+        rest = &rest[close + 1..];
+    }
+    out.push_str(rest);
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_named_braces_are_placeholders() {
+        let p: BTreeMap<String, String> = [("as_of".to_owned(), "2026-11-02".to_owned())].into();
+        let filled = fill(r#"{"date": "{as_of}", "n": {"$gt": 1}}"#, &p, |v| {
+            Ok(v.to_owned())
+        })
+        .unwrap();
+        assert_eq!(filled.text, r#"{"date": "2026-11-02", "n": {"$gt": 1}}"#);
+        assert_eq!(filled.used.into_iter().collect::<Vec<_>>(), ["as_of"]);
+        assert!(
+            fill("/{missing}/", &p, |v| Ok(v.to_owned()))
+                .unwrap_err()
+                .contains("missing")
+        );
+        assert_eq!(
+            fill("Driver={ODBC Driver 18}", &p, |v| Ok(v.to_owned()))
+                .unwrap()
+                .text,
+            "Driver={ODBC Driver 18}"
+        );
+    }
 }

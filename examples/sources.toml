@@ -36,3 +36,30 @@ primary_key = "position_id"
 kind = "parquet"
 path = "/mnt/share/eod/{as_of}/positions.parquet"
 cache_dir = "/var/cache/parallax"
+
+# SQL Server through ODBC (build the server with --features odbc). The password
+# comes from the environment; parameters bind to ? in the order listed.
+# [[dataset]]
+# name = "trades"
+# parameters = ["as_of"]
+# primary_key = "trade_id"
+# [dataset.source]
+# kind = "odbc"
+# connection = "Driver={ODBC Driver 18 for SQL Server};Server=sql.internal;Database=Trading;UID=parallax;PWD=${TRADING_PASSWORD};Encrypt=yes;"
+# query = "SELECT trade_id, fund, notional, executed_at, attributes FROM dbo.Trades WHERE trade_date = ?"
+# bind = ["as_of"]
+# zones = { executed_at = { zone = "America/New_York", ambiguous = "earlier" } }
+# json = [{ column = "attributes", fields = [{ name = "desk", type = "text" }, { name = "beta", path = "risk.beta", type = "float" }] }]
+
+# MongoDB (build the server with --features mongodb).
+# [[dataset]]
+# name = "orders"
+# parameters = ["fund"]
+# [dataset.source]
+# kind = "mongodb"
+# uri = "mongodb://parallax:${MONGO_PASSWORD}@mongo.internal:27017"
+# database = "oms"
+# collection = "orders"
+# filter = '{"fund": "{fund}", "status": {"$ne": "cancelled"}}'
+# key = "_id"
+# columns = [{ name = "order_id", path = "_id", type = "text" }, { name = "notional", type = "decimal(20, 2)" }]

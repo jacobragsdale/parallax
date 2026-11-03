@@ -59,10 +59,16 @@ struct DatasetConfig {
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum SourceConfig {
-    ArrowFile { path: PathBuf },
+    ArrowFile {
+        path: PathBuf,
+    },
     Generator(Generator),
     Http(HttpConfig),
     Parquet(ParquetConfig),
+    #[cfg(feature = "odbc")]
+    Odbc(parallax_sources::odbc::OdbcConfig),
+    #[cfg(feature = "mongodb")]
+    Mongodb(parallax_sources::mongo::MongoConfig),
 }
 
 fn default_max_tables() -> usize {
@@ -89,6 +95,10 @@ async fn main() -> anyhow::Result<()> {
                 SourceConfig::Generator(g) => Box::new(g),
                 SourceConfig::Http(c) => Box::new(Http::new(c)),
                 SourceConfig::Parquet(c) => Box::new(Parquet::new(c)),
+                #[cfg(feature = "odbc")]
+                SourceConfig::Odbc(c) => Box::new(parallax_sources::odbc::Odbc::new(c)),
+                #[cfg(feature = "mongodb")]
+                SourceConfig::Mongodb(c) => Box::new(parallax_sources::mongo::Mongo::new(c)),
             },
             name: d.name,
             parameters: d.parameters,

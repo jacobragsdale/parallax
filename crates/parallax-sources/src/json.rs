@@ -193,6 +193,20 @@ impl JsonField {
 /// text can hold unescaped.
 const BARE_MARKER: &str = "\u{1}bare:";
 
+/// A non-finite double as a value only number columns accept, for sources that
+/// hold real doubles, such as MongoDB.
+#[must_use]
+pub fn non_finite(value: f64) -> Value {
+    let token = if value.is_nan() {
+        "NaN"
+    } else if value > 0.0 {
+        "Infinity"
+    } else {
+        "-Infinity"
+    };
+    Value::String(format!("{BARE_MARKER}{token}"))
+}
+
 /// Rewrites bare `NaN`, `Infinity` and `-Infinity` tokens outside strings as
 /// marked strings, so that a standard parser reads Python's output and only
 /// number columns accept them.
@@ -521,4 +535,86 @@ pub fn to_batch(
         .map(|(b, f)| b.finish(f.field_type))
         .collect::<Result<Vec<_>, _>>()?;
     RecordBatch::try_new(schema, arrays).map_err(|e| e.to_string())
+}
+
+/// Converts text values, as a database returns them, into a column of the
+/// field's declared type, with the same rules as JSON values. Used where a source
+/// must fetch a column as text to keep it exact, such as Oracle's `NUMBER`
+/// without a declared precision.
+///
+/// # Errors
+///
+/// Returns a message naming the row and the value that does not fit.
+pub fn typed_from_text<'a>(
+    field: &JsonField,
+    texts: impl Iterator<Item = Option<&'a str>>,
+) -> Result<ArrayRef, String> {
+    let zone_name = field.zone.as_deref().unwrap_or(DEFAULT_SOURCE_ZONE);
+    let zone = TimeZone::get(zone_name)
+        .map_err(|_| format!("{}: unknown time zone {zone_name}", field.name))?;
+    let (lower, upper) = texts.size_hint();
+    let mut builder = Builder::new(field.field_type, upper.unwrap_or(lower));
+    for (row, text) in texts.enumerate() {
+        match text {
+            None => builder.null(),
+            Some(t) => {
+                let value = match field.field_type {
+                    FieldType::Boolean => match t.trim().to_ascii_lowercase().as_str() {
+                        "1" | "true" => Value::Bool(true),
+                        "0" | "false" => Value::Bool(false),
+                        _ => Value::String(t.to_owned()),
+                    },
+                    _ => Value::String(normalize_offset(t)),
+                };
+                append(&mut builder, field, &zone, &value)
+                    .map_err(|why| format!("row {row}, {}: {t:?} {why}", field.name))?;
+            }
+        }
+    }
+    builder.finish(field.field_type)
+}
+
+/// Databases write offsets after a space, as in `2026-11-01 05:30:00.0000000 +00:00`;
+/// RFC 3339 has none there.
+fn normalize_offset(text: &str) -> String {
+    let t = text.trim();
+    match t.rfind([' ']) {
+        Some(i) if t[i + 1..].starts_with(['+', '-']) && t[i + 1..].contains(':') => {
+            format!("{}{}", &t[..i], &t[i + 1..])
+        }
+        _ => t.to_owned(),
+    }
+}
+
+/// Turns wall-clock times, stored as microseconds read as UTC, into instants in
+/// `zone`, refusing the spring gap and, unless told otherwise, the autumn fold.
+///
+/// # Errors
+///
+/// Returns a message naming the row of a time that does not resolve.
+pub fn instants_from_wall_clock(
+    column: &str,
+    micros: impl Iterator<Item = Option<i64>>,
+    zone: &str,
+    ambiguous: Ambiguous,
+) -> Result<ArrayRef, String> {
+    let tz = TimeZone::get(zone).map_err(|_| format!("{column}: unknown time zone {zone}"))?;
+    let mut builder = TimestampMicrosecondBuilder::new();
+    for (row, value) in micros.enumerate() {
+        match value {
+            None => builder.append_null(),
+            Some(us) => {
+                let civil = jiff::Timestamp::from_microsecond(us)
+                    .map_err(|e| format!("row {row}, {column}: {e}"))?
+                    .to_zoned(TimeZone::UTC)
+                    .datetime();
+                let text = civil.to_string();
+                builder.append_value(
+                    read_instant(&text, &tz, ambiguous)
+                        .map_err(|why| format!("row {row}, {column}: {text} {why}"))?,
+                );
+            }
+        }
+    }
+    Ok(Arc::new(builder.finish().with_timezone("UTC")))
 }
