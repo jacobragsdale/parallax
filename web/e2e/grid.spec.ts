@@ -281,13 +281,26 @@ test.describe("export", () => {
     expect(bytes.subarray(0, 2).toString()).toBe("PK");
   });
 
+  test("a refused export says why in the status bar", async ({ page }) => {
+    // Answer the post as the server answers a refusal from another origin.
+    await page.route("**/export", async (route) => {
+      const token = new URLSearchParams(route.request().postData() ?? "").get("token") ?? "";
+      const payload = JSON.stringify({ source: "parallax-export", token, error: "the view has 2000000 rows, more than the 1048576 an Excel sheet holds" });
+      await route.fulfill({ status: 422, contentType: "text/html", body: `<script>parent.postMessage(${payload}, "*");</script>` });
+    });
+    await open(page, "preset=pivot");
+    await page.getByRole("button", { name: "Export to Excel" }).click();
+    await expect(page.locator(".px-status-message")).toContainText("Export failed: the view has 2000000 rows");
+  });
+
   test("CSV downloads every digit of the view", async ({ page }) => {
     await open(page, "preset=pivot");
     const download = page.waitForEvent("download", { timeout: 60_000 });
     await page.getByRole("button", { name: "CSV" }).click();
     const file = await download;
     const text = await import("node:fs").then(async (fs) => fs.readFileSync(await file.path(), "utf8"));
-    const lines = text.split("\n");
+    expect(text.startsWith("\uFEFF")).toBe(true);
+    const lines = text.slice(1).split("\n");
     expect(lines[0]?.startsWith("level,fund,strategy,sector,ticker,Bond | sum(market_value_usd),")).toBe(true);
     expect(lines[0]?.endsWith(",Total | count(*)")).toBe(true);
     expect(lines[1]?.startsWith("0,,,,,")).toBe(true);

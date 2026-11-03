@@ -69,6 +69,9 @@ export interface DrillRequest {
   readonly label: string;
 }
 
+/** The message a refused export posts from its hidden frame. */
+const exportRefusal = z.strictObject({ source: z.literal("parallax-export"), token: z.string(), error: z.string() });
+
 /** Row heights by density. */
 const ROW_HEIGHTS = { compact: 24, comfortable: 30 } as const;
 
@@ -428,19 +431,24 @@ export class GridComponent {
     if (layout === null) {
       return;
     }
-    const target = `px-export-${String(Date.now())}-${String(Math.random()).slice(2)}`;
+    const token = `${String(Date.now())}-${String(Math.random()).slice(2)}`;
+    const target = `px-export-${token}`;
     const frame = this.document.createElement("iframe");
     frame.name = target;
     frame.hidden = true;
-    // Downloads do not load the frame; an error answer does.
-    frame.addEventListener("load", () => {
-      const text = frame.contentDocument?.body.textContent.trim() ?? "";
-      if (text !== "") {
-        this.message.set(`Export failed: ${text}`);
+    // Downloads never reach the page; a refusal posts its reason here, which works
+    // even when the server is on another origin and the frame cannot be read.
+    const window = this.document.defaultView;
+    const listen = (event: MessageEvent<unknown>): void => {
+      const posted = exportRefusal.safeParse(event.data);
+      if (posted.success && posted.data.token === token) {
+        this.message.set(`Export failed: ${posted.data.error}`);
       }
-    });
+    };
+    window?.addEventListener("message", listen);
     this.document.body.append(frame);
     setTimeout(() => {
+      window?.removeEventListener("message", listen);
       frame.remove();
     }, 600_000);
     const form = this.document.createElement("form");
@@ -449,7 +457,8 @@ export class GridComponent {
     form.target = target;
     for (const [name, value] of [
       ["layout", JSON.stringify(layout)],
-      ["format", format]
+      ["format", format],
+      ["token", token]
     ] as const) {
       const field = this.document.createElement("input");
       field.type = "hidden";

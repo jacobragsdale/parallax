@@ -573,11 +573,13 @@ so it holds the same numbers.
   the microsecond, which Excel cannot hold, are written as their text.
 - The sheet has a frozen header row, column widths from the layout, and, for
   flat views, an autofilter.
-- A pivot exports every group as an outline, and groups collapsed on screen
-  start collapsed. `rust_xlsxwriter` writes outline levels only for sheets it
-  holds in memory, so pivots of up to 2,000,000 cells are outlined; larger ones
-  stream without an outline, indented by level. Native Excel pivot tables are not
-  written.
+- A pivot exports every group as an outline, with the outline buttons beside
+  the group rows, which come first as on screen. Groups start expanded:
+  `rust_xlsxwriter` 0.102 marks a collapsed group on the row after it, which is
+  right only for buttons below the groups. It also writes outline levels only for
+  sheets it holds in memory, so pivots of up to 2,000,000 cells are outlined and
+  larger ones stream without an outline, indented by level. Native Excel pivot
+  tables are not written.
 - A Notes sheet records the dataset, when the source was read, the layout, and
   every place Excel cannot match the screen: values with more than 15
   significant digits, which Excel rounds; infinities, which it lacks; and the
@@ -585,7 +587,15 @@ so it holds the same numbers.
 - An export larger than Excel's limit of 1,048,576 rows, or text longer than a
   cell's 32,767 characters, is refused with the reason, and CSV is offered
   instead. CSV holds every digit as text, and a pivot's CSV has one column per
-  group level.
+  group level. It starts with a UTF-8 byte-order mark, without which Excel
+  reads non-ASCII text in the system code page, and text that a spreadsheet
+  would run as a formula gets a leading apostrophe.
+
+The export reads the table one chunk at a time, each under its own read lock,
+so a long export never holds up a reload; if the table reloads part way, the
+export stops rather than mix two loads. A refusal reaches the page even when the
+server is on another origin: the form carries a token, and the answer posts the
+reason to the page, which shows it in the status bar.
 
 The read-back tests open each export with `calamine` and compare every cell
 with the engine's value, bit for bit for doubles. Excel can't run on the build

@@ -7,9 +7,7 @@ use std::io::{Cursor, Read};
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
-use arrow_array::types::{
-    Date32Type, Decimal128Type, Float64Type, Int32Type, Int64Type, UInt8Type,
-};
+use arrow_array::types::{Date32Type, Decimal128Type, Float64Type, Int64Type, UInt8Type};
 use arrow_array::{
     Array, ArrayRef, Decimal128Array, Float64Array, Int64Array, RecordBatch, StringArray,
 };
@@ -231,7 +229,7 @@ fn a_flat_export_holds_the_engine_values_exactly() {
 }
 
 #[test]
-fn a_pivot_exports_every_group_with_collapsed_ones_hidden() {
+fn a_pivot_exports_every_group_as_an_outline() {
     let table = positions(3_000);
     let layout = r#"{"group_by":["fund","strategy"],"split_by":["long_short"],
         "measures":[{"column":"market_value_usd","aggregate":"sum"},{"aggregate":"count_all"},
@@ -268,28 +266,18 @@ fn a_pivot_exports_every_group_with_collapsed_ones_hidden() {
             );
         }
     }
-    // The collapsed fund's strategies are hidden; every other group is visible.
-    let depth = frame
-        .column_by_name("__depth")
-        .unwrap()
-        .as_primitive::<Int32Type>()
-        .clone();
-    let atlas = (0..frame.num_rows())
-        .find(|&r| labels.value(r) == "Atlas Global Macro")
-        .unwrap();
-    let children = (atlas + 1..frame.num_rows())
-        .take_while(|&r| depth.value(r) > depth.value(atlas))
-        .count();
-    assert!(children > 0);
+    // Every group is exported expanded, collapsed on screen or not: Excel's
+    // outline buttons collapse them.
     let xml = zipped(&bytes, "xl/worksheets/sheet1.xml");
-    assert_eq!(
-        xml.matches("hidden=\"1\"").count(),
-        children,
-        "only the collapsed fund's children are hidden"
-    );
+    assert_eq!(xml.matches("hidden=\"1\"").count(), 0);
+    assert!(!xml.contains("collapsed=\"1\""));
     assert!(
         xml.contains("outlineLevel=\"2\""),
         "strategies sit two levels in"
+    );
+    assert!(
+        xml.contains("summaryBelow=\"0\""),
+        "the buttons sit beside the group rows, above their children"
     );
 }
 
@@ -420,6 +408,9 @@ fn csv_holds_every_digit() {
     let mut out = Vec::new();
     write_csv(&long_decimals(), &Layout::default(), &mut out).unwrap();
     let text = String::from_utf8(out).unwrap();
+    let text = text
+        .strip_prefix('\u{feff}')
+        .expect("a byte-order mark for Excel");
     let lines: Vec<&str> = text.lines().collect();
     assert_eq!(lines[0], "notional,rate");
     assert_eq!(lines[1], "123456789012345678.90,0.30000000000000004");
@@ -437,7 +428,7 @@ fn a_pivot_csv_names_each_level() {
     .unwrap();
     write_csv(&table, &layout, &mut out).unwrap();
     let text = String::from_utf8(out).unwrap();
-    let mut lines = text.lines();
+    let mut lines = text.trim_start_matches('\u{feff}').lines();
     assert_eq!(lines.next(), Some("level,fund,strategy,count(*)"));
     assert_eq!(lines.next(), Some("0,,,800"));
     let fund = lines.next().unwrap();
@@ -447,4 +438,108 @@ fn a_pivot_csv_names_each_level() {
         strategy.starts_with("2,") && strategy.split(',').nth(1) == fund.split(',').nth(1),
         "{strategy} under {fund}"
     );
+}
+
+/// A table that reloads after its first read, as one can between export chunks.
+struct Reloading {
+    reads: std::sync::atomic::AtomicUsize,
+    before: Table,
+    after: Table,
+}
+
+impl parallax_export::ReadTable for Reloading {
+    type Guard<'a> = &'a Table;
+
+    fn read(&self) -> Result<&Table, String> {
+        let n = self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(if n == 0 { &self.before } else { &self.after })
+    }
+}
+
+#[test]
+fn a_reload_part_way_stops_the_export() {
+    let before = positions(200);
+    let mut after = positions(200);
+    let batch = Positions::new(PositionsOptions {
+        rows: 200,
+        seed: 12,
+        securities: 150,
+        ..PositionsOptions::default()
+    })
+    .unwrap()
+    .batch(0..200);
+    after.load(&[batch]).unwrap();
+    assert_ne!(before.load_version(), after.load_version());
+    let tables = Reloading {
+        reads: std::sync::atomic::AtomicUsize::new(0),
+        before,
+        after,
+    };
+    let error = write_xlsx(
+        &tables,
+        &Layout::default(),
+        &ExportSource::default(),
+        Cursor::new(Vec::new()),
+    )
+    .unwrap_err();
+    assert!(matches!(error, ExportError::Reloaded), "{error}");
+    tables.reads.store(0, std::sync::atomic::Ordering::SeqCst);
+    assert!(matches!(
+        write_csv(&tables, &Layout::default(), Vec::new()).unwrap_err(),
+        ExportError::Reloaded
+    ));
+}
+
+#[test]
+fn a_layout_longer_than_a_cell_spreads_over_note_rows() {
+    let table = positions(100);
+    let values: Vec<String> = (0..3_000)
+        .map(|i| format!("\"fund number {i:05}\""))
+        .collect();
+    let layout = format!(
+        r#"{{"filters":[{{"column":"fund","op":"not_in","values":[{}]}}]}}"#,
+        values.join(",")
+    );
+    let mut out = Cursor::new(Vec::new());
+    write_xlsx(
+        &table,
+        &Layout::from_json(&layout).unwrap(),
+        &ExportSource::default(),
+        &mut out,
+    )
+    .unwrap();
+    let mut book: Xlsx<_> = open_workbook_from_rs(Cursor::new(out.into_inner())).unwrap();
+    let notes = book.worksheet_range("Notes").unwrap();
+    let parts: Vec<String> = notes
+        .rows()
+        .filter(|r| r[0] == Data::String("Layout".into()))
+        .map(|r| r[1].to_string())
+        .collect();
+    assert!(parts.len() > 1);
+    assert_eq!(
+        parts.concat(),
+        Layout::from_json(&layout).unwrap().to_json()
+    );
+}
+
+#[test]
+fn csv_text_that_looks_like_a_formula_stays_text() {
+    let batch = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            Field::new("note", DataType::Utf8, false),
+            Field::new("pnl", DataType::Float64, false),
+        ])),
+        vec![
+            Arc::new(StringArray::from(vec!["=1+1", "plain"])) as ArrayRef,
+            Arc::new(Float64Array::from(vec![-5.0, 2.0])) as ArrayRef,
+        ],
+    )
+    .unwrap();
+    let mut out = Vec::new();
+    write_csv(&table_of(&batch), &Layout::default(), &mut out).unwrap();
+    let text = String::from_utf8(out).unwrap();
+    let lines: Vec<&str> = text.trim_start_matches('\u{feff}').lines().collect();
+    // Text is guarded; a negative number is still a number.
+    assert_eq!(lines[1], "'=1+1,-5.0");
+    assert_eq!(lines[2], "plain,2.0");
 }

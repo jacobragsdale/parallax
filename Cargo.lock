@@ -1672,6 +1672,7 @@ dependencies = [
  "parallax-session",
  "prost",
  "serde",
+ "serde_json",
  "tempfile",
  "tokio",
  "tokio-tungstenite",

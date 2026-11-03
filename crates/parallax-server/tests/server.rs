@@ -337,6 +337,7 @@ async fn the_export_endpoint_downloads_csv_with_every_row() {
             .starts_with("text/csv")
     );
     let text = String::from_utf8(body).unwrap();
+    let text = text.trim_start_matches('\u{feff}');
     assert_eq!(text.lines().next(), Some("position_id,fund"));
     assert_eq!(text.lines().count(), 2_001);
 }
@@ -358,4 +359,29 @@ async fn bad_exports_say_why() {
     .await;
     assert_eq!(status, 422);
     assert!(String::from_utf8_lossy(&body).contains("no_such_column"));
+}
+
+#[tokio::test]
+async fn a_refusal_for_a_page_posts_its_reason_to_the_parent_window() {
+    let body = format!(
+        "{}&token=abc",
+        form(
+            r#"{"dataset":"positions","group_by":["</script>"]}"#,
+            "xlsx"
+        )
+    );
+    let (status, headers, body) = export(body).await;
+    assert_eq!(status, 422);
+    assert!(
+        headers["content-type"]
+            .to_str()
+            .unwrap()
+            .starts_with("text/html")
+    );
+    let page = String::from_utf8(body).unwrap();
+    assert!(page.contains("parent.postMessage("), "{page}");
+    assert!(page.contains(r#""source":"parallax-export""#), "{page}");
+    assert!(page.contains(r#""token":"abc""#), "{page}");
+    // The reason cannot end the script early.
+    assert_eq!(page.matches("</script>").count(), 1, "{page}");
 }

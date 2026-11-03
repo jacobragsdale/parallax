@@ -814,6 +814,12 @@ impl View {
         }
     }
 
+    /// Whether the view groups rows, as a pivot does, rather than listing them.
+    #[must_use]
+    pub fn is_grouped(&self) -> bool {
+        matches!(self.kind, Kind::Grouped(_))
+    }
+
     /// The formatter of measure `measure`, as frames use it.
     #[must_use]
     pub fn measure_formatter(&self, measure: usize) -> Option<&Formatter> {

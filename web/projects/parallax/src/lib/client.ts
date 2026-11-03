@@ -15,6 +15,17 @@ export interface ParallaxConfig {
 
 const CONFIG = new InjectionToken<ParallaxConfig>("parallax config");
 
+/** The export endpoint beside a server's WebSocket endpoint: `wss://host/app/ws` gives `https://host/app/export`. */
+export function exportUrlFor(socketUrl: string): string {
+  const url = new URL(socketUrl);
+  url.protocol = url.protocol === "wss:" ? "https:" : "http:";
+  const base = url.pathname.replace(/\/ws\/?$/, "").replace(/\/+$/, "");
+  url.pathname = `${base}/export`;
+  url.search = "";
+  url.hash = "";
+  return url.toString();
+}
+
 /** Provides the parallax client for an application. */
 export function provideParallax(config: ParallaxConfig): EnvironmentProviders {
   return makeEnvironmentProviders([{ provide: CONFIG, useValue: config }]);
@@ -36,14 +47,7 @@ export class ParallaxClient {
 
   /** The URL exports are posted to. */
   public exportUrl(): string {
-    const configured = this.config.exportUrl;
-    if (configured !== undefined) {
-      return configured;
-    }
-    const socket = new URL(absolute(this.config.url));
-    socket.protocol = socket.protocol === "wss:" ? "https:" : "http:";
-    socket.pathname = socket.pathname.replace(/\/ws$/, "") + "/export";
-    return socket.toString();
+    return this.config.exportUrl ?? exportUrlFor(absolute(this.config.url));
   }
 
   /** Returns the shared connection. */
