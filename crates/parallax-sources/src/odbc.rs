@@ -5,7 +5,10 @@
 //!
 //! - **Declared types.** A column named in `types` is fetched as text and parsed
 //!   into its declared type exactly. Oracle's `NUMBER` without a precision is a
-//!   floating decimal of up to 38 digits and must be declared this way.
+//!   floating decimal of up to 38 digits, which Oracle's driver converts through
+//!   a double even when asked for text, so such a column must be selected as
+//!   `TO_CHAR(col, 'TM9', 'NLS_NUMERIC_CHARACTERS=''.,''')` and declared. On
+//!   Oracle, any other double column refuses the load unless `doubles` lists it.
 //! - **Zoneless times.** SQL Server `datetime` and `datetime2`, and Oracle
 //!   `DATE`, carry no zone. Each such column is read in its declared zone, New
 //!   York unless `zones` names another, and a time in the spring gap, or in the
@@ -38,7 +41,8 @@ use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use serde::Deserialize;
 
 use crate::json::{
-    Ambiguous, DEFAULT_SOURCE_ZONE, JsonField, instants_from_wall_clock, to_batch, typed_from_text,
+    Ambiguous, DEFAULT_SOURCE_ZONE, FieldType, JsonField, instants_from_wall_clock, to_batch,
+    typed_from_text,
 };
 use crate::{Fetched, Source, expand_environment, now_micros};
 
@@ -84,7 +88,7 @@ pub struct OdbcConfig {
     pub bind: Vec<String>,
     /// Columns fetched as text and parsed exactly into a declared type.
     #[serde(default)]
-    pub types: BTreeMap<String, crate::json::FieldType>,
+    pub types: BTreeMap<String, FieldType>,
     /// Zones of zoneless time columns; the rest are read in New York.
     #[serde(default)]
     pub zones: BTreeMap<String, ZoneRule>,
@@ -96,7 +100,8 @@ pub struct OdbcConfig {
     pub json: Vec<JsonColumn>,
     /// Oracle columns that really are binary doubles. Oracle's driver reports a
     /// `NUMBER` without a precision as a double, which would round it, so on
-    /// Oracle every double column must be declared in `types` or listed here.
+    /// Oracle every double column must be listed here, declared as a float, or
+    /// selected through `TO_CHAR` and declared.
     #[serde(default)]
     pub doubles: Vec<String>,
 }
@@ -245,15 +250,28 @@ impl Odbc {
         }
         if oracle {
             for field in inferred.fields() {
+                let name = field.name();
                 let double = matches!(field.data_type(), DataType::Float32 | DataType::Float64);
-                if double
-                    && !self.config.types.contains_key(field.name())
-                    && !self.config.doubles.contains(field.name())
-                {
-                    return Err(format!(
-                        "{} comes from Oracle as a double, which rounds a NUMBER without a precision; declare it in types, such as decimal(38, 10), or list it in doubles if it is BINARY_DOUBLE",
-                        field.name()
-                    ));
+                if !double || self.config.doubles.contains(name) {
+                    continue;
+                }
+                // Oracle's driver converts a NUMBER without a precision through a
+                // double even when it is fetched as text, so only text made by the
+                // query keeps every digit.
+                let to_char =
+                    format!("TO_CHAR({name}, 'TM9', 'NLS_NUMERIC_CHARACTERS=''.,''') AS {name}");
+                match self.config.types.get(name) {
+                    Some(FieldType::Float) => {}
+                    Some(_) => {
+                        return Err(format!(
+                            "{name} comes from Oracle as a double, which rounds a NUMBER without a precision even when fetched as text; select it as {to_char} and keep its declared type"
+                        ));
+                    }
+                    None => {
+                        return Err(format!(
+                            "{name} comes from Oracle as a double, which rounds a NUMBER without a precision; select it as {to_char} and declare its type in types, such as decimal(38, 10), or list it in doubles if it is BINARY_DOUBLE"
+                        ));
+                    }
                 }
             }
         }

@@ -49,8 +49,12 @@ jobs:
         options: >-
           --health-cmd healthcheck.sh --health-interval 10s --health-timeout 5s --health-retries 60
       mongo:
-        image: mongo:8
+        # MongoDB 8.0 refuses to start on Linux 6.19 and newer (SERVER-121912),
+        # which the runners use.
+        image: mongo:7
         ports: ["27017:27017"]
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand({ping: 1})'" --health-interval 5s --health-timeout 5s --health-retries 30
     steps:
       - uses: actions/checkout@v7
       - run: rustup toolchain install

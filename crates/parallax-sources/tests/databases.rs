@@ -304,6 +304,8 @@ mod odbc {
                 "BEGIN EXECUTE IMMEDIATE 'DROP TABLE parallax_lots'; EXCEPTION WHEN OTHERS THEN NULL; END;",
                 "CREATE TABLE parallax_lots (id NUMBER(19), qty NUMBER, note VARCHAR2(20), opened DATE)",
                 "INSERT INTO parallax_lots VALUES (1, 12345678901234567890.123456789, '', TO_DATE('2026-03-08 03:30:00', 'YYYY-MM-DD HH24:MI:SS'))",
+                // TO_CHAR writes this as -.25, without the leading zero.
+                "INSERT INTO parallax_lots VALUES (2, -0.25, 'short', TO_DATE('2026-03-08 03:30:00', 'YYYY-MM-DD HH24:MI:SS'))",
             ],
         );
         // Undeclared, Oracle's driver reports the NUMBER as a double, which would round it.
@@ -318,21 +320,31 @@ mod odbc {
                 .is_err_and(|e| e.contains("as a double")),
             "{undeclared:?}"
         );
+        // Declaring it is not enough: the driver still converts through a double,
+        // so the refusal says to select it through TO_CHAR.
+        let mut declared_only = config(connection.clone(), "SELECT id, qty FROM parallax_lots");
+        declared_only
+            .types
+            .insert("QTY".into(), FieldType::Decimal(38, 10));
+        let refused = Odbc::new(declared_only).fetch(&BTreeMap::new());
+        assert!(
+            refused.as_ref().is_err_and(|e| e.contains("TO_CHAR(QTY")),
+            "{refused:?}"
+        );
         let mut c = config(
             connection,
-            "SELECT id, qty, note, opened FROM parallax_lots",
+            "SELECT id, TO_CHAR(qty, 'TM9', 'NLS_NUMERIC_CHARACTERS=''.,''') AS qty, note, opened FROM parallax_lots ORDER BY id",
         );
         // Oracle returns column names in upper case.
         c.types.insert("QTY".into(), FieldType::Decimal(38, 10));
         let fetched = Odbc::new(c).fetch(&BTreeMap::new()).unwrap();
         let b = &fetched.batches[0];
-        assert_eq!(
-            b.column_by_name("QTY")
-                .unwrap()
-                .as_primitive::<Decimal128Type>()
-                .value(0),
-            123_456_789_012_345_678_901_234_567_890
-        );
+        let qty = b
+            .column_by_name("QTY")
+            .unwrap()
+            .as_primitive::<Decimal128Type>();
+        assert_eq!(qty.value(0), 123_456_789_012_345_678_901_234_567_890);
+        assert_eq!(qty.value(1), -2_500_000_000);
         // Oracle stores the empty string as null.
         assert!(b.column_by_name("NOTE").unwrap().is_null(0));
         // 03:30 EDT on 2026-03-08 is 07:30 UTC.

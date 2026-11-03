@@ -415,8 +415,10 @@ connectors cover where the data already lives:
   Instant Client ODBC driver. Three Oracle behaviours meet the load rules in
   [What "never wrong" means](#what-never-wrong-means):
   - `NUMBER` without a declared precision is a floating decimal of up to 38
-    digits. Such a column must declare its Arrow type, and its values are
-    fetched as text and parsed exactly, never through f64.
+    digits, but Oracle's ODBC driver reports it as a double and converts it
+    through one even when asked for text. Such a column must be selected as
+    `TO_CHAR(col, 'TM9', 'NLS_NUMERIC_CHARACTERS=''.,''')` and declare its Arrow
+    type, so the text made by the database is parsed exactly, never through f64.
   - `DATE` carries a time of day but no zone, so it follows the rule for
     zoneless timestamps. `TIMESTAMP WITH TIME ZONE` is an instant.
   - Oracle stores an empty string as NULL, so text columns from Oracle can't
@@ -429,9 +431,9 @@ connectors cover where the data already lives:
   declared per dataset. Digits below the microsecond refuse the load rather than
   being cut. Every column a setting names must be in the query's result, so a
   misspelt name fails instead of falling back to defaults. On Oracle, a column
-  the driver reports as a double must be declared or listed as a real
-  `BINARY_DOUBLE`, because the driver reports a `NUMBER` without a precision as
-  a double. An environment value is quoted for its setting: braced in an ODBC
+  the driver reports as a double refuses the load unless it is listed as a real
+  `BINARY_DOUBLE` or declared as a float, and the refusal names the `TO_CHAR`
+  form to select instead. An environment value is quoted for its setting: braced in an ODBC
   string, percent-encoded in a MongoDB URI; `env:NAME` takes a whole setting from
   the environment. The ODBC and MongoDB connectors are features of `parallax-sources`
   and the server, because they need unixODBC and the database drivers
