@@ -67,13 +67,25 @@ server build parallelizes with rayon.
 
 ## Inside the engine
 
-A table stores each column as Arrow arrays in chunks. Text columns are
-dictionary-encoded with a sorted dictionary per column, so sorting and grouping
-compare integers instead of strings. A hash index on the primary key locates
-rows for updates and deletes. Those land as change chunks, which a background
-compaction merges into the main chunks.
+A table stores each column as a typed vector with a validity bitmap, one entry
+per slot. A slot is stable for the life of a row:
 
-A view is a dataflow pipeline over a table:
+- an update overwrites the slot in place
+- a delete frees it for reuse
+- a hash index on the primary key finds the slot for a key
+
+Text columns are dictionary-encoded. Each dictionary keeps a rank for every
+string in the engine's text order, so sorting and grouping compare integers
+instead of strings. Arrow is the format at the edges: loads arrive as Arrow
+batches, and every window leaves as one.
+
+A load into a keyed table is a diff against the current contents. New keys are
+inserted, changed rows are updated in place, and missing keys are deleted. The
+load is validated in full before anything changes. The result is a change set:
+the old images of removed and overwritten rows, and the slots of new and updated
+ones.
+
+A view is a pipeline over a table:
 
 1. filter
 2. computed columns
@@ -82,19 +94,31 @@ A view is a dataflow pipeline over a table:
 5. sort
 6. the window the screen asks for
 
-Perspective is built the same way. When a table changes, the change travels
-through the pipeline as a diff instead of triggering a full recomputation. Live
-streams use this, but its main use is refresh. About 90% of pages show snapshot
-data, and applying a reload as a diff keeps an open pivot's expanded rows, sort
-and scroll position intact. Totals are always computed in full. Only expanded
-groups and the visible window, plus a margin, are materialized.
+A grouped view applies a change set as a diff, as Perspective does. It removes
+the old images' contributions and adds the new rows'. That gives the same
+state as building the view from scratch, which the tests check after random
+streams of loads and upserts. Live streams use this, but its main use is
+refresh. About 90% of pages show snapshot data, and applying a reload as a diff
+keeps an open pivot's expanded rows, sort and scroll position intact.
+
+A flat view re-filters and re-sorts the table on every change, using every core
+on the server. Incremental maintenance of flat views waits for live sources,
+which are deferred.
+
+A grouped view keeps a tree. The root is the grand total, and each level below
+groups by one more column. Every node is fed directly by base rows, so no total
+is computed from other totals. Column pivots keep one cell per node and
+column-pivot key, next to the node's own row total.
 
 The aggregates are sum, count, mean, weighted mean, minimum, maximum, first,
 last, distinct count, variance, standard deviation, median and percentiles.
-Sum, count, mean and weighted mean can be reversed exactly, so a change costs
-constant time per group. Minimum, maximum, median, percentiles and distinct
-count keep a sorted structure per group, so they also update without a
-recomputation.
+
+- **Sum, count, mean, variance and weighted mean** are kept at every node as
+  exact sums that can be reversed. A change costs constant time per node.
+- **Minimum, maximum, first, last, distinct count, median and percentiles** keep
+  value counts at the leaf nodes only. Nodes above merge their leaves when a
+  value is needed, which keeps memory proportional to the rows rather than to
+  rows times levels.
 
 Pivots support:
 
@@ -127,10 +151,16 @@ is computed:
 - on the server
 - in DuckDB
 
-Removing a value adds its negative, which is equally exact. Integer sums
-accumulate in i128. A decimal sum that cannot fit 38 digits shows an overflow
-marker instead of a wrapped value. A mean is the exact sum divided by the
-count, rounded once.
+Removing a value adds its negative, which is equally exact. Integer and
+decimal sums accumulate in 256-bit integers. A decimal sum that cannot fit 38
+digits shows an overflow marker instead of a wrapped value. A mean is the exact
+sum divided by the count, rounded once.
+
+The sample variance of doubles comes from the exact sums of values and of
+squares, each square added without error. Big-integer arithmetic then divides
+once. A group of identical values therefore has a variance of exactly zero,
+not a rounding residue. Percentiles of decimals are reported as doubles at full
+interpolated precision. DuckDB instead rounds them to the column's scale.
 
 Every subtotal and grand total is computed from base rows, never from other
 subtotals, so no average is an average of averages. Percent-of-total with a

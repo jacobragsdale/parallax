@@ -1,0 +1,28 @@
+[package]
+name = "parallax-engine"
+description = "Columnar engine for parallax: tables, views, pivots and exact aggregates"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+arrow-array.workspace = true
+arrow-buffer = { version = "60.1", default-features = false }
+arrow-schema.workspace = true
+libm.workspace = true
+rustc-hash = "2.1"
+thiserror.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rayon.workspace = true
+
+[dev-dependencies]
+duckdb = { version = "=1.20000.1", features = ["download-lib", "appender-arrow"] }
+arrow-select = { version = "60.1", default-features = false }
+parallax-datagen = { path = "../parallax-datagen" }
+proptest = "1.12"
+
+[lints]
+workspace = true
