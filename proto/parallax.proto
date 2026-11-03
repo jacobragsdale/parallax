@@ -23,6 +23,7 @@ message ClientMessage {
     CloseView close_view = 7;
     DrillThrough drill_through = 8;
     DistinctValues distinct_values = 9;
+    FetchWindow fetch_window = 10;
   }
 }
 
@@ -94,6 +95,17 @@ message SetExpanded {
   // The group's values from the outermost level, as a JSON array.
   string path_json = 2;
   bool expanded = 3;
+}
+
+// Asks once for a window, such as the cells a user copies, without moving the
+// view's viewport. The reply is a Frame with this request's id; frames pushed
+// after a refresh still follow the viewport. At most 1,000,000 cells.
+message FetchWindow {
+  uint32 view_id = 1;
+  uint64 first_row = 2;
+  uint64 row_count = 3;
+  uint32 first_column = 4;
+  uint32 column_count = 5;
 }
 
 message CloseView {

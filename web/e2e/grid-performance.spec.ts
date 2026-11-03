@@ -1,7 +1,8 @@
 /**
- * The grid experiment: the canvas grid against the DOM grid, scrolling the same
- * views in Chromium with the GPU disabled and the CPU throttled four times, as a
- * stand-in for a Citrix desktop. Results go to test-results/grid-experiment.json.
+ * Scrolling performance of `<px-grid>` in Chromium with the GPU disabled and the
+ * CPU throttled four times, as a stand-in for a Citrix desktop. It repeats the
+ * method of the grid experiment (docs/grid-experiment.md) for the canvas grid.
+ * Results go to test-results/grid-performance.json.
  */
 
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -9,12 +10,10 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { expect, test } from "@playwright/test";
 import type { CDPSession, Page } from "@playwright/test";
 
-const GRIDS = ["canvas", "dom"] as const;
 const PRESETS = ["trades", "pivot"] as const;
 const STEPS = 240;
 
 interface Result {
-  readonly grid: string;
   readonly preset: string;
   readonly mode: string;
   readonly frames: number;
@@ -68,45 +67,42 @@ async function scroll(page: Page, rowsPerStep: number): Promise<readonly number[
   );
 }
 
-for (const grid of GRIDS) {
-  for (const preset of PRESETS) {
-    test(`${grid} grid scrolling ${preset}`, async ({ page }) => {
-      const cdp = await page.context().newCDPSession(page);
-      await cdp.send("Performance.enable");
-      await page.goto(`/?grid=${grid}&preset=${preset}`);
-      const gridElement = page.locator('[role="grid"]');
-      await expect(gridElement).toHaveAttribute("aria-rowcount", /^[1-9]\d*$/, { timeout: 120_000 });
-      await page.waitForTimeout(500);
-      await cdp.send("Emulation.setCPUThrottlingRate", { rate: 4 });
-      for (const [mode, rows] of [
-        ["smooth", 3],
-        ["jumping", 40]
-      ] as const) {
-        const before = await metrics(cdp);
-        const intervals = await scroll(page, rows);
-        const after = await metrics(cdp);
-        const frames = intervals.length;
-        results.push({
-          grid,
-          preset,
-          mode,
-          frames,
-          meanFrameMs: intervals.reduce((a, b) => a + b, 0) / frames,
-          p95FrameMs: percentile(intervals, 0.95),
-          maxFrameMs: Math.max(...intervals),
-          mainThreadMsPerFrame: delta(before, after, "TaskDuration") / frames,
-          scriptMsPerFrame: delta(before, after, "ScriptDuration") / frames,
-          layoutAndStyleMsPerFrame: (delta(before, after, "LayoutDuration") + delta(before, after, "RecalcStyleDuration")) / frames
-        });
-      }
-      await cdp.send("Emulation.setCPUThrottlingRate", { rate: 1 });
-    });
-  }
+for (const preset of PRESETS) {
+  test(`scrolling ${preset}`, async ({ page }) => {
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send("Performance.enable");
+    await page.goto(`/?preset=${preset}`);
+    const gridElement = page.locator('[role="grid"]');
+    await expect(gridElement).toHaveAttribute("aria-rowcount", /^[1-9]\d*$/, { timeout: 120_000 });
+    await page.waitForTimeout(500);
+    await cdp.send("Emulation.setCPUThrottlingRate", { rate: 4 });
+    for (const [mode, rows] of [
+      ["smooth", 3],
+      ["jumping", 40]
+    ] as const) {
+      const before = await metrics(cdp);
+      const intervals = await scroll(page, rows);
+      const after = await metrics(cdp);
+      const frames = intervals.length;
+      results.push({
+        preset,
+        mode,
+        frames,
+        meanFrameMs: intervals.reduce((a, b) => a + b, 0) / frames,
+        p95FrameMs: percentile(intervals, 0.95),
+        maxFrameMs: Math.max(...intervals),
+        mainThreadMsPerFrame: delta(before, after, "TaskDuration") / frames,
+        scriptMsPerFrame: delta(before, after, "ScriptDuration") / frames,
+        layoutAndStyleMsPerFrame: (delta(before, after, "LayoutDuration") + delta(before, after, "RecalcStyleDuration")) / frames
+      });
+    }
+    await cdp.send("Emulation.setCPUThrottlingRate", { rate: 1 });
+  });
 }
 
 test.afterAll(() => {
   mkdirSync("test-results", { recursive: true });
-  writeFileSync("test-results/grid-experiment.json", JSON.stringify(results, null, 2));
+  writeFileSync("test-results/grid-performance.json", JSON.stringify(results, null, 2));
   console.table(
     results.map((r) => ({
       ...r,

@@ -10,8 +10,8 @@
     "format": "prettier . --write",
     "format:check": "prettier . --check",
     "test": "ng test parallax --watch=false",
-    "e2e": "playwright test -c e2e/playwright.config.ts",
-    "experiment": "playwright test -c e2e/playwright.config.ts grid-experiment"
+    "e2e": "playwright test -c e2e/playwright.config.ts grid.spec",
+    "performance": "playwright test -c e2e/playwright.config.ts grid-performance"
   },
   "private": true,
   "packageManager": "pnpm@12.11.2",

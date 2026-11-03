@@ -1,24 +1,22 @@
 import { ChangeDetectionStrategy, Component, computed, signal } from "@angular/core";
-import { CanvasGridComponent, DomGridComponent } from "parallax";
+import { GridComponent } from "parallax";
+import type { LayoutInput } from "parallax";
 import { z } from "zod";
 
-/** Layout presets for the grid experiment. */
+/** Layout presets the demo and the end-to-end tests open. */
 const PRESETS = {
   pivot: {
     dataset: "positions",
-    layout: {
-      version: 1,
-      group_by: ["fund", "strategy", "sector", "ticker"],
-      split_by: ["asset_class"],
-      measures: [{ column: "market_value_usd", aggregate: "sum" }, { column: "daily_pnl_usd", aggregate: "sum" }, { aggregate: "count_all" }],
-      expand_depth: 3
-    }
+    group_by: ["fund", "strategy", "sector", "ticker"],
+    split_by: ["asset_class"],
+    measures: [{ column: "market_value_usd", aggregate: "sum" }, { column: "daily_pnl_usd", aggregate: "sum" }, { aggregate: "count_all" }],
+    expand_depth: 3
   },
-  trades: { dataset: "trades", layout: { version: 1 } },
-  sorted: { dataset: "trades", layout: { version: 1, sort: [{ column: "gross_amount_local", descending: true }] } }
-} as const;
+  trades: { dataset: "trades" },
+  sorted: { dataset: "trades", sort: [{ column: "gross_amount_local", descending: true }] }
+} as const satisfies Record<string, LayoutInput>;
 
-const searchSchema = z.strictObject({ grid: z.enum(["canvas", "dom"]).default("canvas"), preset: z.enum(["pivot", "trades", "sorted"]).default("pivot") });
+const searchSchema = z.strictObject({ preset: z.enum(["pivot", "trades", "sorted"]).default("pivot"), theme: z.enum(["light", "dark"]).default("light") });
 
 type Search = z.infer<typeof searchSchema>;
 
@@ -30,18 +28,18 @@ function readSearch(): Search {
 @Component({
   selector: "demo-root",
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CanvasGridComponent, DomGridComponent],
+  imports: [GridComponent],
   template: `
     <header>
       <strong>parallax</strong>
-      <span>{{ search().grid }} grid, {{ search().preset }}</span>
+      <span>{{ search.preset }}</span>
+      <details>
+        <summary>Layout</summary>
+        <pre data-testid="layout-json">{{ layoutJson() }}</pre>
+      </details>
     </header>
     <main>
-      @if (search().grid === "canvas") {
-        <px-canvas-grid [dataset]="dataset()" [layout]="layout()" />
-      } @else {
-        <px-dom-grid [dataset]="dataset()" [layout]="layout()" />
-      }
+      <px-grid [(layout)]="layout" [theme]="search.theme" />
     </main>
   `,
   styles: `
@@ -62,10 +60,24 @@ function readSearch(): Search {
     main {
       min-height: 0;
     }
+    details {
+      position: relative;
+    }
+    pre {
+      position: absolute;
+      z-index: 5;
+      max-height: 60vh;
+      overflow: auto;
+      margin: 4px 0 0;
+      padding: 8px;
+      background: #fff;
+      border: 1px solid #d0d5dd;
+      font-size: 12px;
+    }
   `
 })
 export class App {
-  protected readonly search = signal(readSearch());
-  protected readonly dataset = computed(() => PRESETS[this.search().preset].dataset);
-  protected readonly layout = computed(() => JSON.stringify(PRESETS[this.search().preset].layout));
+  protected readonly search = readSearch();
+  protected readonly layout = signal<LayoutInput>(PRESETS[this.search.preset]);
+  protected readonly layoutJson = computed(() => JSON.stringify(this.layout(), null, 2));
 }

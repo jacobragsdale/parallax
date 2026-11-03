@@ -223,7 +223,7 @@ fn errors_name_the_problem() {
 
 /// The WebAssembly test suite checks the same value, so both builds must answer
 /// byte for byte the same.
-pub const TRANSCRIPT_FINGERPRINT: u64 = 4_124_449_824_496_755_754;
+pub const TRANSCRIPT_FINGERPRINT: u64 = 7_641_691_102_802_052_240;
 
 #[test]
 fn transcript_fingerprint_is_stable() {
@@ -400,5 +400,202 @@ mod races {
             panic!("{replies:?}")
         };
         assert_eq!(frame.total_rows, 2, "the two rows with x = +inf");
+    }
+}
+
+mod requests {
+    use std::sync::{Arc, RwLock};
+
+    use parallax_datagen::Dataset;
+    use parallax_datagen::positions::{Positions, PositionsOptions};
+    use parallax_engine::{Table, TableOptions};
+    use parallax_protocol::ipc::decode_batches;
+    use parallax_protocol::v1::{
+        ClientMessage, FetchWindow, OpenView, SetExpanded, SetViewport, UpdateView,
+        client_message::Body as C, server_message::Body,
+    };
+    use parallax_session::{MAX_FETCH_CELLS, MemoryCatalog, Session, TableState};
+
+    fn session() -> Session {
+        session_of(3_000)
+    }
+
+    fn session_of(rows: u64) -> Session {
+        let batch = Positions::new(PositionsOptions {
+            rows,
+            seed: 5,
+            securities: 200,
+            ..PositionsOptions::default()
+        })
+        .unwrap()
+        .batch(0..rows);
+        let mut table = Table::new(&batch.schema(), TableOptions::default()).unwrap();
+        table.load(&[batch]).unwrap();
+        let catalog = Arc::new(MemoryCatalog::new());
+        catalog.insert(
+            "positions",
+            Arc::new(RwLock::new(TableState::new(table, 1, 1))),
+        );
+        Session::new(catalog)
+    }
+
+    fn ask(session: &mut Session, request_id: u64, body: C) -> Vec<(u64, Body)> {
+        session
+            .handle(ClientMessage {
+                request_id,
+                body: Some(body),
+            })
+            .into_iter()
+            .map(|m| (m.request_id, m.body.unwrap()))
+            .collect()
+    }
+
+    fn open(session: &mut Session, layout: &str) -> Vec<(u64, Body)> {
+        ask(
+            session,
+            1,
+            C::OpenView(OpenView {
+                view_id: 1,
+                dataset: "positions".into(),
+                parameters: Default::default(),
+                layout_json: layout.into(),
+            }),
+        )
+    }
+
+    fn frame_rows(messages: &[(u64, Body)]) -> Option<(u64, usize)> {
+        messages.iter().find_map(|(id, b)| match b {
+            Body::Frame(f) => Some((*id, decode_batches(&f.batch).unwrap()[0].num_rows())),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn a_fetched_window_does_not_move_the_viewport() {
+        let mut s = session();
+        open(&mut s, r#"{"columns":["position_id","fund"]}"#);
+        let viewport = C::SetViewport(SetViewport {
+            view_id: 1,
+            first_row: 0,
+            row_count: 10,
+            first_column: 0,
+            column_count: 2,
+        });
+        assert_eq!(frame_rows(&ask(&mut s, 2, viewport)), Some((2, 10)));
+        let fetched = ask(
+            &mut s,
+            3,
+            C::FetchWindow(FetchWindow {
+                view_id: 1,
+                first_row: 100,
+                row_count: 500,
+                first_column: 0,
+                column_count: 2,
+            }),
+        );
+        assert_eq!(frame_rows(&fetched), Some((3, 500)));
+        // An update still answers with the viewport's ten rows.
+        let updated = ask(
+            &mut s,
+            4,
+            C::UpdateView(UpdateView {
+                view_id: 1,
+                layout_json: r#"{"columns":["position_id","fund"],"formats":{"position_id":{"thousands":false}}}"#.into(),
+                config_version: 1,
+            }),
+        );
+        assert_eq!(frame_rows(&updated), Some((4, 10)));
+    }
+
+    #[test]
+    fn fetches_are_capped_after_clamping_to_the_view() {
+        // 30,000 rows by 40 columns is 1.2 million cells.
+        let mut s = session_of(30_000);
+        open(&mut s, "{}");
+        let fetch = |first_row: u64, row_count: u64| {
+            C::FetchWindow(FetchWindow {
+                view_id: 1,
+                first_row,
+                row_count,
+                first_column: 0,
+                column_count: u32::MAX,
+            })
+        };
+        let rows = MAX_FETCH_CELLS / 40;
+        assert!(matches!(
+            ask(&mut s, 2, fetch(0, rows))[0].1,
+            Body::Frame(_)
+        ));
+        let Body::Error(e) = &ask(&mut s, 3, fetch(0, rows + 1))[0].1 else {
+            panic!("refused");
+        };
+        assert!(e.message.contains("cells"), "{}", e.message);
+        // Past the end, the window is clamped first, so a huge count is fine.
+        assert!(matches!(
+            ask(&mut s, 4, fetch(29_000, u64::MAX))[0].1,
+            Body::Frame(_)
+        ));
+    }
+
+    #[test]
+    fn a_format_change_keeps_expanded_groups() {
+        let mut s = session();
+        let layout = r#"{"group_by":["fund","strategy"],"measures":[{"column":"market_value_usd","aggregate":"sum"}]}"#;
+        open(&mut s, layout);
+        ask(
+            &mut s,
+            2,
+            C::SetViewport(SetViewport {
+                view_id: 1,
+                first_row: 0,
+                row_count: 100,
+                first_column: 0,
+                column_count: 5,
+            }),
+        );
+        let collapsed = ask(
+            &mut s,
+            3,
+            C::SetExpanded(SetExpanded {
+                view_id: 1,
+                path_json: "[\"Atlas Global Macro\"]".into(),
+                expanded: false,
+            }),
+        );
+        let (_, rows_collapsed) = frame_rows(&collapsed).unwrap();
+        // The same layout with the collapse recorded and a new format: no rebuild,
+        // so the group stays collapsed and the row count is unchanged.
+        let reformatted = ask(
+            &mut s,
+            4,
+            C::UpdateView(UpdateView {
+                view_id: 1,
+                layout_json: r#"{"group_by":["fund","strategy"],"measures":[{"column":"market_value_usd","aggregate":"sum","format":{"abbreviate":"millions"}}],"expanded":[{"path":["Atlas Global Macro"],"expanded":false}]}"#.into(),
+                config_version: 1,
+            }),
+        );
+        let (_, rows_after) = frame_rows(&reformatted).unwrap();
+        assert_eq!(rows_after, rows_collapsed);
+        let Body::Frame(f) = &reformatted[0].1 else {
+            panic!("a frame");
+        };
+        let batch = &decode_batches(&f.batch).unwrap()[0];
+        let text = batch.column_by_name("sum(market_value_usd)#text").unwrap();
+        let text = arrow_array::cast::AsArray::as_string::<i32>(text.as_ref());
+        assert!(text.value(0).ends_with('M'), "{}", text.value(0));
+    }
+
+    #[test]
+    fn a_layout_for_another_dataset_is_refused() {
+        let mut s = session();
+        let answer = open(&mut s, r#"{"dataset":"trades"}"#);
+        let Body::Error(e) = &answer[0].1 else {
+            panic!("an error, got {answer:?}");
+        };
+        assert!(e.message.contains("trades"), "{}", e.message);
+        assert!(matches!(
+            open(&mut s, r#"{"dataset":"positions"}"#)[0].1,
+            Body::ViewOpened(_)
+        ));
     }
 }

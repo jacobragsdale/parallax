@@ -23,11 +23,17 @@ use serde_json::Value;
 pub const LAYOUT_VERSION: u32 = 1;
 
 /// A view, as saved and sent.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct Layout {
     /// The layout version; [`LAYOUT_VERSION`] for documents this crate writes.
     pub version: u32,
+    /// The dataset the view reads. Empty in layouts sent with an open-view
+    /// request, which names the dataset itself; when both are given they must
+    /// agree.
+    pub dataset: String,
+    /// The dataset's parameters, such as an as-of date.
+    pub parameters: BTreeMap<String, String>,
     /// Columns of a flat view, in order. Empty means every column.
     pub columns: Vec<String>,
     /// Row pivots, outermost first.
@@ -53,6 +59,35 @@ pub struct Layout {
     /// Display formats by source column. Measures take their column's format
     /// unless they set their own.
     pub formats: BTreeMap<String, LayoutFormat>,
+    /// Column widths in CSS pixels, chosen by the user. Keys are source column
+    /// names for flat views, measure positions (`"0"`, `"1"`, ...) for the data
+    /// columns of grouped views, and `"__tree"` for the group column. The engine
+    /// ignores them.
+    pub column_widths: BTreeMap<String, u32>,
+}
+
+impl Default for Layout {
+    /// An empty layout at the current version: a flat view of every column.
+    fn default() -> Self {
+        Self {
+            version: LAYOUT_VERSION,
+            dataset: String::new(),
+            parameters: BTreeMap::new(),
+            columns: Vec::new(),
+            group_by: Vec::new(),
+            split_by: Vec::new(),
+            measures: Vec::new(),
+            filters: Vec::new(),
+            sort: Vec::new(),
+            group_sort: LayoutGroupSort::default(),
+            having: Vec::new(),
+            top_n: None,
+            expand_depth: 0,
+            expanded: Vec::new(),
+            formats: BTreeMap::new(),
+            column_widths: BTreeMap::new(),
+        }
+    }
 }
 
 /// How a column's values are displayed. Unset fields take the type's default:
@@ -991,5 +1026,72 @@ mod tests {
         for f in formats {
             assert_eq!(LayoutFormat::from_engine(&f.to_engine()), f);
         }
+    }
+
+    /// Layouts as this crate writes them: every default, and every field set. The
+    /// web library's schema must read each one back unchanged.
+    fn fixture_layouts() -> Vec<Value> {
+        let full = r#"{
+            "version": 1,
+            "dataset": "positions",
+            "parameters": {"as_of": "2026-11-02"},
+            "columns": ["fund", "ticker"],
+            "group_by": ["fund", "sector"],
+            "split_by": ["asset_class"],
+            "measures": [
+                {"column": "market_value_usd", "aggregate": "sum", "unit_column": "currency",
+                 "show_as": "percent_of_parent",
+                 "format": {"decimals": 1, "thousands": false, "percent": true,
+                            "negative": "parentheses", "zone": "Europe/London",
+                            "precision": "milliseconds"}},
+                {"column": "price_local", "aggregate": "percentile", "percentile": 0.9},
+                {"column": "beta", "aggregate": "weighted_mean", "weight": "market_value_usd"},
+                {"aggregate": "count_all"}
+            ],
+            "filters": [
+                {"column": "fund", "op": "in", "values": ["Atlas", "Cobalt"]},
+                {"column": "quantity", "op": "gt", "value": "1.5"},
+                {"column": "sector", "op": "is_null"}
+            ],
+            "sort": [{"column": "fund", "descending": true}],
+            "group_sort": {"by": {"measure": 0}, "descending": true},
+            "having": [{"measure": 0, "op": "ge", "value": 1000.5}],
+            "top_n": {"n": 10, "measure": 0, "largest": false, "other": true},
+            "expand_depth": 2,
+            "expanded": [{"path": ["Atlas", null, 1.5, true], "expanded": false}],
+            "formats": {"quantity": {"abbreviate": "thousands"}, "trade_time": {"precision": "microseconds"}},
+            "column_widths": {"fund": 180, "__tree": 300, "0": 120}
+        }"#;
+        [Layout::default(), Layout::from_json(full).unwrap()]
+            .iter()
+            .map(|l| serde_json::to_value(l).unwrap())
+            .collect()
+    }
+
+    /// Compares a committed file with what this build generates, or rewrites it
+    /// when `PARALLAX_UPDATE_FIXTURES` is set.
+    fn check_generated(relative: &str, contents: &str) {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(relative);
+        if std::env::var_os("PARALLAX_UPDATE_FIXTURES").is_some() {
+            std::fs::write(&path, contents).unwrap();
+            return;
+        }
+        let committed = std::fs::read_to_string(&path).unwrap_or_default();
+        assert!(
+            committed == contents,
+            "{} is out of date; rerun with PARALLAX_UPDATE_FIXTURES=1",
+            path.display()
+        );
+    }
+
+    #[test]
+    fn committed_schema_and_fixtures_are_current() {
+        let schema = serde_json::to_string_pretty(&schema()).unwrap() + "\n";
+        check_generated("../../schema/layout.schema.json", &schema);
+        let fixtures = serde_json::to_string_pretty(&fixture_layouts()).unwrap() + "\n";
+        check_generated(
+            "../../web/projects/parallax/src/lib/testing/layouts.json",
+            &fixtures,
+        );
     }
 }

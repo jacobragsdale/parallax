@@ -263,6 +263,10 @@ fn index_range(start: u64, count: u64) -> Range<usize> {
 
 struct OpenView {
     table: SharedTable,
+    /// The dataset and parameters the view was opened with; layouts sent later
+    /// may not name others.
+    dataset: String,
+    parameters: BTreeMap<String, String>,
     layout: Layout,
     view: View,
     config_version: u64,
@@ -271,6 +275,27 @@ struct OpenView {
     status_error: Option<String>,
     /// The load version a rebuild last failed at, so the error is reported once.
     broken_at: Option<u64>,
+}
+
+/// The most cells one [`FetchWindow`](parallax_protocol::v1::FetchWindow) may ask for.
+pub const MAX_FETCH_CELLS: u64 = 1_000_000;
+
+/// Refuses a layout that names a dataset or parameters other than the view's.
+fn same_source(
+    layout: &Layout,
+    dataset: &str,
+    parameters: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    if !layout.dataset.is_empty() && layout.dataset != dataset {
+        return Err(format!(
+            "the layout is for dataset {}, but the view reads {dataset}",
+            layout.dataset
+        ));
+    }
+    if !layout.parameters.is_empty() && &layout.parameters != parameters {
+        return Err("the layout's parameters differ from the view's".to_owned());
+    }
+    Ok(())
 }
 
 /// Builds a view from a resolved layout and applies its expanded groups.
@@ -387,6 +412,7 @@ impl Session {
             client_message::Body::CloseView(m) => m.view_id,
             client_message::Body::DrillThrough(m) => m.view_id,
             client_message::Body::DistinctValues(m) => m.view_id,
+            client_message::Body::FetchWindow(m) => m.view_id,
         };
         match self.dispatch(id, body) {
             Ok(messages) => messages,
@@ -409,34 +435,66 @@ impl Session {
             )],
             client_message::Body::OpenView(open) => {
                 let parameters: BTreeMap<String, String> = open.parameters.into_iter().collect();
+                let layout = Layout::from_json(&open.layout_json).map_err(|e| e.to_string())?;
+                same_source(&layout, &open.dataset, &parameters)?;
                 let table = self
                     .catalog
                     .open(&open.dataset, &parameters, &self.context)?;
-                let layout = Layout::from_json(&open.layout_json).map_err(|e| e.to_string())?;
-                self.open_view(id, open.view_id, table, layout)?
+                self.open_view(id, open.view_id, table, &open.dataset, parameters, layout)?
             }
             client_message::Body::UpdateView(update) => {
                 let open = self.view_mut(update.view_id)?;
                 let layout = Layout::from_json(&update.layout_json).map_err(|e| e.to_string())?;
-                let view = {
-                    let state = read_table(&open.table)?;
+                same_source(&layout, &open.dataset, &open.parameters)?;
+                let table = Arc::clone(&open.table);
+                {
+                    let state = read_table(&table)?;
+                    open.catch_up(&state)?;
                     let resolved = layout.resolve(&state.table).map_err(|e| e.to_string())?;
-                    build_view(&state.table, resolved)?
-                };
+                    // Display-only changes, such as formats, widths or newly expanded
+                    // groups, keep the computed view; anything else rebuilds it.
+                    let kept = open
+                        .layout
+                        .expanded
+                        .iter()
+                        .all(|old| layout.expanded.iter().any(|new| new.path == old.path))
+                        && open
+                            .view
+                            .reformat(&state.table, &resolved.config)
+                            .map_err(|e| e.to_string())?;
+                    if kept {
+                        for (path, expanded) in resolved.expanded {
+                            open.view.set_expanded(path, expanded);
+                        }
+                    } else {
+                        open.view = build_view(&state.table, resolved)?;
+                    }
+                }
                 open.layout = layout;
-                open.view = view;
                 open.config_version = update.config_version;
                 open.broken_at = None;
                 self.frame(id, update.view_id, false).into_iter().collect()
             }
             client_message::Body::SetViewport(v) => {
-                self.view_mut(v.view_id)?.viewport = Some(Viewport {
+                let viewport = Viewport {
                     first_row: v.first_row,
                     row_count: v.row_count,
                     first_column: v.first_column,
                     column_count: v.column_count,
-                });
+                };
+                self.view_mut(v.view_id)?.viewport = Some(viewport);
                 self.frame(id, v.view_id, false).into_iter().collect()
+            }
+            client_message::Body::FetchWindow(f) => {
+                let viewport = Viewport {
+                    first_row: f.first_row,
+                    row_count: f.row_count,
+                    first_column: f.first_column,
+                    column_count: f.column_count,
+                };
+                self.window_frame(id, f.view_id, viewport, false, Some(MAX_FETCH_CELLS))
+                    .into_iter()
+                    .collect()
             }
             client_message::Body::SetExpanded(e) => {
                 let path: Vec<serde_json::Value> =
@@ -481,7 +539,8 @@ impl Session {
                         .ok_or_else(|| "that row has no single group to drill into".to_owned())?;
                     Layout::from_flat_config(&config, &state.table)
                 };
-                self.open_view(id, d.new_view_id, table, layout)?
+                let (dataset, parameters) = (open.dataset.clone(), open.parameters.clone());
+                self.open_view(id, d.new_view_id, table, &dataset, parameters, layout)?
             }
             client_message::Body::DistinctValues(request) => vec![reply(
                 id,
@@ -501,6 +560,8 @@ impl Session {
         request_id: u64,
         view_id: u32,
         table: SharedTable,
+        dataset: &str,
+        parameters: BTreeMap<String, String>,
         layout: Layout,
     ) -> Result<Vec<ServerMessage>, String> {
         let (view, schema, status) = {
@@ -517,6 +578,8 @@ impl Session {
             view_id,
             OpenView {
                 table,
+                dataset: dataset.to_owned(),
+                parameters,
                 layout,
                 view,
                 config_version: 0,
@@ -537,11 +600,26 @@ impl Session {
         )])
     }
 
-    /// Builds the frame for a view's current viewport, if it has one. The view first
-    /// catches up with its table, under the same lock the window is read under.
+    /// Builds the frame for a view's current viewport, if it has one.
     fn frame(&mut self, request_id: u64, view_id: u32, pushed: bool) -> Option<ServerMessage> {
-        let open = self.views.get_mut(&view_id)?;
-        let viewport = open.viewport?;
+        let viewport = self.views.get(&view_id)?.viewport?;
+        self.window_frame(request_id, view_id, viewport, pushed, None)
+    }
+
+    /// Builds the frame for one window of a view, refusing windows of more than
+    /// `max_cells` cells. The view first catches up with its table, under the same
+    /// lock the window is read under.
+    fn window_frame(
+        &mut self,
+        request_id: u64,
+        view_id: u32,
+        viewport: Viewport,
+        pushed: bool,
+        max_cells: Option<u64>,
+    ) -> Option<ServerMessage> {
+        let Some(open) = self.views.get_mut(&view_id) else {
+            return Some(error(request_id, view_id, format!("no view {view_id}")));
+        };
         let table = Arc::clone(&open.table);
         let state = match read_table(&table) {
             Ok(state) => state,
@@ -555,6 +633,21 @@ impl Session {
             u64::from(viewport.first_column),
             u64::from(viewport.column_count),
         );
+        if let Some(max) = max_cells {
+            let total_rows = open.view.num_rows(&state.table);
+            let total_columns = open.view.num_columns(&state.table);
+            let height = rows.end.min(total_rows).saturating_sub(rows.start) as u64;
+            let width = columns.end.min(total_columns).saturating_sub(columns.start) as u64;
+            if height.saturating_mul(width) > max {
+                return Some(error(
+                    request_id,
+                    view_id,
+                    format!(
+                        "a window of {height} rows by {width} columns is more than the {max} cells one request may fetch"
+                    ),
+                ));
+            }
+        }
         let window = open.view.window(&state.table, rows, columns);
         let batch = match encode_batch(&window.batch) {
             Ok(bytes) => bytes,

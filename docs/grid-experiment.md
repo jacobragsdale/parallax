@@ -16,9 +16,9 @@ a frame arrives for rows already on screen, the canvas grid redraws only the cel
 whose text changed, but any scroll redraws every visible cell. The DOM grid renders
 positioned cell elements through Angular's templates.
 
-The Playwright suite in `web/e2e/grid-experiment.spec.ts` runs against the
-reference server with `examples/experiment.toml`, serving 200,000 generated
-positions and 1,000,000 generated trades.
+The Playwright suite in `web/e2e/grid-experiment.spec.ts`, as of commit
+`b255e25`, runs against the reference server with `examples/experiment.toml`,
+serving 200,000 generated positions and 1,000,000 generated trades.
 
 The browser is Chromium (Playwright's headless shell, build 1248) with
 `--disable-gpu`, `--disable-gpu-compositing` and `--disable-software-rasterizer`,
@@ -81,16 +81,25 @@ view is the next optimization, and it should benefit smooth scrolling most.
 The DOM grid keeps native text selection and screen-reader access, which the
 canvas grid has to provide separately. Screen-reader support is not a
 first-milestone requirement, so it does not change the decision. The DOM grid
-stays in the library for the comparison until the canvas grid has the features
-the milestone needs.
+was removed in step 5 of the first milestone, once the canvas grid had cell
+selection and copying of its own.
 
 ## Repeat the measurement
 
+The comparison needs the DOM grid, which is gone from the current code. Repeat
+it from commit `b255e25`, the last with both grids:
+
 ```sh
+git checkout b255e25
 cargo build --release -p parallax-server
 cd web
+pnpm install --frozen-lockfile
 pnpm build:demo
 pnpm experiment
 ```
 
 The results are written to `web/test-results/grid-experiment.json`.
+
+The same method measures the current canvas grid alone. From `web/`, after
+`pnpm build:demo`, run `pnpm performance`; the results go to
+`web/test-results/grid-performance.json`.

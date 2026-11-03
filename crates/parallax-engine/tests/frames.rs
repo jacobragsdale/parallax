@@ -231,3 +231,46 @@ fn flat_columns_keep_the_table_fields_properties() {
         assert_eq!(field.metadata()[meta::INDEX], k.to_string());
     }
 }
+
+#[test]
+fn reformat_applies_only_format_changes() {
+    let t = table();
+    let base = ViewConfig {
+        group_by: vec!["desk".into()],
+        measures: vec![Measure::new(Aggregate::Sum, "pnl")],
+        ..ViewConfig::default()
+    };
+    let mut view = View::new(&t, base.clone()).unwrap();
+    let mut millions = base.clone();
+    millions.measures[0].format = Some(Format {
+        abbreviate: Some(Abbreviation::Millions),
+        ..Format::default()
+    });
+    assert!(view.reformat(&t, &millions).unwrap());
+    assert_eq!(text_of(&view.window(&t, 0..1, 0..1).batch, 0), ["0.8M"]);
+    let mut regrouped = base.clone();
+    regrouped.group_by = vec!["level".into()];
+    assert!(
+        !view.reformat(&t, &regrouped).unwrap(),
+        "a new grouping is not a format change"
+    );
+    assert_eq!(
+        view.config(),
+        &millions,
+        "a refused reformat changes nothing"
+    );
+    let mut bad = base;
+    bad.formats.insert(
+        "at".into(),
+        Format {
+            zone: Some("Nowhere/Land".into()),
+            ..Format::default()
+        },
+    );
+    assert!(view.reformat(&t, &bad).is_err());
+    assert_eq!(
+        view.config(),
+        &millions,
+        "an invalid format changes nothing"
+    );
+}

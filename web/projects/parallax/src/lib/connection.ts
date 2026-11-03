@@ -10,6 +10,9 @@
  * - At most one viewport request per view is in flight, matched to its reply by
  *   request id. Scrolling faster than frames arrive replaces the pending request
  *   instead of queueing them.
+ *
+ * A one-off window, such as the cells a user copies, is fetched without moving the
+ * viewport; its reply is matched by request id and never drawn.
  */
 
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
@@ -56,6 +59,7 @@ export class ViewHandle {
   private inFlight: { readonly viewport: Viewport; readonly requestId: bigint } | null = null;
   private pending: Viewport | null = null;
   private closed = false;
+  private readonly fetches = new Map<bigint, { readonly resolve: (frame: FrameData) => void; readonly reject: (error: Error) => void }>();
 
   constructor(
     public readonly id: number,
@@ -80,6 +84,20 @@ export class ViewHandle {
     this.sendViewport(viewport);
   }
 
+  /** Fetches one window without moving the viewport, for copying. At most 1,000,000 cells. */
+  public fetch(viewport: Viewport): Promise<FrameData> {
+    if (this.closed) {
+      return Promise.reject(new Error("the view is closed"));
+    }
+    return new Promise((resolve, reject) => {
+      const requestId = this.connection.send({
+        case: "fetchWindow",
+        value: { viewId: this.id, firstRow: BigInt(viewport.firstRow), rowCount: BigInt(viewport.rowCount), firstColumn: viewport.firstColumn, columnCount: viewport.columnCount }
+      });
+      this.fetches.set(requestId, { resolve, reject });
+    });
+  }
+
   /** Replaces the view's layout. Frames from the old layout are dropped from now on. */
   public update(layoutJson: string): void {
     if (this.closed) {
@@ -101,10 +119,14 @@ export class ViewHandle {
     return this.closed;
   }
 
-  /** Closes the view. */
+  /** Closes the view. Fetches still waiting fail. */
   public close(): void {
     if (!this.closed) {
       this.closed = true;
+      for (const pending of this.fetches.values()) {
+        pending.reject(new Error("the view is closed"));
+      }
+      this.fetches.clear();
       this.connection.send({ case: "closeView", value: { viewId: this.id } });
       this.connection.forget(this.id);
     }
@@ -133,6 +155,12 @@ export class ViewHandle {
 
   /** @internal Called by the connection. */
   public receiveFrame(frame: FrameData, requestId: bigint): void {
+    const fetch = this.fetches.get(requestId);
+    if (fetch !== undefined) {
+      this.fetches.delete(requestId);
+      fetch.resolve(frame);
+      return;
+    }
     this.settle(requestId);
     if (frame.configVersion < this.configVersion || frame.loadVersion < this.lastLoadVersion) {
       return;
@@ -153,6 +181,12 @@ export class ViewHandle {
 
   /** @internal Called by the connection. */
   public receiveError(message: string, requestId: bigint): void {
+    const fetch = this.fetches.get(requestId);
+    if (fetch !== undefined) {
+      this.fetches.delete(requestId);
+      fetch.reject(new Error(message));
+      return;
+    }
     this.settle(requestId);
     this.listener.error?.(message);
   }

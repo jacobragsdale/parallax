@@ -1,0 +1,32 @@
+import { describe, expect, it } from "vitest";
+
+import { layoutSchema, parseLayout } from "./layout";
+import fixtures from "./testing/layouts.json";
+
+// The fixtures are written by parallax-protocol's tests, from the Rust types.
+const written: readonly unknown[] = fixtures;
+
+describe("layoutSchema", () => {
+  it("reads every layout the Rust crate writes back unchanged", () => {
+    expect(written.length).toBeGreaterThan(1);
+    for (const layout of written) {
+      expect(parseLayout(layout)).toEqual(layout);
+    }
+  });
+
+  it("fills in the same defaults as the Rust crate", () => {
+    expect(parseLayout({})).toEqual(written[0]);
+  });
+
+  it("refuses unknown fields, as the Rust crate does", () => {
+    expect(layoutSchema.safeParse({ group_by: ["fund"], groupBy: ["fund"] }).success).toBe(false);
+    expect(layoutSchema.safeParse({ measures: [{ aggregate: "sum", column: "x", colour: "red" }] }).success).toBe(false);
+  });
+
+  it("refuses values the engine would refuse", () => {
+    expect(layoutSchema.safeParse({ version: 2 }).success).toBe(false);
+    expect(layoutSchema.safeParse({ measures: [{ aggregate: "percentile", percentile: 1.5 }] }).success).toBe(false);
+    expect(layoutSchema.safeParse({ formats: { x: { decimals: 31 } } }).success).toBe(false);
+    expect(layoutSchema.safeParse({ column_widths: { x: 0 } }).success).toBe(false);
+  });
+});

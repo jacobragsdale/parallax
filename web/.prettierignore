@@ -6,3 +6,4 @@ pnpm-lock.yaml
 projects/parallax/src/lib/proto
 test-results
 playwright-report
+projects/parallax/src/lib/testing

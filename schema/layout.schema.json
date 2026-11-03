@@ -1,0 +1,695 @@
+{
+  "$defs": {
+    "AbbreviationName": {
+      "description": "A K, M or B scaling in a layout.",
+      "oneOf": [
+        {
+          "const": "thousands",
+          "description": "Thousands, `K`.",
+          "type": "string"
+        },
+        {
+          "const": "millions",
+          "description": "Millions, `M`.",
+          "type": "string"
+        },
+        {
+          "const": "billions",
+          "description": "Billions, `B`.",
+          "type": "string"
+        }
+      ]
+    },
+    "AggregateName": {
+      "description": "An aggregate's name in a layout.",
+      "oneOf": [
+        {
+          "const": "count",
+          "description": "Rows with a value.",
+          "type": "string"
+        },
+        {
+          "const": "count_all",
+          "description": "All rows.",
+          "type": "string"
+        },
+        {
+          "const": "sum",
+          "description": "Exact sum.",
+          "type": "string"
+        },
+        {
+          "const": "mean",
+          "description": "Mean.",
+          "type": "string"
+        },
+        {
+          "const": "weighted_mean",
+          "description": "Weighted mean; needs `weight`.",
+          "type": "string"
+        },
+        {
+          "const": "min",
+          "description": "Minimum.",
+          "type": "string"
+        },
+        {
+          "const": "max",
+          "description": "Maximum.",
+          "type": "string"
+        },
+        {
+          "const": "first",
+          "description": "Value of the earliest inserted row.",
+          "type": "string"
+        },
+        {
+          "const": "last",
+          "description": "Value of the latest inserted row.",
+          "type": "string"
+        },
+        {
+          "const": "distinct_count",
+          "description": "Distinct values.",
+          "type": "string"
+        },
+        {
+          "const": "variance",
+          "description": "Sample variance.",
+          "type": "string"
+        },
+        {
+          "const": "std_dev",
+          "description": "Sample standard deviation.",
+          "type": "string"
+        },
+        {
+          "const": "median",
+          "description": "Median.",
+          "type": "string"
+        },
+        {
+          "const": "percentile",
+          "description": "Percentile; needs `percentile`.",
+          "type": "string"
+        }
+      ]
+    },
+    "CompareName": {
+      "description": "A comparison for aggregate filters.",
+      "oneOf": [
+        {
+          "const": "gt",
+          "description": "Greater than.",
+          "type": "string"
+        },
+        {
+          "const": "ge",
+          "description": "At least.",
+          "type": "string"
+        },
+        {
+          "const": "lt",
+          "description": "Less than.",
+          "type": "string"
+        },
+        {
+          "const": "le",
+          "description": "At most.",
+          "type": "string"
+        },
+        {
+          "const": "eq",
+          "description": "Equal.",
+          "type": "string"
+        },
+        {
+          "const": "ne",
+          "description": "Not equal.",
+          "type": "string"
+        }
+      ]
+    },
+    "FilterOpName": {
+      "description": "A filter operator in a layout.",
+      "oneOf": [
+        {
+          "const": "eq",
+          "description": "Equal to `value`.",
+          "type": "string"
+        },
+        {
+          "const": "ne",
+          "description": "Not equal to `value`.",
+          "type": "string"
+        },
+        {
+          "const": "lt",
+          "description": "Less than `value`.",
+          "type": "string"
+        },
+        {
+          "const": "le",
+          "description": "At most `value`.",
+          "type": "string"
+        },
+        {
+          "const": "gt",
+          "description": "Greater than `value`.",
+          "type": "string"
+        },
+        {
+          "const": "ge",
+          "description": "At least `value`.",
+          "type": "string"
+        },
+        {
+          "const": "in",
+          "description": "One of `values`.",
+          "type": "string"
+        },
+        {
+          "const": "not_in",
+          "description": "None of `values`.",
+          "type": "string"
+        },
+        {
+          "const": "is_null",
+          "description": "Null.",
+          "type": "string"
+        },
+        {
+          "const": "is_not_null",
+          "description": "Not null.",
+          "type": "string"
+        },
+        {
+          "const": "contains",
+          "description": "Text containing `value`, ignoring case.",
+          "type": "string"
+        },
+        {
+          "const": "starts_with",
+          "description": "Text starting with `value`, ignoring case.",
+          "type": "string"
+        }
+      ]
+    },
+    "GroupOrderName": {
+      "description": "What orders groups.",
+      "oneOf": [
+        {
+          "const": "key",
+          "description": "The group's own value.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A measure's value, by index.",
+          "properties": {
+            "measure": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "measure"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "LayoutExpanded": {
+      "additionalProperties": false,
+      "description": "A group the user expanded or collapsed.",
+      "properties": {
+        "expanded": {
+          "description": "Expanded or collapsed.",
+          "type": "boolean"
+        },
+        "path": {
+          "description": "The group's values from the outermost level.",
+          "items": true,
+          "type": "array"
+        }
+      },
+      "required": [
+        "path",
+        "expanded"
+      ],
+      "type": "object"
+    },
+    "LayoutFilter": {
+      "additionalProperties": false,
+      "description": "A filter in a layout.",
+      "properties": {
+        "column": {
+          "description": "The column.",
+          "type": "string"
+        },
+        "op": {
+          "$ref": "#/$defs/FilterOpName",
+          "description": "The operator."
+        },
+        "value": {
+          "default": null,
+          "description": "The operand of single-value operators."
+        },
+        "values": {
+          "default": [],
+          "description": "The operands of `in` and `not_in`.",
+          "items": true,
+          "type": "array"
+        }
+      },
+      "required": [
+        "column",
+        "op"
+      ],
+      "type": "object"
+    },
+    "LayoutFormat": {
+      "additionalProperties": false,
+      "description": "How a column's values are displayed. Unset fields take the type's default:\na decimal's scale, no decimals for integers, one when abbreviating, and two\notherwise; thousands grouped; instants in `America/New_York` to the second.",
+      "properties": {
+        "abbreviate": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AbbreviationName"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Divide by a thousand, million or billion and append `K`, `M` or `B`."
+        },
+        "decimals": {
+          "default": null,
+          "description": "Digits after the decimal point, at most 30.",
+          "format": "uint8",
+          "maximum": 30,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "negative": {
+          "$ref": "#/$defs/NegativeName",
+          "default": "minus",
+          "description": "How negative numbers are written."
+        },
+        "percent": {
+          "default": false,
+          "description": "Multiply by 100 and append `%`.",
+          "type": "boolean"
+        },
+        "precision": {
+          "$ref": "#/$defs/PrecisionName",
+          "default": "seconds",
+          "description": "The sub-second digits instants show."
+        },
+        "thousands": {
+          "default": null,
+          "description": "Group thousands with commas.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "zone": {
+          "default": null,
+          "description": "The IANA zone instants are shown in.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "LayoutGroupSort": {
+      "additionalProperties": false,
+      "description": "How groups are ordered.",
+      "properties": {
+        "by": {
+          "$ref": "#/$defs/GroupOrderName",
+          "default": "key",
+          "description": "What to order by."
+        },
+        "descending": {
+          "default": false,
+          "description": "Largest first.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "LayoutHaving": {
+      "additionalProperties": false,
+      "description": "An aggregate filter in a layout.",
+      "properties": {
+        "measure": {
+          "description": "The measure, by index.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "op": {
+          "$ref": "#/$defs/CompareName",
+          "description": "The comparison."
+        },
+        "value": {
+          "description": "The value compared with.",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "measure",
+        "op",
+        "value"
+      ],
+      "type": "object"
+    },
+    "LayoutMeasure": {
+      "additionalProperties": false,
+      "description": "A measure in a layout.",
+      "properties": {
+        "aggregate": {
+          "$ref": "#/$defs/AggregateName",
+          "description": "The aggregate."
+        },
+        "column": {
+          "default": null,
+          "description": "The column, absent for `count_all`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "format": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LayoutFormat"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The display format, overriding the one derived from the column's."
+        },
+        "percentile": {
+          "default": null,
+          "description": "The percentile in `[0, 1]`, for `percentile`.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "show_as": {
+          "$ref": "#/$defs/ShowAsName",
+          "default": "value",
+          "description": "How the value is shown."
+        },
+        "unit_column": {
+          "default": null,
+          "description": "A column naming each row's unit.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "weight": {
+          "default": null,
+          "description": "The weight column, for `weighted_mean`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "aggregate"
+      ],
+      "type": "object"
+    },
+    "LayoutSort": {
+      "additionalProperties": false,
+      "description": "A sort in a layout.",
+      "properties": {
+        "column": {
+          "description": "The column.",
+          "type": "string"
+        },
+        "descending": {
+          "default": false,
+          "description": "Largest first.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "column"
+      ],
+      "type": "object"
+    },
+    "LayoutTopN": {
+      "additionalProperties": false,
+      "description": "Top-N in a layout.",
+      "properties": {
+        "largest": {
+          "default": true,
+          "description": "Keep the largest.",
+          "type": "boolean"
+        },
+        "measure": {
+          "description": "The measure ranked, by index.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "n": {
+          "description": "Groups to keep.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "other": {
+          "default": true,
+          "description": "Show the rest as one Other row.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "n",
+        "measure"
+      ],
+      "type": "object"
+    },
+    "NegativeName": {
+      "description": "How negative numbers are written, in a layout.",
+      "oneOf": [
+        {
+          "const": "minus",
+          "description": "`-1,234.50`",
+          "type": "string"
+        },
+        {
+          "const": "parentheses",
+          "description": "`(1,234.50)`",
+          "type": "string"
+        }
+      ]
+    },
+    "PrecisionName": {
+      "description": "Sub-second digits in a layout.",
+      "oneOf": [
+        {
+          "const": "seconds",
+          "description": "Whole seconds.",
+          "type": "string"
+        },
+        {
+          "const": "milliseconds",
+          "description": "Milliseconds.",
+          "type": "string"
+        },
+        {
+          "const": "microseconds",
+          "description": "Microseconds.",
+          "type": "string"
+        }
+      ]
+    },
+    "ShowAsName": {
+      "description": "How a measure is shown.",
+      "oneOf": [
+        {
+          "const": "value",
+          "description": "The value.",
+          "type": "string"
+        },
+        {
+          "const": "percent_of_grand_total",
+          "description": "Fraction of the grand total.",
+          "type": "string"
+        },
+        {
+          "const": "percent_of_column_total",
+          "description": "Fraction of the column's total.",
+          "type": "string"
+        },
+        {
+          "const": "percent_of_row_total",
+          "description": "Fraction of the row's total.",
+          "type": "string"
+        },
+        {
+          "const": "percent_of_parent",
+          "description": "Fraction of the parent row's value.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A view, as saved and sent.",
+  "properties": {
+    "column_widths": {
+      "additionalProperties": {
+        "format": "uint32",
+        "minimum": 0,
+        "type": "integer"
+      },
+      "default": {},
+      "description": "Column widths in CSS pixels, chosen by the user. Keys are source column\nnames for flat views, measure positions (`\"0\"`, `\"1\"`, ...) for the data\ncolumns of grouped views, and `\"__tree\"` for the group column. The engine\nignores them.",
+      "type": "object"
+    },
+    "columns": {
+      "default": [],
+      "description": "Columns of a flat view, in order. Empty means every column.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "dataset": {
+      "default": "",
+      "description": "The dataset the view reads. Empty in layouts sent with an open-view\nrequest, which names the dataset itself; when both are given they must\nagree.",
+      "type": "string"
+    },
+    "expand_depth": {
+      "default": 0,
+      "description": "Levels expanded by default.",
+      "format": "uint",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "expanded": {
+      "default": [],
+      "description": "Groups expanded or collapsed by the user, by value.",
+      "items": {
+        "$ref": "#/$defs/LayoutExpanded"
+      },
+      "type": "array"
+    },
+    "filters": {
+      "default": [],
+      "description": "Row filters.",
+      "items": {
+        "$ref": "#/$defs/LayoutFilter"
+      },
+      "type": "array"
+    },
+    "formats": {
+      "additionalProperties": {
+        "$ref": "#/$defs/LayoutFormat"
+      },
+      "default": {},
+      "description": "Display formats by source column. Measures take their column's format\nunless they set their own.",
+      "type": "object"
+    },
+    "group_by": {
+      "default": [],
+      "description": "Row pivots, outermost first.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "group_sort": {
+      "$ref": "#/$defs/LayoutGroupSort",
+      "default": {
+        "by": "key",
+        "descending": false
+      },
+      "description": "Ordering of groups among their siblings."
+    },
+    "having": {
+      "default": [],
+      "description": "Aggregate filters.",
+      "items": {
+        "$ref": "#/$defs/LayoutHaving"
+      },
+      "type": "array"
+    },
+    "measures": {
+      "default": [],
+      "description": "Measures of a grouped view.",
+      "items": {
+        "$ref": "#/$defs/LayoutMeasure"
+      },
+      "type": "array"
+    },
+    "parameters": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "description": "The dataset's parameters, such as an as-of date.",
+      "type": "object"
+    },
+    "sort": {
+      "default": [],
+      "description": "Sorts of a flat view.",
+      "items": {
+        "$ref": "#/$defs/LayoutSort"
+      },
+      "type": "array"
+    },
+    "split_by": {
+      "default": [],
+      "description": "Column pivots.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "top_n": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/LayoutTopN"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Top-N per set of siblings."
+    },
+    "version": {
+      "default": 1,
+      "description": "The layout version; [`LAYOUT_VERSION`] for documents this crate writes.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "title": "Layout",
+  "type": "object"
+}

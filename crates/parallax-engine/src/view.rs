@@ -204,6 +204,8 @@ pub mod meta {
     pub const LEVEL: &str = "parallax.level";
     /// For values, the header text, which names the display zone of instants.
     pub const TITLE: &str = "parallax.title";
+    /// For values of grouped views, the position of the measure in the layout.
+    pub const MEASURE: &str = "parallax.measure";
 }
 
 /// The roles a frame field can have.
@@ -438,6 +440,17 @@ impl Formatters {
     }
 }
 
+/// A configuration with its display formats removed, for comparing what is
+/// computed.
+fn without_formats(config: &ViewConfig) -> ViewConfig {
+    let mut stripped = config.clone();
+    stripped.formats.clear();
+    for m in &mut stripped.measures {
+        m.format = None;
+    }
+    stripped
+}
+
 /// The format a measure shows with: its own, else a percentage for shares, the
 /// type's default for counts and variances, and otherwise its column's format.
 fn measure_format(measure: &Measure, column: Option<&Format>) -> Format {
@@ -655,6 +668,22 @@ impl View {
     #[must_use]
     pub fn config(&self) -> &ViewConfig {
         &self.config
+    }
+
+    /// Switches to `config` without recomputing anything, if it differs from the
+    /// current configuration only in display formats. Returns `false`, changing
+    /// nothing, when it differs in anything else.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a new format is invalid; the view is then unchanged.
+    pub fn reformat(&mut self, table: &Table, config: &ViewConfig) -> Result<bool, ConfigError> {
+        if without_formats(&self.config) != without_formats(config) {
+            return Ok(false);
+        }
+        self.formatters = Formatters::new(table, config)?;
+        self.config = config.clone();
+        Ok(true)
     }
 
     /// The configuration version, which every frame carries.
@@ -920,6 +949,7 @@ fn flat_window(
             table.column(c).to_arrow(slots),
             None,
             formatter,
+            None,
         );
     }
     (out.finish(), flat.order.len(), flat.columns.len())
@@ -956,7 +986,8 @@ impl FrameBuilder {
     /// Adds a data column: its values, its flags if it has any, its display text,
     /// and for timestamps its full-precision text. `source` is the table field of a
     /// flat view's column, whose nullability and metadata the values keep, or a new
-    /// field for a measure.
+    /// field for a measure, whose position `measure` is.
+    #[allow(clippy::too_many_arguments)]
     fn data_column(
         &mut self,
         index: usize,
@@ -965,6 +996,7 @@ impl FrameBuilder {
         values: ArrayRef,
         flags: Option<Vec<u8>>,
         formatter: &Formatter,
+        measure: Option<usize>,
     ) {
         let name = source.name().as_str();
         let data_type = values.data_type().clone();
@@ -990,6 +1022,9 @@ impl FrameBuilder {
         metadata.insert(meta::ROLE.to_owned(), role::VALUE.to_owned());
         metadata.insert(meta::INDEX.to_owned(), index.to_string());
         metadata.insert(meta::TITLE.to_owned(), title);
+        if let Some(m) = measure {
+            metadata.insert(meta::MEASURE.to_owned(), m.to_string());
+        }
         self.push(
             Field::new(name, data_type, source.is_nullable()).with_metadata(metadata),
             values,
@@ -1717,6 +1752,7 @@ impl Grouped {
                 array,
                 Some(flags),
                 &formatters.measures[m],
+                Some(m),
             );
         }
         (out.finish(), total_rows, total_columns)

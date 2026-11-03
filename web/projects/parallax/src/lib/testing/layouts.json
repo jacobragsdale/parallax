@@ -1,0 +1,172 @@
+[
+  {
+    "column_widths": {},
+    "columns": [],
+    "dataset": "",
+    "expand_depth": 0,
+    "expanded": [],
+    "filters": [],
+    "formats": {},
+    "group_by": [],
+    "group_sort": {
+      "by": "key",
+      "descending": false
+    },
+    "having": [],
+    "measures": [],
+    "parameters": {},
+    "sort": [],
+    "split_by": [],
+    "top_n": null,
+    "version": 1
+  },
+  {
+    "column_widths": {
+      "0": 120,
+      "__tree": 300,
+      "fund": 180
+    },
+    "columns": [
+      "fund",
+      "ticker"
+    ],
+    "dataset": "positions",
+    "expand_depth": 2,
+    "expanded": [
+      {
+        "expanded": false,
+        "path": [
+          "Atlas",
+          null,
+          1.5,
+          true
+        ]
+      }
+    ],
+    "filters": [
+      {
+        "column": "fund",
+        "op": "in",
+        "value": null,
+        "values": [
+          "Atlas",
+          "Cobalt"
+        ]
+      },
+      {
+        "column": "quantity",
+        "op": "gt",
+        "value": "1.5",
+        "values": []
+      },
+      {
+        "column": "sector",
+        "op": "is_null",
+        "value": null,
+        "values": []
+      }
+    ],
+    "formats": {
+      "quantity": {
+        "abbreviate": "thousands",
+        "decimals": null,
+        "negative": "minus",
+        "percent": false,
+        "precision": "seconds",
+        "thousands": null,
+        "zone": null
+      },
+      "trade_time": {
+        "abbreviate": null,
+        "decimals": null,
+        "negative": "minus",
+        "percent": false,
+        "precision": "microseconds",
+        "thousands": null,
+        "zone": null
+      }
+    },
+    "group_by": [
+      "fund",
+      "sector"
+    ],
+    "group_sort": {
+      "by": {
+        "measure": 0
+      },
+      "descending": true
+    },
+    "having": [
+      {
+        "measure": 0,
+        "op": "ge",
+        "value": 1000.5
+      }
+    ],
+    "measures": [
+      {
+        "aggregate": "sum",
+        "column": "market_value_usd",
+        "format": {
+          "abbreviate": null,
+          "decimals": 1,
+          "negative": "parentheses",
+          "percent": true,
+          "precision": "milliseconds",
+          "thousands": false,
+          "zone": "Europe/London"
+        },
+        "percentile": null,
+        "show_as": "percent_of_parent",
+        "unit_column": "currency",
+        "weight": null
+      },
+      {
+        "aggregate": "percentile",
+        "column": "price_local",
+        "format": null,
+        "percentile": 0.9,
+        "show_as": "value",
+        "unit_column": null,
+        "weight": null
+      },
+      {
+        "aggregate": "weighted_mean",
+        "column": "beta",
+        "format": null,
+        "percentile": null,
+        "show_as": "value",
+        "unit_column": null,
+        "weight": "market_value_usd"
+      },
+      {
+        "aggregate": "count_all",
+        "column": null,
+        "format": null,
+        "percentile": null,
+        "show_as": "value",
+        "unit_column": null,
+        "weight": null
+      }
+    ],
+    "parameters": {
+      "as_of": "2026-11-02"
+    },
+    "sort": [
+      {
+        "column": "fund",
+        "descending": true
+      }
+    ],
+    "split_by": [
+      "asset_class"
+    ],
+    "top_n": {
+      "largest": false,
+      "measure": 0,
+      "n": 10,
+      "other": true
+    },
+    "version": 1
+  }
+]

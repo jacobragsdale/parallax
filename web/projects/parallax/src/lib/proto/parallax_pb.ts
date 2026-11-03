@@ -18,7 +18,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file parallax.proto.
  */
 export const file_parallax: GenFile = /*@__PURE__*/
-  fileDesc("Cg5wYXJhbGxheC5wcm90bxILcGFyYWxsYXgudjEiqgMKDUNsaWVudE1lc3NhZ2USEgoKcmVxdWVzdF9pZBgBIAEoBBIjCgVoZWxsbxgCIAEoCzISLnBhcmFsbGF4LnYxLkhlbGxvSAASKgoJb3Blbl92aWV3GAMgASgLMhUucGFyYWxsYXgudjEuT3BlblZpZXdIABIuCgt1cGRhdGVfdmlldxgEIAEoCzIXLnBhcmFsbGF4LnYxLlVwZGF0ZVZpZXdIABIwCgxzZXRfdmlld3BvcnQYBSABKAsyGC5wYXJhbGxheC52MS5TZXRWaWV3cG9ydEgAEjAKDHNldF9leHBhbmRlZBgGIAEoCzIYLnBhcmFsbGF4LnYxLlNldEV4cGFuZGVkSAASLAoKY2xvc2VfdmlldxgHIAEoCzIWLnBhcmFsbGF4LnYxLkNsb3NlVmlld0gAEjIKDWRyaWxsX3Rocm91Z2gYCCABKAsyGS5wYXJhbGxheC52MS5EcmlsbFRocm91Z2hIABI2Cg9kaXN0aW5jdF92YWx1ZXMYCSABKAsyGy5wYXJhbGxheC52MS5EaXN0aW5jdFZhbHVlc0gAQgYKBGJvZHkivgIKDVNlcnZlck1lc3NhZ2USEgoKcmVxdWVzdF9pZBgBIAEoBBInCgd3ZWxjb21lGAIgASgLMhQucGFyYWxsYXgudjEuV2VsY29tZUgAEi4KC3ZpZXdfb3BlbmVkGAMgASgLMhcucGFyYWxsYXgudjEuVmlld09wZW5lZEgAEiMKBWZyYW1lGAQgASgLMhIucGFyYWxsYXgudjEuRnJhbWVIABIjCgVlcnJvchgFIAEoCzISLnBhcmFsbGF4LnYxLkVycm9ySAASMAoMdGFibGVfc3RhdHVzGAYgASgLMhgucGFyYWxsYXgudjEuVGFibGVTdGF0dXNIABI8Cg9kaXN0aW5jdF92YWx1ZXMYByABKAsyIS5wYXJhbGxheC52MS5EaXN0aW5jdFZhbHVlc1Jlc3VsdEgAQgYKBGJvZHkiIQoFSGVsbG8SGAoQcHJvdG9jb2xfdmVyc2lvbhgBIAEoDSJPCgdXZWxjb21lEhgKEHByb3RvY29sX3ZlcnNpb24YASABKA0SKgoIZGF0YXNldHMYAiADKAsyGC5wYXJhbGxheC52MS5EYXRhc2V0SW5mbyIvCgtEYXRhc2V0SW5mbxIMCgRuYW1lGAEgASgJEhIKCnBhcmFtZXRlcnMYAiADKAkirwEKCE9wZW5WaWV3Eg8KB3ZpZXdfaWQYASABKA0SDwoHZGF0YXNldBgCIAEoCRI5CgpwYXJhbWV0ZXJzGAMgAygLMiUucGFyYWxsYXgudjEuT3BlblZpZXcuUGFyYW1ldGVyc0VudHJ5EhMKC2xheW91dF9qc29uGAQgASgJGjEKD1BhcmFtZXRlcnNFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBInIKClZpZXdPcGVuZWQSDwoHdmlld19pZBgBIAEoDRIUCgx0YWJsZV9zY2hlbWEYAiABKAwSKAoGc3RhdHVzGAMgASgLMhgucGFyYWxsYXgudjEuVGFibGVTdGF0dXMSEwoLbGF5b3V0X2pzb24YBCABKAkiSgoKVXBkYXRlVmlldxIPCgd2aWV3X2lkGAEgASgNEhMKC2xheW91dF9qc29uGAIgASgJEhYKDmNvbmZpZ192ZXJzaW9uGAMgASgEInAKC1NldFZpZXdwb3J0Eg8KB3ZpZXdfaWQYASABKA0SEQoJZmlyc3Rfcm93GAIgASgEEhEKCXJvd19jb3VudBgDIAEoBBIUCgxmaXJzdF9jb2x1bW4YBCABKA0SFAoMY29sdW1uX2NvdW50GAUgASgNIkMKC1NldEV4cGFuZGVkEg8KB3ZpZXdfaWQYASABKA0SEQoJcGF0aF9qc29uGAIgASgJEhAKCGV4cGFuZGVkGAMgASgIIhwKCUNsb3NlVmlldxIPCgd2aWV3X2lkGAEgASgNIkEKDERyaWxsVGhyb3VnaBIPCgd2aWV3X2lkGAEgASgNEgsKA3JvdxgCIAEoBBITCgtuZXdfdmlld19pZBgDIAEoDSJQCg5EaXN0aW5jdFZhbHVlcxIPCgd2aWV3X2lkGAEgASgNEg4KBmNvbHVtbhgCIAEoCRIOCgZzZWFyY2gYAyABKAkSDQoFbGltaXQYBCABKA0iWgoURGlzdGluY3RWYWx1ZXNSZXN1bHQSDwoHdmlld19pZBgBIAEoDRIOCgZjb2x1bW4YAiABKAkSDgoGdmFsdWVzGAMgASgMEhEKCXRydW5jYXRlZBgEIAEoCCLWAQoFRnJhbWUSDwoHdmlld19pZBgBIAEoDRIWCg5jb25maWdfdmVyc2lvbhgCIAEoBBIUCgxsb2FkX3ZlcnNpb24YAyABKAQSEQoJZmlyc3Rfcm93GAQgASgEEhQKDGZpcnN0X2NvbHVtbhgFIAEoDRISCgp0b3RhbF9yb3dzGAYgASgEEhUKDXRvdGFsX2NvbHVtbnMYByABKA0SDQoFYmF0Y2gYCCABKAwSGwoTc291cmNlX2FzX29mX21pY3JvcxgJIAEoAxIOCgZwdXNoZWQYCiABKAgixQEKC1RhYmxlU3RhdHVzEg8KB3ZpZXdfaWQYByABKA0SFAoMbG9hZF92ZXJzaW9uGAEgASgEEgwKBHJvd3MYAiABKAQSGAoQbG9hZGVkX2F0X21pY3JvcxgDIAEoAxIVCg1yZWZyZXNoX2Vycm9yGAQgASgJEiAKGHJlZnJlc2hfZmFpbGVkX2F0X21pY3JvcxgFIAEoAxIuCgxuYW5zX3RvX251bGwYBiADKAsyGC5wYXJhbGxheC52MS5Db2x1bW5Db3VudCIsCgtDb2x1bW5Db3VudBIOCgZjb2x1bW4YASABKAkSDQoFY291bnQYAiABKAQiKQoFRXJyb3ISDwoHdmlld19pZBgBIAEoDRIPCgdtZXNzYWdlGAIgASgJYgZwcm90bzM");
+  fileDesc("Cg5wYXJhbGxheC5wcm90bxILcGFyYWxsYXgudjEi3AMKDUNsaWVudE1lc3NhZ2USEgoKcmVxdWVzdF9pZBgBIAEoBBIjCgVoZWxsbxgCIAEoCzISLnBhcmFsbGF4LnYxLkhlbGxvSAASKgoJb3Blbl92aWV3GAMgASgLMhUucGFyYWxsYXgudjEuT3BlblZpZXdIABIuCgt1cGRhdGVfdmlldxgEIAEoCzIXLnBhcmFsbGF4LnYxLlVwZGF0ZVZpZXdIABIwCgxzZXRfdmlld3BvcnQYBSABKAsyGC5wYXJhbGxheC52MS5TZXRWaWV3cG9ydEgAEjAKDHNldF9leHBhbmRlZBgGIAEoCzIYLnBhcmFsbGF4LnYxLlNldEV4cGFuZGVkSAASLAoKY2xvc2VfdmlldxgHIAEoCzIWLnBhcmFsbGF4LnYxLkNsb3NlVmlld0gAEjIKDWRyaWxsX3Rocm91Z2gYCCABKAsyGS5wYXJhbGxheC52MS5EcmlsbFRocm91Z2hIABI2Cg9kaXN0aW5jdF92YWx1ZXMYCSABKAsyGy5wYXJhbGxheC52MS5EaXN0aW5jdFZhbHVlc0gAEjAKDGZldGNoX3dpbmRvdxgKIAEoCzIYLnBhcmFsbGF4LnYxLkZldGNoV2luZG93SABCBgoEYm9keSK+AgoNU2VydmVyTWVzc2FnZRISCgpyZXF1ZXN0X2lkGAEgASgEEicKB3dlbGNvbWUYAiABKAsyFC5wYXJhbGxheC52MS5XZWxjb21lSAASLgoLdmlld19vcGVuZWQYAyABKAsyFy5wYXJhbGxheC52MS5WaWV3T3BlbmVkSAASIwoFZnJhbWUYBCABKAsyEi5wYXJhbGxheC52MS5GcmFtZUgAEiMKBWVycm9yGAUgASgLMhIucGFyYWxsYXgudjEuRXJyb3JIABIwCgx0YWJsZV9zdGF0dXMYBiABKAsyGC5wYXJhbGxheC52MS5UYWJsZVN0YXR1c0gAEjwKD2Rpc3RpbmN0X3ZhbHVlcxgHIAEoCzIhLnBhcmFsbGF4LnYxLkRpc3RpbmN0VmFsdWVzUmVzdWx0SABCBgoEYm9keSIhCgVIZWxsbxIYChBwcm90b2NvbF92ZXJzaW9uGAEgASgNIk8KB1dlbGNvbWUSGAoQcHJvdG9jb2xfdmVyc2lvbhgBIAEoDRIqCghkYXRhc2V0cxgCIAMoCzIYLnBhcmFsbGF4LnYxLkRhdGFzZXRJbmZvIi8KC0RhdGFzZXRJbmZvEgwKBG5hbWUYASABKAkSEgoKcGFyYW1ldGVycxgCIAMoCSKvAQoIT3BlblZpZXcSDwoHdmlld19pZBgBIAEoDRIPCgdkYXRhc2V0GAIgASgJEjkKCnBhcmFtZXRlcnMYAyADKAsyJS5wYXJhbGxheC52MS5PcGVuVmlldy5QYXJhbWV0ZXJzRW50cnkSEwoLbGF5b3V0X2pzb24YBCABKAkaMQoPUGFyYW1ldGVyc0VudHJ5EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoCToCOAEicgoKVmlld09wZW5lZBIPCgd2aWV3X2lkGAEgASgNEhQKDHRhYmxlX3NjaGVtYRgCIAEoDBIoCgZzdGF0dXMYAyABKAsyGC5wYXJhbGxheC52MS5UYWJsZVN0YXR1cxITCgtsYXlvdXRfanNvbhgEIAEoCSJKCgpVcGRhdGVWaWV3Eg8KB3ZpZXdfaWQYASABKA0SEwoLbGF5b3V0X2pzb24YAiABKAkSFgoOY29uZmlnX3ZlcnNpb24YAyABKAQicAoLU2V0Vmlld3BvcnQSDwoHdmlld19pZBgBIAEoDRIRCglmaXJzdF9yb3cYAiABKAQSEQoJcm93X2NvdW50GAMgASgEEhQKDGZpcnN0X2NvbHVtbhgEIAEoDRIUCgxjb2x1bW5fY291bnQYBSABKA0iQwoLU2V0RXhwYW5kZWQSDwoHdmlld19pZBgBIAEoDRIRCglwYXRoX2pzb24YAiABKAkSEAoIZXhwYW5kZWQYAyABKAgicAoLRmV0Y2hXaW5kb3cSDwoHdmlld19pZBgBIAEoDRIRCglmaXJzdF9yb3cYAiABKAQSEQoJcm93X2NvdW50GAMgASgEEhQKDGZpcnN0X2NvbHVtbhgEIAEoDRIUCgxjb2x1bW5fY291bnQYBSABKA0iHAoJQ2xvc2VWaWV3Eg8KB3ZpZXdfaWQYASABKA0iQQoMRHJpbGxUaHJvdWdoEg8KB3ZpZXdfaWQYASABKA0SCwoDcm93GAIgASgEEhMKC25ld192aWV3X2lkGAMgASgNIlAKDkRpc3RpbmN0VmFsdWVzEg8KB3ZpZXdfaWQYASABKA0SDgoGY29sdW1uGAIgASgJEg4KBnNlYXJjaBgDIAEoCRINCgVsaW1pdBgEIAEoDSJaChREaXN0aW5jdFZhbHVlc1Jlc3VsdBIPCgd2aWV3X2lkGAEgASgNEg4KBmNvbHVtbhgCIAEoCRIOCgZ2YWx1ZXMYAyABKAwSEQoJdHJ1bmNhdGVkGAQgASgIItYBCgVGcmFtZRIPCgd2aWV3X2lkGAEgASgNEhYKDmNvbmZpZ192ZXJzaW9uGAIgASgEEhQKDGxvYWRfdmVyc2lvbhgDIAEoBBIRCglmaXJzdF9yb3cYBCABKAQSFAoMZmlyc3RfY29sdW1uGAUgASgNEhIKCnRvdGFsX3Jvd3MYBiABKAQSFQoNdG90YWxfY29sdW1ucxgHIAEoDRINCgViYXRjaBgIIAEoDBIbChNzb3VyY2VfYXNfb2ZfbWljcm9zGAkgASgDEg4KBnB1c2hlZBgKIAEoCCLFAQoLVGFibGVTdGF0dXMSDwoHdmlld19pZBgHIAEoDRIUCgxsb2FkX3ZlcnNpb24YASABKAQSDAoEcm93cxgCIAEoBBIYChBsb2FkZWRfYXRfbWljcm9zGAMgASgDEhUKDXJlZnJlc2hfZXJyb3IYBCABKAkSIAoYcmVmcmVzaF9mYWlsZWRfYXRfbWljcm9zGAUgASgDEi4KDG5hbnNfdG9fbnVsbBgGIAMoCzIYLnBhcmFsbGF4LnYxLkNvbHVtbkNvdW50IiwKC0NvbHVtbkNvdW50Eg4KBmNvbHVtbhgBIAEoCRINCgVjb3VudBgCIAEoBCIpCgVFcnJvchIPCgd2aWV3X2lkGAEgASgNEg8KB21lc3NhZ2UYAiABKAliBnByb3RvMw");
 
 /**
  * Sent by the client.
@@ -84,6 +84,12 @@ export type ClientMessage = Message<"parallax.v1.ClientMessage"> & {
      */
     value: DistinctValues;
     case: "distinctValues";
+  } | {
+    /**
+     * @generated from field: parallax.v1.FetchWindow fetch_window = 10;
+     */
+    value: FetchWindow;
+    case: "fetchWindow";
   } | { case: undefined; value?: undefined };
 };
 
@@ -389,6 +395,47 @@ export const SetExpandedSchema: GenMessage<SetExpanded> = /*@__PURE__*/
   messageDesc(file_parallax, 9);
 
 /**
+ * Asks once for a window, such as the cells a user copies, without moving the
+ * view's viewport. The reply is a Frame with this request's id; frames pushed
+ * after a refresh still follow the viewport. At most 1,000,000 cells.
+ *
+ * @generated from message parallax.v1.FetchWindow
+ */
+export type FetchWindow = Message<"parallax.v1.FetchWindow"> & {
+  /**
+   * @generated from field: uint32 view_id = 1;
+   */
+  viewId: number;
+
+  /**
+   * @generated from field: uint64 first_row = 2;
+   */
+  firstRow: bigint;
+
+  /**
+   * @generated from field: uint64 row_count = 3;
+   */
+  rowCount: bigint;
+
+  /**
+   * @generated from field: uint32 first_column = 4;
+   */
+  firstColumn: number;
+
+  /**
+   * @generated from field: uint32 column_count = 5;
+   */
+  columnCount: number;
+};
+
+/**
+ * Describes the message parallax.v1.FetchWindow.
+ * Use `create(FetchWindowSchema)` to create a new message.
+ */
+export const FetchWindowSchema: GenMessage<FetchWindow> = /*@__PURE__*/
+  messageDesc(file_parallax, 10);
+
+/**
  * @generated from message parallax.v1.CloseView
  */
 export type CloseView = Message<"parallax.v1.CloseView"> & {
@@ -403,7 +450,7 @@ export type CloseView = Message<"parallax.v1.CloseView"> & {
  * Use `create(CloseViewSchema)` to create a new message.
  */
 export const CloseViewSchema: GenMessage<CloseView> = /*@__PURE__*/
-  messageDesc(file_parallax, 10);
+  messageDesc(file_parallax, 11);
 
 /**
  * @generated from message parallax.v1.DrillThrough
@@ -432,7 +479,7 @@ export type DrillThrough = Message<"parallax.v1.DrillThrough"> & {
  * Use `create(DrillThroughSchema)` to create a new message.
  */
 export const DrillThroughSchema: GenMessage<DrillThrough> = /*@__PURE__*/
-  messageDesc(file_parallax, 11);
+  messageDesc(file_parallax, 12);
 
 /**
  * @generated from message parallax.v1.DistinctValues
@@ -466,7 +513,7 @@ export type DistinctValues = Message<"parallax.v1.DistinctValues"> & {
  * Use `create(DistinctValuesSchema)` to create a new message.
  */
 export const DistinctValuesSchema: GenMessage<DistinctValues> = /*@__PURE__*/
-  messageDesc(file_parallax, 12);
+  messageDesc(file_parallax, 13);
 
 /**
  * @generated from message parallax.v1.DistinctValuesResult
@@ -501,7 +548,7 @@ export type DistinctValuesResult = Message<"parallax.v1.DistinctValuesResult"> &
  * Use `create(DistinctValuesResultSchema)` to create a new message.
  */
 export const DistinctValuesResultSchema: GenMessage<DistinctValuesResult> = /*@__PURE__*/
-  messageDesc(file_parallax, 13);
+  messageDesc(file_parallax, 14);
 
 /**
  * A window of a view.
@@ -571,7 +618,7 @@ export type Frame = Message<"parallax.v1.Frame"> & {
  * Use `create(FrameSchema)` to create a new message.
  */
 export const FrameSchema: GenMessage<Frame> = /*@__PURE__*/
-  messageDesc(file_parallax, 14);
+  messageDesc(file_parallax, 15);
 
 /**
  * @generated from message parallax.v1.TableStatus
@@ -622,7 +669,7 @@ export type TableStatus = Message<"parallax.v1.TableStatus"> & {
  * Use `create(TableStatusSchema)` to create a new message.
  */
 export const TableStatusSchema: GenMessage<TableStatus> = /*@__PURE__*/
-  messageDesc(file_parallax, 15);
+  messageDesc(file_parallax, 16);
 
 /**
  * @generated from message parallax.v1.ColumnCount
@@ -644,7 +691,7 @@ export type ColumnCount = Message<"parallax.v1.ColumnCount"> & {
  * Use `create(ColumnCountSchema)` to create a new message.
  */
 export const ColumnCountSchema: GenMessage<ColumnCount> = /*@__PURE__*/
-  messageDesc(file_parallax, 16);
+  messageDesc(file_parallax, 17);
 
 /**
  * @generated from message parallax.v1.Error
@@ -666,5 +713,5 @@ export type Error = Message<"parallax.v1.Error"> & {
  * Use `create(ErrorSchema)` to create a new message.
  */
 export const ErrorSchema: GenMessage<Error> = /*@__PURE__*/
-  messageDesc(file_parallax, 17);
+  messageDesc(file_parallax, 18);
 

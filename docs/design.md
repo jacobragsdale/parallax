@@ -350,6 +350,9 @@ it, tagged by view ID.
   the worker.
 - Every data frame carries the view ID, configuration version, window bounds,
   table load version and source timestamp.
+- A client can fetch a window once without moving the view's viewport, which
+  is how a copy larger than the screen gets its rows. One fetch is limited to
+  1,000,000 cells.
 - Each data column in a frame travels with its display text, its cell flags
   (overflow, mixed units, undefined) and, for timestamps, full-precision text
   for copying. Every Arrow field names its role and column index in its
@@ -492,22 +495,50 @@ HTTP responses follow the load rules in [Loads](#loads), plus these:
 The library targets Angular 22 and later, zoneless, with signals and
 standalone components.
 
-- `<px-grid>`, `<px-pivot>` and `<px-chart>` each take a single `layout` input
-  and emit `layoutChange`.
+- `<px-grid>`, `<px-pivot>` and `<px-chart>` each take a single `layout` and
+  emit `layoutChange`, so `[(layout)]` keeps the host's copy current.
 - `provideParallax({ url })` configures the connection.
 - A `ParallaxClient` service offers the same operations to code.
 - The npm package ships the WebAssembly files.
 
 A layout is a JSON document that describes a whole view: dataset and
-parameters, grouping, pivots, filters, sorts, formats, chart configuration and
-drawings. Saved views, shared URLs, Excel exports and tests all use it. Its
-schema is generated from the Rust types and versioned, with a tested migration
-for each change.
+parameters, grouping, pivots, filters, sorts, formats, column widths, chart
+configuration and drawings. Saved views, shared URLs, Excel exports and tests
+all use it. Its JSON Schema is generated from the Rust types, versioned with a
+tested migration for each change, and committed as `schema/layout.schema.json`.
+The TypeScript library checks layouts with a Zod schema that mirrors the Rust
+types. A test reads layouts the Rust crate wrote and requires each to come back
+unchanged, with the same defaults, so the two can't drift.
 
-Themes are design tokens defined once in JSON and emitted as CSS custom
-properties. Canvas renderers read the computed values and redraw when the
-theme changes. The library ships a light and a dark theme plus compact and
-comfortable densities, and a host can override any token.
+`<px-grid>` keeps everything the user changes in the layout. Clicking a header
+sorts by that column, then reverses it, then clears it; Shift adds a sort. In a
+pivot, a header sorts groups by that measure. Dragging a header edge resizes
+the column, and double-clicking it fits the loaded values. Clicking a group
+expands or collapses it. The grid sends the engine only what a change needs:
+
+- New widths send nothing.
+- Expanding or collapsing sends that group.
+- New formats are applied without recomputing the view.
+- Anything else recomputes it.
+
+Cells are selected by click, Shift-click, drag or the keyboard: arrows, Page
+Up and Page Down, Home and End, with Ctrl to jump and Shift to extend; Ctrl+A
+selects everything. Ctrl+C copies the selection as tab-separated text with
+every digit, which pastes into Excel as cells. A selection larger than the rows
+on screen is fetched first, up to 1,000,000 cells, without moving the view.
+Hovering over a cell whose text was cut, a `###`, or a flagged cell shows the
+full text or what the flag means.
+
+Under every grid a status bar names the dataset and the rows shown, and says
+when the source was read and how long ago. It also flags NaN values the load
+turned blank, and a failed refresh with its time. An info button lists the load
+details.
+
+Themes are design tokens defined once in the library, for a light and a dark
+theme, and emitted as CSS custom properties in a cascade layer named
+`parallax`. Any rule a host writes for `px-grid` therefore overrides them,
+whatever its specificity. Canvas renderers read the computed values and redraw
+when the theme changes. Compact and comfortable densities set the row height.
 
 ## Excel export
 
