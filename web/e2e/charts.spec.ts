@@ -26,7 +26,7 @@ async function inked(canvas: Locator): Promise<number> {
 
 async function open(page: Page): Promise<void> {
   await page.goto("/?preset=charts");
-  await expect(page.locator("px-chart")).toHaveCount(6);
+  await expect(page.locator("px-chart")).toHaveCount(10);
   // Every chart has drawn its data once its status bar says what it shows.
   await expect(page.locator("px-chart .px-status-rows").filter({ hasText: "loading" })).toHaveCount(0, { timeout: 60_000 });
 }
@@ -36,7 +36,18 @@ test("every chart kind draws its data, with an accessible name and no errors", a
   page.on("pageerror", (error) => errors.push(error.message));
   await open(page);
   const names = await page.locator("px-chart canvas").evaluateAll((canvases) => canvases.map((c) => c.getAttribute("aria-label") ?? ""));
-  const kinds = ["Line chart of close by ticker", "Candlestick chart of date", "Bar chart of sector", "Histogram of beta by long_short", "Density of points of daily_pnl_usd", "Heatmap of sector"];
+  const kinds = [
+    "Line chart of close by ticker",
+    "Candlestick chart of date",
+    "Line chart of close, volume",
+    "OHLC chart of date",
+    "Area chart of close",
+    "Bar chart of sector",
+    "Bar chart of sector",
+    "Histogram of beta by long_short",
+    "Density of points of daily_pnl_usd",
+    "Heatmap of sector"
+  ];
   expect(names.map((n, i) => n.startsWith(kinds[i] ?? "?"))).toEqual(kinds.map(() => true));
   for (const canvas of await page.locator("px-chart canvas").all()) {
     // Axes alone ink a few thousand pixels; data inks far more.

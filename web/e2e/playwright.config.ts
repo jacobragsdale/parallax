@@ -8,6 +8,8 @@ import { defineConfig, devices } from "@playwright/test";
 export default defineConfig({
   testDir: ".",
   outputDir: "../test-results",
+  // Screenshots are only valid in the pinned Playwright image (see screenshots.sh), so they need no platform suffix.
+  snapshotPathTemplate: "{testDir}/screenshots/{arg}{ext}",
   timeout: 300_000,
   workers: 1,
   reporter: [["list"]],

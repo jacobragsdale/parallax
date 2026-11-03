@@ -176,6 +176,8 @@ jobs:
         working-directory: .
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm e2e
+      # In the Playwright image matching @playwright/test, so that fonts match the committed screenshots.
+      - run: pnpm screenshots
       - uses: actions/upload-artifact@v7
         if: failure()
         with:

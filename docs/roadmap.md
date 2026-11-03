@@ -62,7 +62,8 @@ Milestone 1 is done when all of the following hold:
    candlestick and OHLC, with the legend, two y-axes and a log scale.
 4. Interaction: the crosshair with tooltips synced across charts, wheel and
    drag zoom and pan, and the range brush that filters linked views.
-5. Charts in the demo, with Playwright screenshots in Chromium without a GPU.
+5. Charts in the demo, with Playwright screenshots in Chromium without a GPU,
+   compared pixel for pixel in the pinned Playwright Docker image.
 
 Milestone 2 is done when every chart kind draws from reduced data in the demo
 and every test layer passes in CI.

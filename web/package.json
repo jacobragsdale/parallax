@@ -12,7 +12,8 @@
     "format:check": "prettier . --check",
     "test": "ng test parallax --watch=false",
     "e2e": "playwright test -c e2e/playwright.config.ts grid.spec browser.spec demo.spec charts.spec",
-    "performance": "playwright test -c e2e/playwright.config.ts grid-performance"
+    "performance": "playwright test -c e2e/playwright.config.ts grid-performance",
+    "screenshots": "bash e2e/screenshots.sh"
   },
   "private": true,
   "packageManager": "pnpm@12.11.2",

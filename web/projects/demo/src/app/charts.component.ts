@@ -106,6 +106,30 @@ export class ChartsComponent {
       { dataset: "prices", filters: [QYE], chart: { kind: "candlestick", x: "date", axis: "trading", ohlc: { open: "open", high: "high", low: "low", close: "close" } } },
       true
     ),
+    card("NV close since 2025, with its volume on a second axis", {
+      dataset: "prices",
+      filters: [
+        { column: "ticker", op: "eq", value: "NV" },
+        { column: "date", op: "ge", value: "2025-01-01" }
+      ],
+      chart: { kind: "line", x: "date", y: ["close"], y_right: ["volume"], axis: "trading" }
+    }),
+    card("NV OHLC bars since 2024", {
+      dataset: "prices",
+      filters: [
+        { column: "ticker", op: "eq", value: "NV" },
+        { column: "date", op: "ge", value: "2024-01-01" }
+      ],
+      chart: { kind: "ohlc", x: "date", axis: "trading", ohlc: { open: "open", high: "high", low: "low", close: "close" } }
+    }),
+    card("QYE close since 2025, as an area", {
+      dataset: "prices",
+      filters: [
+        { column: "ticker", op: "eq", value: "QYE" },
+        { column: "date", op: "ge", value: "2025-01-01" }
+      ],
+      chart: { kind: "area", x: "date", y: ["close"], axis: "trading" }
+    }),
     card("Market value by sector and asset class", {
       dataset: "positions",
       group_by: ["sector"],
@@ -113,6 +137,14 @@ export class ChartsComponent {
       measures: [{ column: "market_value_usd", aggregate: "sum" }],
       formats: { market_value_usd: { abbreviate: "millions" } },
       chart: { kind: "bar", stacked: true }
+    }),
+    card("Market value by sector, long and short side by side", {
+      dataset: "positions",
+      group_by: ["sector"],
+      split_by: ["long_short"],
+      measures: [{ column: "market_value_usd", aggregate: "sum" }],
+      formats: { market_value_usd: { abbreviate: "millions" } },
+      chart: { kind: "bar", horizontal: true }
     }),
     card("Beta of long and short positions", { dataset: "positions", formats: { beta: { decimals: 2 } }, chart: { kind: "histogram", x: "beta", series: "long_short" } }),
     card("Daily P&L against market value", { dataset: "positions", chart: { kind: "scatter", x: "market_value_usd", y: ["daily_pnl_usd"] } }),
