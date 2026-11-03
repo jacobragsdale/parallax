@@ -106,6 +106,10 @@ its time now goes to building one tree node per group, which needs a more
 compact tree to come down further. The build host has too little free memory to
 load 20M rows, so the budget is still unmeasured at that size.
 
+The demo's initial bundle is 558 kB, 134 kB compressed (2026-11-02). Zod's
+tree-shakable build cut it from 981 kB. Of the rest, Apache Arrow's
+JavaScript is 204 kB and Angular 126 kB. The build warns above 600 kB.
+
 A budget for live updates, 10,000 row updates per second with a p99 of
 ≤ 250 ms from update to screen, waits until a streaming source exists. See
 [Deferred work](future.md).

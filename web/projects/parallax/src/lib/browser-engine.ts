@@ -7,7 +7,7 @@
  * table with no round trip to the server.
  */
 
-import { z } from "zod";
+import * as z from "zod/mini";
 
 import { Connection } from "./connection";
 
@@ -25,8 +25,8 @@ export const COPY_TIMEOUT_MS = 120_000;
 /** Messages the worker sends; see `worker/worker.ts`. */
 const outboundSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("reply"), bytes: z.instanceof(Uint8Array) }),
-  z.strictObject({ kind: z.literal("copied"), id: z.number().int(), rows: z.number().int().nonnegative() }),
-  z.strictObject({ kind: z.literal("failed"), id: z.number().int(), message: z.string() }),
+  z.strictObject({ kind: z.literal("copied"), id: z.int(), rows: z.int().check(z.nonnegative()) }),
+  z.strictObject({ kind: z.literal("failed"), id: z.int(), message: z.string() }),
   z.strictObject({ kind: z.literal("fatal"), message: z.string() })
 ]);
 

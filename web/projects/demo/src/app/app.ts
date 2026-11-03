@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, signal, viewChild } from "@angular/core";
 import { GridComponent, PivotComponent, decodeLayout, encodeLayout } from "parallax";
 import type { Density, DrawStats, LayoutInput, ThemeName } from "parallax";
-import { z } from "zod";
+import * as z from "zod/mini";
 
 import { PerformanceComponent } from "./performance.component";
 
@@ -59,11 +59,11 @@ const themeSchema = z.enum(["light", "dark"]);
 const densitySchema = z.enum(["compact", "comfortable"]);
 
 const searchSchema = z.strictObject({
-  preset: z.enum(PRESET_NAMES).default("pivot"),
-  theme: themeSchema.default("light"),
-  density: densitySchema.default("compact"),
-  performance: z.enum(["on", "off"]).default("off"),
-  layout: z.string().optional()
+  preset: z._default(z.enum(PRESET_NAMES), "pivot"),
+  theme: z._default(themeSchema, "light"),
+  density: z._default(densitySchema, "compact"),
+  performance: z._default(z.enum(["on", "off"]), "off"),
+  layout: z.optional(z.string())
 });
 
 type Search = z.infer<typeof searchSchema>;

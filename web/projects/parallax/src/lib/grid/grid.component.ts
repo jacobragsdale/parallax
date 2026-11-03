@@ -33,7 +33,7 @@ import {
   viewChild
 } from "@angular/core";
 import type { ElementRef } from "@angular/core";
-import { z } from "zod";
+import * as z from "zod/mini";
 
 import type { DistinctValues, Viewport } from "../connection";
 import { isNegativeText } from "../format";

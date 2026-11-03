@@ -7,24 +7,35 @@
  * crate wrote and requires each to come back unchanged, so the two cannot drift.
  */
 
-import { z } from "zod";
+import * as z from "zod/mini";
+import en from "zod/v4/locales/en.js";
+
+// The tree-shakable build of Zod speaks only once given a locale. This sets
+// English for every Zod Mini schema in the application, which is also Zod's
+// default elsewhere.
+z.config(en());
 
 /** The layout version this library writes. */
 export const LAYOUT_VERSION = 1;
 
 const name = z.string();
-const count = z.number().int().nonnegative();
+const count = z.int().check(z.nonnegative());
 /** A JSON scalar: filter operands and group-path values. */
 const scalar = z.union([z.string(), z.number(), z.boolean(), z.null()]);
 
+/** `schema`, or null when absent. */
+function orNull<T extends z.core.SomeType>(schema: T): z.ZodMiniDefault<z.ZodMiniNullable<T>> {
+  return z._default(z.nullable(schema), null);
+}
+
 const formatSchema = z.strictObject({
-  decimals: z.number().int().min(0).max(30).nullable().default(null),
-  thousands: z.boolean().nullable().default(null),
-  percent: z.boolean().default(false),
-  abbreviate: z.enum(["thousands", "millions", "billions"]).nullable().default(null),
-  negative: z.enum(["minus", "parentheses"]).default("minus"),
-  zone: z.string().nullable().default(null),
-  precision: z.enum(["seconds", "milliseconds", "microseconds"]).default("seconds")
+  decimals: orNull(z.int().check(z.minimum(0), z.maximum(30))),
+  thousands: orNull(z.boolean()),
+  percent: z._default(z.boolean(), false),
+  abbreviate: orNull(z.enum(["thousands", "millions", "billions"])),
+  negative: z._default(z.enum(["minus", "parentheses"]), "minus"),
+  zone: orNull(z.string()),
+  precision: z._default(z.enum(["seconds", "milliseconds", "microseconds"]), "seconds")
 });
 
 /** The aggregates a measure can use. */
@@ -39,52 +50,49 @@ export const FILTER_OPS = ["eq", "ne", "lt", "le", "gt", "ge", "in", "not_in", "
 const comparisons = ["gt", "ge", "lt", "le", "eq", "ne"] as const;
 
 const measureSchema = z.strictObject({
-  column: name.nullable().default(null),
+  column: orNull(name),
   aggregate: z.enum(AGGREGATES),
-  percentile: z.number().min(0).max(1).nullable().default(null),
-  weight: name.nullable().default(null),
-  unit_column: name.nullable().default(null),
-  show_as: z.enum(SHOW_AS).default("value"),
-  format: formatSchema.nullable().default(null)
+  percentile: orNull(z.number().check(z.minimum(0), z.maximum(1))),
+  weight: orNull(name),
+  unit_column: orNull(name),
+  show_as: z._default(z.enum(SHOW_AS), "value"),
+  format: orNull(formatSchema)
 });
 
-const filterSchema = z.strictObject({ column: name, op: z.enum(FILTER_OPS), value: scalar.default(null), values: z.array(scalar).default([]) });
+const filterSchema = z.strictObject({ column: name, op: z.enum(FILTER_OPS), value: z._default(scalar, null), values: z._default(z.array(scalar), []) });
 
-const sortSchema = z.strictObject({ column: name, descending: z.boolean().default(false) });
+const sortSchema = z.strictObject({ column: name, descending: z._default(z.boolean(), false) });
 
-const groupSortSchema = z.strictObject({ by: z.union([z.literal("key"), z.strictObject({ measure: count })]).default("key"), descending: z.boolean().default(false) });
+const groupSortSchema = z.strictObject({ by: z._default(z.union([z.literal("key"), z.strictObject({ measure: count })]), "key"), descending: z._default(z.boolean(), false) });
 
 const havingSchema = z.strictObject({ measure: count, op: z.enum(comparisons), value: z.number() });
 
-const topNSchema = z.strictObject({ n: count, measure: count, largest: z.boolean().default(true), other: z.boolean().default(true) });
+const topNSchema = z.strictObject({ n: count, measure: count, largest: z._default(z.boolean(), true), other: z._default(z.boolean(), true) });
 
 const expandedSchema = z.strictObject({ path: z.array(scalar), expanded: z.boolean() });
 
 /** The schema of a layout document. Unknown fields are errors, as in Rust. */
 export const layoutSchema = z.strictObject({
   // Older versions are read and brought up to date, as the Rust crate does.
-  version: z
-    .number()
-    .int()
-    .min(0)
-    .max(LAYOUT_VERSION)
-    .default(LAYOUT_VERSION)
-    .transform((): typeof LAYOUT_VERSION => LAYOUT_VERSION),
-  dataset: z.string().default(""),
-  parameters: z.record(z.string(), z.string()).default({}),
-  columns: z.array(name).default([]),
-  group_by: z.array(name).default([]),
-  split_by: z.array(name).default([]),
-  measures: z.array(measureSchema).default([]),
-  filters: z.array(filterSchema).default([]),
-  sort: z.array(sortSchema).default([]),
-  group_sort: groupSortSchema.default({ by: "key", descending: false }),
-  having: z.array(havingSchema).default([]),
-  top_n: topNSchema.nullable().default(null),
-  expand_depth: count.default(0),
-  expanded: z.array(expandedSchema).default([]),
-  formats: z.record(name, formatSchema).default({}),
-  column_widths: z.record(z.string(), z.number().int().min(0).max(4_294_967_295)).default({})
+  version: z.pipe(
+    z._default(z.int().check(z.minimum(0), z.maximum(LAYOUT_VERSION)), LAYOUT_VERSION),
+    z.transform((): typeof LAYOUT_VERSION => LAYOUT_VERSION)
+  ),
+  dataset: z._default(z.string(), ""),
+  parameters: z._default(z.record(z.string(), z.string()), {}),
+  columns: z._default(z.array(name), []),
+  group_by: z._default(z.array(name), []),
+  split_by: z._default(z.array(name), []),
+  measures: z._default(z.array(measureSchema), []),
+  filters: z._default(z.array(filterSchema), []),
+  sort: z._default(z.array(sortSchema), []),
+  group_sort: z._default(groupSortSchema, { by: "key", descending: false }),
+  having: z._default(z.array(havingSchema), []),
+  top_n: orNull(topNSchema),
+  expand_depth: z._default(count, 0),
+  expanded: z._default(z.array(expandedSchema), []),
+  formats: z._default(z.record(name, formatSchema), {}),
+  column_widths: z._default(z.record(z.string(), z.int().check(z.minimum(0), z.maximum(4_294_967_295))), {})
 });
 
 /** A complete layout, with every default filled in. */

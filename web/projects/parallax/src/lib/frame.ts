@@ -14,7 +14,7 @@
  */
 
 import { DataType, Table, tableFromIPC } from "apache-arrow";
-import { z } from "zod";
+import * as z from "zod/mini";
 import type { Field, Vector } from "apache-arrow";
 
 import { exactDecimal } from "./format";
