@@ -1,9 +1,9 @@
-import { create, toBinary } from "@bufbuild/protobuf";
+import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
 import { describe, expect, it, vi } from "vitest";
 
 import { Connection } from "./connection";
 import type { FrameData } from "./frame";
-import { ServerMessageSchema } from "./proto/parallax_pb";
+import { ClientMessageSchema, ServerMessageSchema } from "./proto/parallax_pb";
 
 function connection(): { readonly connection: Connection; readonly sent: Uint8Array[] } {
   const sent: Uint8Array[] = [];
@@ -41,6 +41,37 @@ describe("Connection", () => {
     const fetch = view.fetch({ firstRow: 0, rowCount: 10, firstColumn: 0, columnCount: 2 });
     view.close();
     await expect(fetch).rejects.toThrow("closed");
+  });
+});
+
+describe("ViewHandle.measure", () => {
+  it("asks the engine to measure and answers with what it wrote, or null when it found nothing", async () => {
+    const { connection: c, sent } = connection();
+    const view = c.open("prices", "{}", { frame: () => undefined });
+    const asked = view.measure(10, 20);
+    const request = fromBinary(ClientMessageSchema, sent.at(-1) ?? new Uint8Array());
+    expect(request.body.case === "measureChart" && [request.body.value.from, request.body.value.to]).toEqual([10, 20]);
+    const reply = (found: boolean): Uint8Array =>
+      toBinary(
+        ServerMessageSchema,
+        create(ServerMessageSchema, {
+          requestId: request.requestId,
+          body: {
+            case: "chartMeasure",
+            value: { viewId: view.id, found, fromX: "2016-01-19", toX: "2016-02-02", fromValue: "100.00", toValue: "110.00", change: "10.00", percent: "10.00%", rows: 10n }
+          }
+        })
+      );
+    c.receive(reply(true));
+    await expect(asked).resolves.toMatchObject({ change: "10.00", percent: "10.00%", rows: 10 });
+    const nothing = view.measure(1, 2);
+    const second = fromBinary(ClientMessageSchema, sent.at(-1) ?? new Uint8Array());
+    c.receive(toBinary(ServerMessageSchema, create(ServerMessageSchema, { requestId: second.requestId, body: { case: "chartMeasure", value: { viewId: view.id, found: false } } })));
+    await expect(nothing).resolves.toBeNull();
+    // A measurement still waiting when the view closes fails.
+    const waiting = view.measure(1, 2);
+    view.close();
+    await expect(waiting).rejects.toThrow("closed");
   });
 });
 

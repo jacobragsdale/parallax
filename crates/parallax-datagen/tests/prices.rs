@@ -2,6 +2,8 @@
 
 mod common;
 
+use arrow_array::Array;
+use arrow_array::cast::AsArray;
 use common::{f64s, hash, i32s, i64s, strings};
 use parallax_datagen::Dataset;
 use parallax_datagen::prices::{Prices, PricesOptions, schema};
@@ -57,8 +59,62 @@ fn golden_rows_are_stable() {
     );
 }
 
-const GOLDEN_CALM: u64 = 10_600_207_667_285_220_552;
-const GOLDEN_HOSTILE: u64 = 14_734_069_032_027_083_984;
+const GOLDEN_CALM: u64 = 10_655_051_621_311_973_884;
+const GOLDEN_HOSTILE: u64 = 6_299_174_920_531_724_708;
+
+/// The golden hashes of the nine columns before `event` was added, which every
+/// price, volume and return still matches.
+const GOLDEN_PRICES_CALM: u64 = 10_600_207_667_285_220_552;
+const GOLDEN_PRICES_HOSTILE: u64 = 14_734_069_032_027_083_984;
+
+#[test]
+fn events_change_no_price() {
+    let nine: Vec<usize> = (0..9).collect();
+    let prices_only = |hostile| hash(&prices(2, hostile).batch(0..1_000).project(&nine).unwrap());
+    assert_eq!(
+        (prices_only(false), prices_only(true)),
+        (GOLDEN_PRICES_CALM, GOLDEN_PRICES_HOSTILE)
+    );
+}
+
+#[test]
+fn each_ticker_reports_every_quarter_and_some_pay_dividends() {
+    let dataset = prices(6, false);
+    let batch = dataset.batch(0..dataset.num_rows());
+    let tickers = batch.column_by_name("ticker").unwrap().as_string::<i32>();
+    let events = batch.column_by_name("event").unwrap().as_string::<i32>();
+    let years = 10.8; // 2016-01-04 to 2026-10-30
+    let mut by_ticker: std::collections::BTreeMap<&str, (usize, usize)> = Default::default();
+    for i in 0..batch.num_rows() {
+        let entry = by_ticker.entry(tickers.value(i)).or_default();
+        let event = if events.is_null(i) {
+            ""
+        } else {
+            events.value(i)
+        };
+        match event {
+            "" => {}
+            "Dividend" => entry.1 += 1,
+            e => {
+                assert!(e.ends_with("earnings"), "{e}");
+                entry.0 += 1;
+            }
+        }
+    }
+    for (ticker, (earnings, dividends)) in &by_ticker {
+        // Four a year, give or take the first and last partial years.
+        assert!(
+            (earnings.abs_diff((4.0 * years) as usize)) <= 2,
+            "{ticker}: {earnings} earnings"
+        );
+        assert!(
+            *dividends == 0 || dividends.abs_diff((4.0 * years) as usize) <= 2,
+            "{ticker}: {dividends} dividends"
+        );
+    }
+    // Every third ticker pays: two of the six.
+    assert_eq!(by_ticker.values().filter(|(_, d)| *d > 0).count(), 2);
+}
 
 #[test]
 fn bars_are_internally_consistent() {

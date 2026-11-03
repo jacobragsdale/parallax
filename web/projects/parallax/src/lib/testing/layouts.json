@@ -175,7 +175,9 @@
   {
     "chart": {
       "axis": "trading",
+      "compare": true,
       "drawings": [],
+      "events": "event",
       "hidden": [
         "volume AAPL"
       ],
@@ -222,6 +224,7 @@
   {
     "chart": {
       "axis": "value",
+      "compare": false,
       "drawings": [
         {
           "from": {
@@ -269,6 +272,7 @@
           "text": "Earnings: \"beat\""
         }
       ],
+      "events": null,
       "hidden": [],
       "horizontal": false,
       "indicators": [
@@ -362,7 +366,9 @@
   {
     "chart": {
       "axis": "value",
+      "compare": false,
       "drawings": [],
+      "events": null,
       "hidden": [],
       "horizontal": false,
       "indicators": [],

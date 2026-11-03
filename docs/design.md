@@ -389,6 +389,18 @@ however the chart is zoomed, panned or its axis placed. Changing a drawing is a
 change of how the chart is drawn, so the reduction stays and only the
 positions are sent again.
 
+Compare mode puts every series of a line or area chart on its percentage
+change from its first value in the range shown, so instruments of different
+prices share one axis; the engine computes each change from its row's exact
+value and writes it as a percentage, and refuses averages and bands, which are
+in prices, on such a chart. A layout can name an events column: the rows it
+marks in the range shown, such as earnings and dividends, are marked along the
+bottom of the price and read in the tooltip, at most 500 of them, evenly
+chosen, with the status bar saying how many there are in all. The measure
+tool asks the engine rather than working from pixels: between the rows with a
+price nearest the two ends of a band, it reads their prices, the change and
+its percentage, and the bars between them, all as the engine's text.
+
 A candle at either edge of the visible range keeps its whole bucket, so panning
 never changes its prices, and each price comes from a row that has one. Minute
 buckets are cut by each instant's own offset, so the repeated autumn hour gets

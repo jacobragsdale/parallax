@@ -285,6 +285,29 @@ class Painter {
     for (const pane of model.panes) {
       this.clipped(pane.plot, pane.marks);
     }
+    this.events(model);
+  }
+
+  /** Event markers: small triangles along the bottom of the price's plot, ringed in the surface colour. */
+  private events(model: ChartModel): void {
+    const ctx = this.ctx;
+    const { plot } = model;
+    const bottom = plot.y + plot.h - 1;
+    ctx.fillStyle = this.theme.foreground;
+    ctx.strokeStyle = this.theme.background;
+    ctx.lineWidth = 1;
+    for (const e of model.events) {
+      if (e.px < plot.x || e.px > plot.x + plot.w) {
+        continue;
+      }
+      ctx.beginPath();
+      ctx.moveTo(e.px - 4, bottom);
+      ctx.lineTo(e.px + 4, bottom);
+      ctx.lineTo(e.px, bottom - 7);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    }
   }
 }
 

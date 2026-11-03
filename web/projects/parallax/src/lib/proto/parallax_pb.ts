@@ -18,7 +18,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file parallax.proto.
  */
 export const file_parallax: GenFile = /*@__PURE__*/
-  fileDesc("Cg5wYXJhbGxheC5wcm90bxILcGFyYWxsYXgudjEilQQKDUNsaWVudE1lc3NhZ2USEgoKcmVxdWVzdF9pZBgBIAEoBBIjCgVoZWxsbxgCIAEoCzISLnBhcmFsbGF4LnYxLkhlbGxvSAASKgoJb3Blbl92aWV3GAMgASgLMhUucGFyYWxsYXgudjEuT3BlblZpZXdIABIuCgt1cGRhdGVfdmlldxgEIAEoCzIXLnBhcmFsbGF4LnYxLlVwZGF0ZVZpZXdIABIwCgxzZXRfdmlld3BvcnQYBSABKAsyGC5wYXJhbGxheC52MS5TZXRWaWV3cG9ydEgAEjAKDHNldF9leHBhbmRlZBgGIAEoCzIYLnBhcmFsbGF4LnYxLlNldEV4cGFuZGVkSAASLAoKY2xvc2VfdmlldxgHIAEoCzIWLnBhcmFsbGF4LnYxLkNsb3NlVmlld0gAEjIKDWRyaWxsX3Rocm91Z2gYCCABKAsyGS5wYXJhbGxheC52MS5EcmlsbFRocm91Z2hIABI2Cg9kaXN0aW5jdF92YWx1ZXMYCSABKAsyGy5wYXJhbGxheC52MS5EaXN0aW5jdFZhbHVlc0gAEjAKDGZldGNoX3dpbmRvdxgKIAEoCzIYLnBhcmFsbGF4LnYxLkZldGNoV2luZG93SAASNwoQc2V0X2NoYXJ0X3dpbmRvdxgLIAEoCzIbLnBhcmFsbGF4LnYxLlNldENoYXJ0V2luZG93SABCBgoEYm9keSLuAgoNU2VydmVyTWVzc2FnZRISCgpyZXF1ZXN0X2lkGAEgASgEEicKB3dlbGNvbWUYAiABKAsyFC5wYXJhbGxheC52MS5XZWxjb21lSAASLgoLdmlld19vcGVuZWQYAyABKAsyFy5wYXJhbGxheC52MS5WaWV3T3BlbmVkSAASIwoFZnJhbWUYBCABKAsyEi5wYXJhbGxheC52MS5GcmFtZUgAEiMKBWVycm9yGAUgASgLMhIucGFyYWxsYXgudjEuRXJyb3JIABIwCgx0YWJsZV9zdGF0dXMYBiABKAsyGC5wYXJhbGxheC52MS5UYWJsZVN0YXR1c0gAEjwKD2Rpc3RpbmN0X3ZhbHVlcxgHIAEoCzIhLnBhcmFsbGF4LnYxLkRpc3RpbmN0VmFsdWVzUmVzdWx0SAASLgoLY2hhcnRfZnJhbWUYCCABKAsyFy5wYXJhbGxheC52MS5DaGFydEZyYW1lSABCBgoEYm9keSIhCgVIZWxsbxIYChBwcm90b2NvbF92ZXJzaW9uGAEgASgNIk8KB1dlbGNvbWUSGAoQcHJvdG9jb2xfdmVyc2lvbhgBIAEoDRIqCghkYXRhc2V0cxgCIAMoCzIYLnBhcmFsbGF4LnYxLkRhdGFzZXRJbmZvIkAKC0RhdGFzZXRJbmZvEgwKBG5hbWUYASABKAkSEgoKcGFyYW1ldGVycxgCIAMoCRIPCgdicm93c2VyGAMgASgIIq8BCghPcGVuVmlldxIPCgd2aWV3X2lkGAEgASgNEg8KB2RhdGFzZXQYAiABKAkSOQoKcGFyYW1ldGVycxgDIAMoCzIlLnBhcmFsbGF4LnYxLk9wZW5WaWV3LlBhcmFtZXRlcnNFbnRyeRITCgtsYXlvdXRfanNvbhgEIAEoCRoxCg9QYXJhbWV0ZXJzRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJOgI4ASJyCgpWaWV3T3BlbmVkEg8KB3ZpZXdfaWQYASABKA0SFAoMdGFibGVfc2NoZW1hGAIgASgMEigKBnN0YXR1cxgDIAEoCzIYLnBhcmFsbGF4LnYxLlRhYmxlU3RhdHVzEhMKC2xheW91dF9qc29uGAQgASgJIkoKClVwZGF0ZVZpZXcSDwoHdmlld19pZBgBIAEoDRITCgtsYXlvdXRfanNvbhgCIAEoCRIWCg5jb25maWdfdmVyc2lvbhgDIAEoBCJwCgtTZXRWaWV3cG9ydBIPCgd2aWV3X2lkGAEgASgNEhEKCWZpcnN0X3JvdxgCIAEoBBIRCglyb3dfY291bnQYAyABKAQSFAoMZmlyc3RfY29sdW1uGAQgASgNEhQKDGNvbHVtbl9jb3VudBgFIAEoDSJDCgtTZXRFeHBhbmRlZBIPCgd2aWV3X2lkGAEgASgNEhEKCXBhdGhfanNvbhgCIAEoCRIQCghleHBhbmRlZBgDIAEoCCJwCgtGZXRjaFdpbmRvdxIPCgd2aWV3X2lkGAEgASgNEhEKCWZpcnN0X3JvdxgCIAEoBBIRCglyb3dfY291bnQYAyABKAQSFAoMZmlyc3RfY29sdW1uGAQgASgNEhQKDGNvbHVtbl9jb3VudBgFIAEoDSIcCglDbG9zZVZpZXcSDwoHdmlld19pZBgBIAEoDSJBCgxEcmlsbFRocm91Z2gSDwoHdmlld19pZBgBIAEoDRILCgNyb3cYAiABKAQSEwoLbmV3X3ZpZXdfaWQYAyABKA0iUAoORGlzdGluY3RWYWx1ZXMSDwoHdmlld19pZBgBIAEoDRIOCgZjb2x1bW4YAiABKAkSDgoGc2VhcmNoGAMgASgJEg0KBWxpbWl0GAQgASgNIloKFERpc3RpbmN0VmFsdWVzUmVzdWx0Eg8KB3ZpZXdfaWQYASABKA0SDgoGY29sdW1uGAIgASgJEg4KBnZhbHVlcxgDIAEoDBIRCgl0cnVuY2F0ZWQYBCABKAgi1gEKBUZyYW1lEg8KB3ZpZXdfaWQYASABKA0SFgoOY29uZmlnX3ZlcnNpb24YAiABKAQSFAoMbG9hZF92ZXJzaW9uGAMgASgEEhEKCWZpcnN0X3JvdxgEIAEoBBIUCgxmaXJzdF9jb2x1bW4YBSABKA0SEgoKdG90YWxfcm93cxgGIAEoBBIVCg10b3RhbF9jb2x1bW5zGAcgASgNEg0KBWJhdGNoGAggASgMEhsKE3NvdXJjZV9hc19vZl9taWNyb3MYCSABKAMSDgoGcHVzaGVkGAogASgIIsUBCgtUYWJsZVN0YXR1cxIPCgd2aWV3X2lkGAcgASgNEhQKDGxvYWRfdmVyc2lvbhgBIAEoBBIMCgRyb3dzGAIgASgEEhgKEGxvYWRlZF9hdF9taWNyb3MYAyABKAMSFQoNcmVmcmVzaF9lcnJvchgEIAEoCRIgChhyZWZyZXNoX2ZhaWxlZF9hdF9taWNyb3MYBSABKAMSLgoMbmFuc190b19udWxsGAYgAygLMhgucGFyYWxsYXgudjEuQ29sdW1uQ291bnQiLAoLQ29sdW1uQ291bnQSDgoGY29sdW1uGAEgASgJEg0KBWNvdW50GAIgASgEIikKBUVycm9yEg8KB3ZpZXdfaWQYASABKA0SDwoHbWVzc2FnZRgCIAEoCSK4AQoOU2V0Q2hhcnRXaW5kb3cSDwoHdmlld19pZBgBIAEoDRITCgZ4X2Zyb20YAiABKAFIAIgBARIRCgR4X3RvGAMgASgBSAGIAQESEwoGeV9mcm9tGAQgASgBSAKIAQESEQoEeV90bxgFIAEoAUgDiAEBEg0KBXdpZHRoGAYgASgNEg4KBmhlaWdodBgHIAEoDUIJCgdfeF9mcm9tQgcKBV94X3RvQgkKB195X2Zyb21CBwoFX3lfdG8i6wMKCkNoYXJ0RnJhbWUSDwoHdmlld19pZBgBIAEoDRIWCg5jb25maWdfdmVyc2lvbhgCIAEoBBIUCgxsb2FkX3ZlcnNpb24YAyABKAQSGwoTc291cmNlX2FzX29mX21pY3JvcxgEIAEoAxIOCgZwdXNoZWQYBSABKAgSDgoGeF9mcm9tGAYgASgBEgwKBHhfdG8YByABKAESJQoFdGlja3MYCCADKAsyFi5wYXJhbGxheC52MS5DaGFydFRpY2sSKAoGc2VyaWVzGAkgAygLMhgucGFyYWxsYXgudjEuQ2hhcnRTZXJpZXMSDQoFYmF0Y2gYCiABKAwSDwoHY29sdW1ucxgLIAEoDRIMCgRyb3dzGAwgASgNEg4KBnlfZnJvbRgNIAEoARIMCgR5X3RvGA4gASgBEhAKCGludGVydmFsGA8gASgJEhMKC2V4dGVudF9mcm9tGBAgASgBEhEKCWV4dGVudF90bxgRIAEoARI4Cg9pbmRpY2F0b3JfbGluZXMYEiADKAsyHy5wYXJhbGxheC52MS5DaGFydEluZGljYXRvckxpbmUSFwoPaW5kaWNhdG9yX2JhdGNoGBMgASgMEikKB2FuY2hvcnMYFCADKAsyGC5wYXJhbGxheC52MS5DaGFydEFuY2hvciIvCgtDaGFydEFuY2hvchIOCgZ4X2pzb24YASABKAkSEAoIcG9zaXRpb24YAiABKAEiRQoSQ2hhcnRJbmRpY2F0b3JMaW5lEhEKCWluZGljYXRvchgBIAEoDRIMCgRsaW5lGAIgASgJEg4KBnNlcmllcxgDIAEoCSIlCglDaGFydFRpY2sSCQoBeBgBIAEoARINCgVsYWJlbBgCIAEoCSI7CgtDaGFydFNlcmllcxINCgVsYWJlbBgBIAEoCRIOCgZjb2x1bW4YAiABKAkSDQoFcmlnaHQYAyABKAhiBnByb3RvMw");
+  fileDesc("Cg5wYXJhbGxheC5wcm90bxILcGFyYWxsYXgudjEiyQQKDUNsaWVudE1lc3NhZ2USEgoKcmVxdWVzdF9pZBgBIAEoBBIjCgVoZWxsbxgCIAEoCzISLnBhcmFsbGF4LnYxLkhlbGxvSAASKgoJb3Blbl92aWV3GAMgASgLMhUucGFyYWxsYXgudjEuT3BlblZpZXdIABIuCgt1cGRhdGVfdmlldxgEIAEoCzIXLnBhcmFsbGF4LnYxLlVwZGF0ZVZpZXdIABIwCgxzZXRfdmlld3BvcnQYBSABKAsyGC5wYXJhbGxheC52MS5TZXRWaWV3cG9ydEgAEjAKDHNldF9leHBhbmRlZBgGIAEoCzIYLnBhcmFsbGF4LnYxLlNldEV4cGFuZGVkSAASLAoKY2xvc2VfdmlldxgHIAEoCzIWLnBhcmFsbGF4LnYxLkNsb3NlVmlld0gAEjIKDWRyaWxsX3Rocm91Z2gYCCABKAsyGS5wYXJhbGxheC52MS5EcmlsbFRocm91Z2hIABI2Cg9kaXN0aW5jdF92YWx1ZXMYCSABKAsyGy5wYXJhbGxheC52MS5EaXN0aW5jdFZhbHVlc0gAEjAKDGZldGNoX3dpbmRvdxgKIAEoCzIYLnBhcmFsbGF4LnYxLkZldGNoV2luZG93SAASNwoQc2V0X2NoYXJ0X3dpbmRvdxgLIAEoCzIbLnBhcmFsbGF4LnYxLlNldENoYXJ0V2luZG93SAASMgoNbWVhc3VyZV9jaGFydBgMIAEoCzIZLnBhcmFsbGF4LnYxLk1lYXN1cmVDaGFydEgAQgYKBGJvZHkiogMKDVNlcnZlck1lc3NhZ2USEgoKcmVxdWVzdF9pZBgBIAEoBBInCgd3ZWxjb21lGAIgASgLMhQucGFyYWxsYXgudjEuV2VsY29tZUgAEi4KC3ZpZXdfb3BlbmVkGAMgASgLMhcucGFyYWxsYXgudjEuVmlld09wZW5lZEgAEiMKBWZyYW1lGAQgASgLMhIucGFyYWxsYXgudjEuRnJhbWVIABIjCgVlcnJvchgFIAEoCzISLnBhcmFsbGF4LnYxLkVycm9ySAASMAoMdGFibGVfc3RhdHVzGAYgASgLMhgucGFyYWxsYXgudjEuVGFibGVTdGF0dXNIABI8Cg9kaXN0aW5jdF92YWx1ZXMYByABKAsyIS5wYXJhbGxheC52MS5EaXN0aW5jdFZhbHVlc1Jlc3VsdEgAEi4KC2NoYXJ0X2ZyYW1lGAggASgLMhcucGFyYWxsYXgudjEuQ2hhcnRGcmFtZUgAEjIKDWNoYXJ0X21lYXN1cmUYCSABKAsyGS5wYXJhbGxheC52MS5DaGFydE1lYXN1cmVIAEIGCgRib2R5IiEKBUhlbGxvEhgKEHByb3RvY29sX3ZlcnNpb24YASABKA0iTwoHV2VsY29tZRIYChBwcm90b2NvbF92ZXJzaW9uGAEgASgNEioKCGRhdGFzZXRzGAIgAygLMhgucGFyYWxsYXgudjEuRGF0YXNldEluZm8iQAoLRGF0YXNldEluZm8SDAoEbmFtZRgBIAEoCRISCgpwYXJhbWV0ZXJzGAIgAygJEg8KB2Jyb3dzZXIYAyABKAgirwEKCE9wZW5WaWV3Eg8KB3ZpZXdfaWQYASABKA0SDwoHZGF0YXNldBgCIAEoCRI5CgpwYXJhbWV0ZXJzGAMgAygLMiUucGFyYWxsYXgudjEuT3BlblZpZXcuUGFyYW1ldGVyc0VudHJ5EhMKC2xheW91dF9qc29uGAQgASgJGjEKD1BhcmFtZXRlcnNFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBInIKClZpZXdPcGVuZWQSDwoHdmlld19pZBgBIAEoDRIUCgx0YWJsZV9zY2hlbWEYAiABKAwSKAoGc3RhdHVzGAMgASgLMhgucGFyYWxsYXgudjEuVGFibGVTdGF0dXMSEwoLbGF5b3V0X2pzb24YBCABKAkiSgoKVXBkYXRlVmlldxIPCgd2aWV3X2lkGAEgASgNEhMKC2xheW91dF9qc29uGAIgASgJEhYKDmNvbmZpZ192ZXJzaW9uGAMgASgEInAKC1NldFZpZXdwb3J0Eg8KB3ZpZXdfaWQYASABKA0SEQoJZmlyc3Rfcm93GAIgASgEEhEKCXJvd19jb3VudBgDIAEoBBIUCgxmaXJzdF9jb2x1bW4YBCABKA0SFAoMY29sdW1uX2NvdW50GAUgASgNIkMKC1NldEV4cGFuZGVkEg8KB3ZpZXdfaWQYASABKA0SEQoJcGF0aF9qc29uGAIgASgJEhAKCGV4cGFuZGVkGAMgASgIInAKC0ZldGNoV2luZG93Eg8KB3ZpZXdfaWQYASABKA0SEQoJZmlyc3Rfcm93GAIgASgEEhEKCXJvd19jb3VudBgDIAEoBBIUCgxmaXJzdF9jb2x1bW4YBCABKA0SFAoMY29sdW1uX2NvdW50GAUgASgNIhwKCUNsb3NlVmlldxIPCgd2aWV3X2lkGAEgASgNIkEKDERyaWxsVGhyb3VnaBIPCgd2aWV3X2lkGAEgASgNEgsKA3JvdxgCIAEoBBITCgtuZXdfdmlld19pZBgDIAEoDSJQCg5EaXN0aW5jdFZhbHVlcxIPCgd2aWV3X2lkGAEgASgNEg4KBmNvbHVtbhgCIAEoCRIOCgZzZWFyY2gYAyABKAkSDQoFbGltaXQYBCABKA0iWgoURGlzdGluY3RWYWx1ZXNSZXN1bHQSDwoHdmlld19pZBgBIAEoDRIOCgZjb2x1bW4YAiABKAkSDgoGdmFsdWVzGAMgASgMEhEKCXRydW5jYXRlZBgEIAEoCCLWAQoFRnJhbWUSDwoHdmlld19pZBgBIAEoDRIWCg5jb25maWdfdmVyc2lvbhgCIAEoBBIUCgxsb2FkX3ZlcnNpb24YAyABKAQSEQoJZmlyc3Rfcm93GAQgASgEEhQKDGZpcnN0X2NvbHVtbhgFIAEoDRISCgp0b3RhbF9yb3dzGAYgASgEEhUKDXRvdGFsX2NvbHVtbnMYByABKA0SDQoFYmF0Y2gYCCABKAwSGwoTc291cmNlX2FzX29mX21pY3JvcxgJIAEoAxIOCgZwdXNoZWQYCiABKAgixQEKC1RhYmxlU3RhdHVzEg8KB3ZpZXdfaWQYByABKA0SFAoMbG9hZF92ZXJzaW9uGAEgASgEEgwKBHJvd3MYAiABKAQSGAoQbG9hZGVkX2F0X21pY3JvcxgDIAEoAxIVCg1yZWZyZXNoX2Vycm9yGAQgASgJEiAKGHJlZnJlc2hfZmFpbGVkX2F0X21pY3JvcxgFIAEoAxIuCgxuYW5zX3RvX251bGwYBiADKAsyGC5wYXJhbGxheC52MS5Db2x1bW5Db3VudCIsCgtDb2x1bW5Db3VudBIOCgZjb2x1bW4YASABKAkSDQoFY291bnQYAiABKAQiKQoFRXJyb3ISDwoHdmlld19pZBgBIAEoDRIPCgdtZXNzYWdlGAIgASgJIrgBCg5TZXRDaGFydFdpbmRvdxIPCgd2aWV3X2lkGAEgASgNEhMKBnhfZnJvbRgCIAEoAUgAiAEBEhEKBHhfdG8YAyABKAFIAYgBARITCgZ5X2Zyb20YBCABKAFIAogBARIRCgR5X3RvGAUgASgBSAOIAQESDQoFd2lkdGgYBiABKA0SDgoGaGVpZ2h0GAcgASgNQgkKB194X2Zyb21CBwoFX3hfdG9CCQoHX3lfZnJvbUIHCgVfeV90byKqBAoKQ2hhcnRGcmFtZRIPCgd2aWV3X2lkGAEgASgNEhYKDmNvbmZpZ192ZXJzaW9uGAIgASgEEhQKDGxvYWRfdmVyc2lvbhgDIAEoBBIbChNzb3VyY2VfYXNfb2ZfbWljcm9zGAQgASgDEg4KBnB1c2hlZBgFIAEoCBIOCgZ4X2Zyb20YBiABKAESDAoEeF90bxgHIAEoARIlCgV0aWNrcxgIIAMoCzIWLnBhcmFsbGF4LnYxLkNoYXJ0VGljaxIoCgZzZXJpZXMYCSADKAsyGC5wYXJhbGxheC52MS5DaGFydFNlcmllcxINCgViYXRjaBgKIAEoDBIPCgdjb2x1bW5zGAsgASgNEgwKBHJvd3MYDCABKA0SDgoGeV9mcm9tGA0gASgBEgwKBHlfdG8YDiABKAESEAoIaW50ZXJ2YWwYDyABKAkSEwoLZXh0ZW50X2Zyb20YECABKAESEQoJZXh0ZW50X3RvGBEgASgBEjgKD2luZGljYXRvcl9saW5lcxgSIAMoCzIfLnBhcmFsbGF4LnYxLkNoYXJ0SW5kaWNhdG9yTGluZRIXCg9pbmRpY2F0b3JfYmF0Y2gYEyABKAwSKQoHYW5jaG9ycxgUIAMoCzIYLnBhcmFsbGF4LnYxLkNoYXJ0QW5jaG9yEicKBmV2ZW50cxgVIAMoCzIXLnBhcmFsbGF4LnYxLkNoYXJ0RXZlbnQSFAoMZXZlbnRzX3RvdGFsGBYgASgNIjUKCkNoYXJ0RXZlbnQSCQoBeBgBIAEoARIOCgZ4X3RleHQYAiABKAkSDAoEdGV4dBgDIAEoCSJJCgxNZWFzdXJlQ2hhcnQSDwoHdmlld19pZBgBIAEoDRIMCgRmcm9tGAIgASgBEgoKAnRvGAMgASgBEg4KBnNlcmllcxgEIAEoCSLNAQoMQ2hhcnRNZWFzdXJlEg8KB3ZpZXdfaWQYASABKA0SDQoFZm91bmQYAiABKAgSDgoGZnJvbV94GAMgASgJEgwKBHRvX3gYBCABKAkSFQoNZnJvbV9wb3NpdGlvbhgFIAEoARITCgt0b19wb3NpdGlvbhgGIAEoARISCgpmcm9tX3ZhbHVlGAcgASgJEhAKCHRvX3ZhbHVlGAggASgJEg4KBmNoYW5nZRgJIAEoCRIPCgdwZXJjZW50GAogASgJEgwKBHJvd3MYCyABKAQiLwoLQ2hhcnRBbmNob3ISDgoGeF9qc29uGAEgASgJEhAKCHBvc2l0aW9uGAIgASgBIkUKEkNoYXJ0SW5kaWNhdG9yTGluZRIRCglpbmRpY2F0b3IYASABKA0SDAoEbGluZRgCIAEoCRIOCgZzZXJpZXMYAyABKAkiJQoJQ2hhcnRUaWNrEgkKAXgYASABKAESDQoFbGFiZWwYAiABKAkiOwoLQ2hhcnRTZXJpZXMSDQoFbGFiZWwYASABKAkSDgoGY29sdW1uGAIgASgJEg0KBXJpZ2h0GAMgASgIYgZwcm90bzM");
 
 /**
  * Sent by the client.
@@ -96,6 +96,12 @@ export type ClientMessage = Message<"parallax.v1.ClientMessage"> & {
      */
     value: SetChartWindow;
     case: "setChartWindow";
+  } | {
+    /**
+     * @generated from field: parallax.v1.MeasureChart measure_chart = 12;
+     */
+    value: MeasureChart;
+    case: "measureChart";
   } | { case: undefined; value?: undefined };
 };
 
@@ -164,6 +170,12 @@ export type ServerMessage = Message<"parallax.v1.ServerMessage"> & {
      */
     value: ChartFrame;
     case: "chartFrame";
+  } | {
+    /**
+     * @generated from field: parallax.v1.ChartMeasure chart_measure = 9;
+     */
+    value: ChartMeasure;
+    case: "chartMeasure";
   } | { case: undefined; value?: undefined };
 };
 
@@ -931,6 +943,19 @@ export type ChartFrame = Message<"parallax.v1.ChartFrame"> & {
    * @generated from field: repeated parallax.v1.ChartAnchor anchors = 20;
    */
   anchors: ChartAnchor[];
+
+  /**
+   * The rows the layout's events column marks in the range shown, at most 500,
+   * evenly chosen, and how many there are in all.
+   *
+   * @generated from field: repeated parallax.v1.ChartEvent events = 21;
+   */
+  events: ChartEvent[];
+
+  /**
+   * @generated from field: uint32 events_total = 22;
+   */
+  eventsTotal: number;
 };
 
 /**
@@ -939,6 +964,162 @@ export type ChartFrame = Message<"parallax.v1.ChartFrame"> & {
  */
 export const ChartFrameSchema: GenMessage<ChartFrame> = /*@__PURE__*/
   messageDesc(file_parallax, 20);
+
+/**
+ * The rows a chart's events column marks in the range shown.
+ *
+ * @generated from message parallax.v1.ChartEvent
+ */
+export type ChartEvent = Message<"parallax.v1.ChartEvent"> & {
+  /**
+   * The row's axis position.
+   *
+   * @generated from field: double x = 1;
+   */
+  x: number;
+
+  /**
+   * The row's x value as text.
+   *
+   * @generated from field: string x_text = 2;
+   */
+  xText: string;
+
+  /**
+   * The event, as text; with a series column, after the series' value.
+   *
+   * @generated from field: string text = 3;
+   */
+  text: string;
+};
+
+/**
+ * Describes the message parallax.v1.ChartEvent.
+ * Use `create(ChartEventSchema)` to create a new message.
+ */
+export const ChartEventSchema: GenMessage<ChartEvent> = /*@__PURE__*/
+  messageDesc(file_parallax, 21);
+
+/**
+ * Asks what changed between two places on a chart: the price at the row nearest
+ * each, the change between them, and the rows from one to the other.
+ *
+ * @generated from message parallax.v1.MeasureChart
+ */
+export type MeasureChart = Message<"parallax.v1.MeasureChart"> & {
+  /**
+   * @generated from field: uint32 view_id = 1;
+   */
+  viewId: number;
+
+  /**
+   * The two places, in axis positions.
+   *
+   * @generated from field: double from = 2;
+   */
+  from: number;
+
+  /**
+   * @generated from field: double to = 3;
+   */
+  to: number;
+
+  /**
+   * The series to measure, by the series column's value as text, or empty for
+   * the first.
+   *
+   * @generated from field: string series = 4;
+   */
+  series: string;
+};
+
+/**
+ * Describes the message parallax.v1.MeasureChart.
+ * Use `create(MeasureChartSchema)` to create a new message.
+ */
+export const MeasureChartSchema: GenMessage<MeasureChart> = /*@__PURE__*/
+  messageDesc(file_parallax, 22);
+
+/**
+ * What changed between two rows of a chart's series, all as the engine's text.
+ *
+ * @generated from message parallax.v1.ChartMeasure
+ */
+export type ChartMeasure = Message<"parallax.v1.ChartMeasure"> & {
+  /**
+   * @generated from field: uint32 view_id = 1;
+   */
+  viewId: number;
+
+  /**
+   * False when the series has no row with a price.
+   *
+   * @generated from field: bool found = 2;
+   */
+  found: boolean;
+
+  /**
+   * The rows' x values, and their axis positions.
+   *
+   * @generated from field: string from_x = 3;
+   */
+  fromX: string;
+
+  /**
+   * @generated from field: string to_x = 4;
+   */
+  toX: string;
+
+  /**
+   * @generated from field: double from_position = 5;
+   */
+  fromPosition: number;
+
+  /**
+   * @generated from field: double to_position = 6;
+   */
+  toPosition: number;
+
+  /**
+   * Their prices, in the price column's format.
+   *
+   * @generated from field: string from_value = 7;
+   */
+  fromValue: string;
+
+  /**
+   * @generated from field: string to_value = 8;
+   */
+  toValue: string;
+
+  /**
+   * The later price less the earlier, in the price's format, and as a percentage
+   * of the earlier; "" when the earlier is zero.
+   *
+   * @generated from field: string change = 9;
+   */
+  change: string;
+
+  /**
+   * @generated from field: string percent = 10;
+   */
+  percent: string;
+
+  /**
+   * Rows with a price from the earlier to the later, counting the later and not
+   * the earlier: the bars between them.
+   *
+   * @generated from field: uint64 rows = 11;
+   */
+  rows: bigint;
+};
+
+/**
+ * Describes the message parallax.v1.ChartMeasure.
+ * Use `create(ChartMeasureSchema)` to create a new message.
+ */
+export const ChartMeasureSchema: GenMessage<ChartMeasure> = /*@__PURE__*/
+  messageDesc(file_parallax, 23);
 
 /**
  * An x value a drawing is anchored to, and its place on the axis.
@@ -966,7 +1147,7 @@ export type ChartAnchor = Message<"parallax.v1.ChartAnchor"> & {
  * Use `create(ChartAnchorSchema)` to create a new message.
  */
 export const ChartAnchorSchema: GenMessage<ChartAnchor> = /*@__PURE__*/
-  messageDesc(file_parallax, 21);
+  messageDesc(file_parallax, 24);
 
 /**
  * One line of an indicator, for one series.
@@ -1003,7 +1184,7 @@ export type ChartIndicatorLine = Message<"parallax.v1.ChartIndicatorLine"> & {
  * Use `create(ChartIndicatorLineSchema)` to create a new message.
  */
 export const ChartIndicatorLineSchema: GenMessage<ChartIndicatorLine> = /*@__PURE__*/
-  messageDesc(file_parallax, 22);
+  messageDesc(file_parallax, 25);
 
 /**
  * A labelled tick on a chart's x axis.
@@ -1027,7 +1208,7 @@ export type ChartTick = Message<"parallax.v1.ChartTick"> & {
  * Use `create(ChartTickSchema)` to create a new message.
  */
 export const ChartTickSchema: GenMessage<ChartTick> = /*@__PURE__*/
-  messageDesc(file_parallax, 23);
+  messageDesc(file_parallax, 26);
 
 /**
  * A series of a line, area or histogram chart.
@@ -1062,5 +1243,5 @@ export type ChartSeries = Message<"parallax.v1.ChartSeries"> & {
  * Use `create(ChartSeriesSchema)` to create a new message.
  */
 export const ChartSeriesSchema: GenMessage<ChartSeries> = /*@__PURE__*/
-  messageDesc(file_parallax, 24);
+  messageDesc(file_parallax, 27);
 

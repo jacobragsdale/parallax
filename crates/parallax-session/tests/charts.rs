@@ -803,3 +803,186 @@ mod drawings {
         );
     }
 }
+
+/// Compare mode, event markers and measuring, over generated prices.
+mod tools {
+    use std::collections::HashMap;
+    use std::sync::{Arc, RwLock};
+
+    use arrow_array::cast::AsArray;
+    use arrow_array::types::{Date32Type, Float64Type};
+    use arrow_array::{Array, RecordBatch};
+    use parallax_datagen::Dataset;
+    use parallax_datagen::prices::{Prices, PricesOptions};
+    use parallax_engine::TableOptions;
+    use parallax_protocol::ipc::decode_batches;
+    use parallax_protocol::v1::{
+        ChartFrame, MeasureChart, OpenView, SetChartWindow, client_message, server_message::Body,
+    };
+    use parallax_session::{MemoryCatalog, Session, TableState};
+
+    use super::send;
+
+    fn session(tickers: usize) -> (Session, RecordBatch) {
+        let prices = Prices::new(PricesOptions {
+            tickers,
+            securities: 200,
+            ..PricesOptions::default()
+        })
+        .unwrap();
+        let batch = prices.batch(0..prices.num_rows());
+        let state = TableState::from_batches(
+            &batch.schema(),
+            std::slice::from_ref(&batch),
+            TableOptions::default(),
+            1,
+            1,
+        )
+        .unwrap();
+        let catalog = Arc::new(MemoryCatalog::new());
+        catalog.insert("prices", Arc::new(RwLock::new(state)));
+        (Session::new(catalog), batch)
+    }
+
+    fn open(session: &mut Session, layout: &str) -> ChartFrame {
+        let replies = send(
+            session,
+            1,
+            client_message::Body::OpenView(OpenView {
+                view_id: 1,
+                dataset: "prices".into(),
+                parameters: HashMap::new(),
+                layout_json: layout.into(),
+            }),
+        );
+        assert!(
+            !replies.iter().any(|r| matches!(r, Body::Error(_))),
+            "{replies:?}"
+        );
+        match send(
+            session,
+            2,
+            client_message::Body::SetChartWindow(SetChartWindow {
+                view_id: 1,
+                width: 800,
+                height: 300,
+                ..SetChartWindow::default()
+            }),
+        )
+        .as_slice()
+        {
+            [Body::ChartFrame(frame)] => frame.clone(),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn compare_mode_writes_each_series_as_a_percentage_change() {
+        let (mut session, _) = session(2);
+        let frame = open(
+            &mut session,
+            r#"{"chart": {"kind": "line", "x": "date", "y": ["close"], "series": "ticker", "compare": true}}"#,
+        );
+        let batch = decode_batches(&frame.batch).unwrap().remove(0);
+        let ys = batch
+            .column_by_name("y")
+            .unwrap()
+            .as_primitive::<Float64Type>();
+        let texts = batch.column_by_name("y_text").unwrap().as_string::<i32>();
+        // Each series starts at its first value: 0 %.
+        assert_eq!(texts.value(0), "0.00%");
+        for i in 0..batch.num_rows() {
+            if !ys.is_null(i) && !ys.value(i).is_nan() {
+                let shown: f64 = texts
+                    .value(i)
+                    .trim_end_matches('%')
+                    .replace(',', "")
+                    .parse()
+                    .unwrap();
+                assert!(
+                    (shown - ys.value(i)).abs() <= 0.005,
+                    "{} for {}",
+                    texts.value(i),
+                    ys.value(i)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn events_mark_each_ticker_s_earnings_and_dividends() {
+        let (mut session, data) = session(3);
+        let frame = open(
+            &mut session,
+            r#"{"chart": {"kind": "line", "x": "date", "y": ["close"], "series": "ticker", "events": "event"}}"#,
+        );
+        let marked = data.column_by_name("event").unwrap();
+        let expected = (0..data.num_rows()).filter(|&i| !marked.is_null(i)).count();
+        assert_eq!(frame.events_total as usize, expected);
+        assert_eq!(frame.events.len(), expected.min(500));
+        // Each says whose it is and what it was, at its date.
+        let first = &frame.events[0];
+        assert!(
+            first.text.contains(": Q") || first.text.contains(": Dividend"),
+            "{}",
+            first.text
+        );
+        assert!(first.x_text.starts_with("201"), "{}", first.x_text);
+        assert!(frame.events.windows(2).all(|w| w[0].x <= w[1].x));
+    }
+
+    #[test]
+    fn measuring_reads_the_closes_and_counts_the_trading_days_between() {
+        let (mut session, data) = session(1);
+        let frame = open(
+            &mut session,
+            r#"{"chart": {"kind": "candlestick", "x": "date", "axis": "trading",
+                "ohlc": {"open": "open", "high": "high", "low": "low", "close": "close"}}}"#,
+        );
+        let first = frame.extent_from;
+        let replies = send(
+            &mut session,
+            3,
+            client_message::Body::MeasureChart(MeasureChart {
+                view_id: 1,
+                from: first + 20.2,
+                to: first + 10.1,
+                series: String::new(),
+            }),
+        );
+        let [Body::ChartMeasure(m)] = replies.as_slice() else {
+            panic!("{replies:?}")
+        };
+        assert!(m.found);
+        // Trading days 10 to 20 of the generated data: ten bars on.
+        assert_eq!(
+            (m.from_position - first, m.to_position - first, m.rows),
+            (10.0, 20.0, 10)
+        );
+        let close = data
+            .column_by_name("close")
+            .unwrap()
+            .as_primitive::<Float64Type>();
+        let dates = data
+            .column_by_name("date")
+            .unwrap()
+            .as_primitive::<Date32Type>();
+        let (a, b) = (close.value(10), close.value(20));
+        let number =
+            |text: &str| -> f64 { text.replace(',', "").trim_end_matches('%').parse().unwrap() };
+        assert!((number(&m.from_value) - a).abs() <= 0.005);
+        assert!((number(&m.to_value) - b).abs() <= 0.005);
+        assert!((number(&m.change) - (b - a)).abs() <= 0.005, "{}", m.change);
+        assert!(
+            (number(&m.percent) - (b / a - 1.0) * 100.0).abs() <= 0.005,
+            "{}",
+            m.percent
+        );
+        assert_eq!(
+            dates.value(10) + 14,
+            dates.value(20),
+            "two weeks of trading days"
+        );
+        assert!(!m.from_x.is_empty() && !m.to_x.is_empty());
+    }
+}

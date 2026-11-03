@@ -15,7 +15,7 @@ import type { Signal } from "@angular/core";
 
 import type { ChartFrameData } from "../chart-frame";
 import { ParallaxClient } from "../client";
-import type { ViewHandle } from "../connection";
+import type { Measurement, ViewHandle } from "../connection";
 import type { CellValue, FrameData } from "../frame";
 import type { ViewPlacement } from "../grid/grid-source";
 import type { Layout } from "../layout";
@@ -41,6 +41,8 @@ export interface ChartSource {
   readonly placement: Signal<ViewPlacement | null>;
   /** Asks for the chart at a plot size, over an x range or everything. */
   readonly show: (size: PlotSize, range: readonly [number, number] | null) => void;
+  /** Asks the engine to measure the chart between two axis positions; null without a view or a row to measure. */
+  readonly measure: (from: number, to: number) => Promise<Measurement | null>;
 }
 
 /** Whether a layout's chart draws its grouped view rather than a reduction. */
@@ -231,6 +233,7 @@ export function chartSource(layout: Signal<Layout | null>): ChartSource {
       if (current !== null && next !== null) {
         request(current.view, drawsGroups(next));
       }
-    }
+    },
+    measure: (from, to) => current?.view.measure(from, to) ?? Promise.resolve(null)
   };
 }

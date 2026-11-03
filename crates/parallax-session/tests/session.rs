@@ -25,6 +25,7 @@ fn the_conversation_answers_every_request() {
             Body::TableStatus(_) => "status",
             Body::DistinctValues(_) => "distinct",
             Body::ChartFrame(_) => "chart",
+            Body::ChartMeasure(_) => "measure",
         })
         .collect();
     assert_eq!(
@@ -283,7 +284,7 @@ fn chart_frames_carry_reduced_data_and_exact_text() {
 
 /// The WebAssembly test suite checks the same value, so both builds must answer
 /// byte for byte the same.
-pub const TRANSCRIPT_FINGERPRINT: u64 = 10_114_224_339_110_833_939;
+pub const TRANSCRIPT_FINGERPRINT: u64 = 4_466_502_437_510_005_248;
 
 #[test]
 fn transcript_fingerprint_is_stable() {

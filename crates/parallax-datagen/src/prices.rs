@@ -10,7 +10,7 @@ use arrow_array::{ArrayRef, Date32Array, Float64Array, Int64Array, RecordBatch, 
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use jiff::civil::{Date, date};
 
-use crate::calendar::{epoch_days, trading_days};
+use crate::calendar::{epoch_days, from_epoch_days, trading_days};
 use crate::dist::{log_normal, standard_normal, student_t_unit_variance};
 use crate::error::OptionsError;
 use crate::positions::HOSTILE_RATE;
@@ -197,7 +197,34 @@ impl Prices {
     }
 }
 
-/// The prices schema: 9 columns.
+/// What happened on a ticker's trading day, if anything: its quarterly earnings,
+/// reported on the first trading day on or after a day of January, April, July
+/// and October set by the ticker, and for every third ticker a quarterly dividend
+/// on the first trading day on or after the 10th of the last month of each
+/// quarter. Worked out from the ticker and the dates alone, so no price changes.
+fn event(ticker: usize, day: i32, previous: Option<i32>) -> Option<&'static str> {
+    // The first trading day on or after the `target`th of a month in `months`.
+    let first_on_or_after = |months: [i8; 4], target: i8| {
+        let today = from_epoch_days(day);
+        let before = previous.map(from_epoch_days);
+        months.contains(&today.month())
+            && today.day() >= target
+            && before.is_none_or(|b| b.month() != today.month() || b.day() < target)
+    };
+    let report = 18 + (ticker % 10) as i8;
+    if first_on_or_after([1, 4, 7, 10], report) {
+        let quarter = match from_epoch_days(day).month() {
+            1 => "Q4 earnings",
+            4 => "Q1 earnings",
+            7 => "Q2 earnings",
+            _ => "Q3 earnings",
+        };
+        return Some(quarter);
+    }
+    (ticker.is_multiple_of(3) && first_on_or_after([3, 6, 9, 12], 10)).then_some("Dividend")
+}
+
+/// The prices schema: 10 columns.
 #[must_use]
 pub fn schema() -> Schema {
     Schema::new(vec![
@@ -210,6 +237,7 @@ pub fn schema() -> Schema {
         Field::new("volume", DataType::Int64, true),
         Field::new("vwap", DataType::Float64, true),
         Field::new("return_1d", DataType::Float64, true),
+        Field::new("event", DataType::Utf8, true),
     ])
 }
 
@@ -227,6 +255,7 @@ impl Dataset for Prices {
         let mut tickers = Vec::new();
         let mut dates = Vec::new();
         let mut bars = Vec::new();
+        let mut events = Vec::new();
         let mut row = rows.start;
         while row < rows.end {
             let ticker = (row / per_ticker) as usize;
@@ -241,6 +270,8 @@ impl Dataset for Prices {
                 );
                 dates.push(self.days[day]);
                 bars.push(*bar);
+                let previous = day.checked_sub(1).map(|d| self.days[d]);
+                events.push(event(ticker, self.days[day], previous));
                 row += 1;
             }
         }
@@ -254,6 +285,7 @@ impl Dataset for Prices {
             Arc::new(bars.iter().map(|b| b.volume).collect::<Int64Array>()),
             Arc::new(bars.iter().map(|b| b.vwap).collect::<Float64Array>()),
             Arc::new(bars.iter().map(|b| b.return_1d).collect::<Float64Array>()),
+            Arc::new(StringArray::from(events)),
         ];
         RecordBatch::try_new(Arc::clone(&self.schema), columns).expect("columns match schema")
     }

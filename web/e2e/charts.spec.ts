@@ -31,7 +31,7 @@ function card(page: Page, id: string): Locator {
 
 async function open(page: Page): Promise<void> {
   await page.goto("/?preset=charts");
-  await expect(page.locator("px-chart")).toHaveCount(11);
+  await expect(page.locator("px-chart")).toHaveCount(12);
   // Every chart has drawn its data once its status bar says what it shows.
   await expect(page.locator("px-chart .px-status-rows").filter({ hasText: "loading" })).toHaveCount(0, { timeout: 60_000 });
 }
@@ -43,6 +43,7 @@ test("every chart kind draws its data, with an accessible name and no errors", a
   const names = await page.locator("px-chart canvas").evaluateAll((canvases) => canvases.map((c) => c.getAttribute("aria-label") ?? ""));
   const kinds = [
     "Candlestick chart of date",
+    "Line chart of close by ticker",
     "Line chart of close by ticker",
     "Candlestick chart of date",
     "Line chart of close, volume",
@@ -230,4 +231,60 @@ test("the drawing tools draw a trend line and a note, select one and delete it",
   await expect(remove).toBeEnabled();
   await page.mouse.move(at.x, at.y - 400);
   await expect.poll(() => inked(canvas)).not.toBe(before);
+});
+
+test("compare mode reads percentage changes, and events show in the tooltip", async ({ page }) => {
+  await open(page);
+  // A comparison's every value is a percentage change.
+  const compare = card(page, "compare");
+  const centred = await centre(compare.locator(".px-chart-plot"));
+  await page.mouse.move(centred.x, centred.y);
+  const values = compare.locator(".px-chart-tip .px-tip-row strong");
+  await expect(values.first()).toHaveText(/%$/);
+  for (const value of await values.allTextContents()) {
+    expect(value).toMatch(/^-?[\d,.]+%$|^[A-Z]/);
+  }
+  // Across the technical card's weekly candles, some week reports earnings.
+  const technical = card(page, "technical");
+  const plot = technical.locator(".px-chart-plot");
+  await plot.scrollIntoViewIfNeeded();
+  expect(await sweepFor(page, technical, "earnings")).toBe(true);
+});
+
+/** Moves the pointer across a chart's price, a week at a time, until its tooltip says `words`. */
+async function sweepFor(page: Page, chart: Locator, words: string): Promise<boolean> {
+  const box = await chart.locator(".px-chart-plot").boundingBox();
+  if (box === null) {
+    return false;
+  }
+  const y = box.y + box.height * 0.2;
+  for (let x = box.x + 60; x < box.x + box.width - 10; x += 7) {
+    await page.mouse.move(x, y);
+    if ((await chart.locator(".px-chart-tip").textContent())?.includes(words) === true) {
+      return true;
+    }
+  }
+  return false;
+}
+
+test("the measure tool shows what the engine measured across a band, and Escape puts it away", async ({ page }) => {
+  await open(page);
+  const technical = card(page, "technical");
+  const plot = technical.locator(".px-chart-plot");
+  const at = await centre(plot);
+  const box = await plot.boundingBox();
+  const priceY = (box?.y ?? 0) + (box?.height ?? 0) * 0.2;
+  await technical.getByRole("button", { name: "Measure" }).click();
+  await page.mouse.move(at.x - at.width / 4, priceY);
+  await page.mouse.down();
+  await page.mouse.move(at.x + at.width / 8, priceY - 20, { steps: 5 });
+  await page.mouse.up();
+  const measured = technical.locator(".px-chart-measure");
+  await expect(measured).toContainText("change");
+  await expect(measured).toContainText(/\d+\s*bars/);
+  await expect(measured).toContainText("%");
+  await expect(measured).toContainText("→");
+  // Escape puts it away.
+  await plot.press("Escape");
+  await expect(measured).toHaveCount(0);
 });

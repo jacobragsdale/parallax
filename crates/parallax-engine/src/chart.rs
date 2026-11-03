@@ -102,6 +102,11 @@ pub struct ChartConfig {
     pub indicators: Vec<Indicator>,
     /// The volume column, which a VWAP and volume read.
     pub volume: Option<String>,
+    /// Each series as its percentage change from its first value in the range
+    /// shown, so that series of different prices can be compared.
+    pub compare: bool,
+    /// A column whose non-null values mark rows as events, such as earnings.
+    pub events: Option<String>,
 }
 
 impl ChartConfig {
@@ -268,6 +273,38 @@ pub enum BucketVolume {
     Overflow,
 }
 
+/// The most events a reduced chart carries; more are thinned evenly.
+pub const MAX_EVENTS: usize = 500;
+
+/// A row an events column marks.
+#[derive(Clone, Debug, PartialEq)]
+pub struct EventPoint {
+    /// Its axis position.
+    pub x: f64,
+    /// The row.
+    pub slot: usize,
+    /// The series column's value, or `None` without a series column.
+    pub key: Option<Scalar>,
+}
+
+/// Two rows of a series, measured: the rows nearest two places on the axis that
+/// have a price, earlier first, and the rows from one to the other.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Measured {
+    /// The earlier row.
+    pub from: usize,
+    /// The later row.
+    pub to: usize,
+    /// Their axis positions.
+    pub from_x: f64,
+    /// The later row's axis position.
+    pub to_x: f64,
+    /// The price column.
+    pub price: usize,
+    /// Rows with a price after the earlier, up to and including the later.
+    pub rows: usize,
+}
+
 /// An indicator's lines for one series, reduced like the series themselves.
 #[derive(Clone, Debug, PartialEq)]
 pub struct IndicatorLines {
@@ -295,6 +332,11 @@ pub struct Reduced {
     /// The indicators' lines, per series, in the order of
     /// [`ChartConfig::indicators`]. Volume is in [`ChartData::Candles`] instead.
     pub indicators: Vec<IndicatorLines>,
+    /// The rows the events column marks in the range shown, in x order, at most
+    /// [`MAX_EVENTS`] of them.
+    pub events: Vec<EventPoint>,
+    /// How many rows it marks in the range shown, all told.
+    pub events_total: usize,
 }
 
 /// How the x column's values become axis positions.
@@ -411,6 +453,40 @@ fn check_indicators(config: &ChartConfig, has_volume: bool) -> Result<(), Config
                 indicator.name()
             )));
         }
+    }
+    Ok(())
+}
+
+/// Checks that compare mode is on a line or area chart without averages or
+/// bands, which are in prices, and that events are on a kind drawn along an x
+/// axis.
+fn check_compare_and_events(config: &ChartConfig) -> Result<(), ConfigError> {
+    let lines = matches!(config.kind, ChartKind::Line | ChartKind::Area);
+    if config.compare && !lines {
+        return Err(ConfigError::Chart(
+            "compare mode puts series on a line or area chart as percentage changes".into(),
+        ));
+    }
+    let priced = config.indicators.iter().find(|i| {
+        matches!(
+            i,
+            Indicator::Sma { .. }
+                | Indicator::Ema { .. }
+                | Indicator::Wma { .. }
+                | Indicator::Bollinger { .. }
+        )
+    });
+    if let Some(indicator) = priced.filter(|_| config.compare) {
+        return Err(ConfigError::Chart(format!(
+            "compare mode shows percentage changes, so {} in prices would not match its axis",
+            indicator.name()
+        )));
+    }
+    let along_x = lines || matches!(config.kind, ChartKind::Candlestick | ChartKind::Ohlc);
+    if config.events.is_some() && !along_x {
+        return Err(ConfigError::Chart(
+            "events mark line, area, candlestick and OHLC charts".into(),
+        ));
     }
     Ok(())
 }
@@ -540,6 +616,7 @@ pub struct ChartView {
     series: Option<usize>,
     ohlc: Option<[usize; 4]>,
     volume: Option<usize>,
+    events: Option<usize>,
     /// Rows by series key, each in x order.
     rows: Vec<(Option<Key>, Ordered)>,
     /// Each series' inputs to its indicators, gathered once per kind.
@@ -557,6 +634,7 @@ impl ChartView {
     /// Returns an error if the configuration names unknown columns, or columns of
     /// the wrong type for the chart.
     pub fn new(table: &Table, config: ChartConfig) -> Result<Self, ConfigError> {
+        check_compare_and_events(&config)?;
         let index = |name: &str| {
             table
                 .column_index(name)
@@ -640,6 +718,7 @@ impl ChartView {
             .map(|c| numeric_column(c, "volume"))
             .transpose()?;
         check_indicators(&config, volume.is_some())?;
+        let events = config.events.as_deref().map(index).transpose()?;
         let mut view = Self {
             config,
             filters,
@@ -649,6 +728,7 @@ impl ChartView {
             series,
             ohlc,
             volume,
+            events,
             rows: Vec::new(),
             gathered: Vec::new(),
             computed: Vec::new(),
@@ -877,13 +957,102 @@ impl ChartView {
         };
         let ticks = self.ticks(from, to, width);
         let indicators = self.reduce_indicators(table, from, to, width);
+        let (events, events_total) = self.reduce_events(table, from, to);
         Reduced {
             data,
             x: (from, to),
             extent,
             ticks,
             indicators,
+            events,
+            events_total,
         }
+    }
+
+    /// The rows the events column marks in `from..=to`: all of them up to
+    /// [`MAX_EVENTS`], else that many evenly chosen; and how many there are.
+    fn reduce_events(&self, table: &Table, from: f64, to: f64) -> (Vec<EventPoint>, usize) {
+        let Some(column) = self.events.map(|e| table.column(e)) else {
+            return (Vec::new(), 0);
+        };
+        let candles = matches!(self.config.kind, ChartKind::Candlestick | ChartKind::Ohlc);
+        let series = if candles {
+            &self.rows[..self.rows.len().min(1)]
+        } else {
+            &self.rows[..]
+        };
+        let mut all: Vec<EventPoint> = series
+            .iter()
+            .flat_map(|(key, o)| {
+                o.within(from, to)
+                    .filter(|&r| column.scalar(o.slots[r]) != Scalar::Null)
+                    .map(move |r| (key, o.x[r], o.slots[r]))
+            })
+            .map(|(key, x, slot)| EventPoint {
+                x,
+                slot,
+                key: self.scalar(table, *key),
+            })
+            .collect();
+        all.sort_by(|a, b| a.x.total_cmp(&b.x));
+        let total = all.len();
+        if total <= MAX_EVENTS {
+            return (all, total);
+        }
+        let kept = (0..MAX_EVENTS)
+            .map(|i| all[i * (total - 1) / (MAX_EVENTS - 1)].clone())
+            .collect();
+        (kept, total)
+    }
+
+    /// Measures a series between two axis positions: the rows nearest each with
+    /// a price, and the rows from one to the other. The series is the one whose
+    /// key is `series`, or the first; `None` if it has no row with a price.
+    #[must_use]
+    pub fn measure(
+        &self,
+        table: &Table,
+        from: f64,
+        to: f64,
+        series: Option<&Scalar>,
+    ) -> Option<Measured> {
+        let price = self
+            .config
+            .indicator_price()
+            .and_then(|c| table.column_index(c))?;
+        let column = table.column(price);
+        let ordered = series
+            .and_then(|wanted| {
+                self.rows
+                    .iter()
+                    .find(|(key, _)| self.scalar(table, *key).as_ref() == Some(wanted))
+            })
+            .or_else(|| self.rows.first())
+            .map(|(_, o)| o)?;
+        // The rows with a price, by place in the series.
+        let priced: Vec<usize> = (0..ordered.slots.len())
+            .filter(|&r| y_value(column, ordered.slots[r]).is_some())
+            .collect();
+        let nearest = |at: f64| {
+            let i = priced.partition_point(|&r| ordered.x[r] < at);
+            [i.checked_sub(1), (i < priced.len()).then_some(i)]
+                .into_iter()
+                .flatten()
+                .min_by(|&a, &b| {
+                    (ordered.x[priced[a]] - at)
+                        .abs()
+                        .total_cmp(&(ordered.x[priced[b]] - at).abs())
+                })
+        };
+        let (a, b) = (nearest(from.min(to))?, nearest(from.max(to))?);
+        Some(Measured {
+            from: ordered.slots[priced[a]],
+            to: ordered.slots[priced[b]],
+            from_x: ordered.x[priced[a]],
+            to_x: ordered.x[priced[b]],
+            price,
+            rows: b - a,
+        })
     }
 
     /// Each series' indicator lines in `from..=to`, reduced with M4 like the
@@ -946,9 +1115,27 @@ impl ChartView {
             let range = ordered.around(from, to);
             for (i, &y) in self.y.iter().enumerate() {
                 let column = table.column(y);
+                // In compare mode, each value as a percentage of the series' first
+                // value in the range shown; a first value of zero leaves nothing to
+                // compare with.
+                let base = if self.config.compare {
+                    ordered
+                        .within(from, to)
+                        .find_map(|r| y_value(column, ordered.slots[r]))
+                } else {
+                    None
+                };
+                let value = |slot: usize| {
+                    let v = y_value(column, slot)?;
+                    if !self.config.compare {
+                        return Some(v);
+                    }
+                    let b = base.filter(|b| *b != 0.0)?;
+                    Some((v / b - 1.0) * 100.0)
+                };
                 let points = range.clone().map(|r| {
                     let slot = ordered.slots[r];
-                    (ordered.x[r], y_value(column, slot), slot)
+                    (ordered.x[r], value(slot), slot)
                 });
                 out.push((
                     Series {

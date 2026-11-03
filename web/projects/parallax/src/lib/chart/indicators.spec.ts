@@ -5,7 +5,7 @@ import { parseLayout } from "../layout";
 import type { LayoutChart } from "../layout";
 import { CHART_COLORS } from "../theme";
 import { indicatorLabel, indicatorStyles, paneDomain, paneHeight, paneScale, paneSpecs } from "./indicators";
-import { indicatorRows } from "./interaction";
+import { eventRows, indicatorRows } from "./interaction";
 import { chartModel, plotBottom } from "./model";
 import type { ChartModel, Mark } from "./model";
 
@@ -65,7 +65,9 @@ function frame(indicators: readonly IndicatorLineData[]): ChartFrameData {
     ticks: [],
     content: { kind: "candles", candles: CANDLES },
     indicators,
-    anchors: new Map()
+    anchors: new Map(),
+    events: [],
+    eventsTotal: 0
   };
 }
 
@@ -307,5 +309,48 @@ describe("indicators over a line chart of several series", () => {
     expect(kinds(without.marks, "line").length).toBe(2);
     expect(without.yAxes[0]?.scale.domain[1]).toBeLessThan(100);
     expect(indicatorRows(f, without, ["close AAPL"], 3).map((r) => r.label)).toEqual(["SMA 20 MSFT"]);
+  });
+});
+
+describe("events and compare mode", () => {
+  it("reads the events in the candle under the crosshair", () => {
+    const c = chart([]);
+    const f: ChartFrameData = {
+      ...frame([]),
+      events: [
+        { x: 1, xText: "day 1", text: "Q1 earnings" },
+        { x: 7, xText: "day 7", text: "Dividend" }
+      ],
+      eventsTotal: 2
+    };
+    const m = model(c, f);
+    expect(m.events.map((e) => e.text)).toEqual(["Q1 earnings", "Dividend"]);
+    // Weekly candles: day 1 is in the first, day 7 in the second.
+    expect(eventRows(f, m, 4).map((r) => [r.value, r.label])).toEqual([["Q1 earnings", "day 1"]]);
+    expect(eventRows(f, m, 9).map((r) => r.value)).toEqual(["Dividend"]);
+  });
+
+  it("labels a comparison's axis in percentages", () => {
+    const layout = parseLayout({ chart: { kind: "line", x: "date", y: ["close"], compare: true } }).chart;
+    if (layout === null) {
+      throw new Error("no chart");
+    }
+    const series: SeriesData = {
+      label: "close",
+      column: "close",
+      right: false,
+      x: Float64Array.from(DAYS),
+      y: Float64Array.from(DAYS.map((d) => d * 3)),
+      xText: DAYS.map(String),
+      yText: DAYS.map(String),
+      xJson: DAYS.map(String)
+    };
+    const m = model(layout, { ...frame([]), content: { kind: "series", series: [series] } });
+    const labels = m.yAxes[0]?.ticks.map((t) => t.label) ?? [];
+    expect(labels.length).toBeGreaterThan(1);
+    expect(labels.every((l) => l.endsWith("%"))).toBe(true);
+    // The gutter holds the widest label as shown, its "%" included.
+    const widest = Math.max(...labels.map((l) => l.length * 6));
+    expect(m.plot.x).toBeGreaterThanOrEqual(widest + 8);
   });
 });

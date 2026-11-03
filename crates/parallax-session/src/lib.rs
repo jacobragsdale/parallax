@@ -541,6 +541,7 @@ impl Session {
             client_message::Body::DistinctValues(m) => m.view_id,
             client_message::Body::FetchWindow(m) => m.view_id,
             client_message::Body::SetChartWindow(m) => m.view_id,
+            client_message::Body::MeasureChart(m) => m.view_id,
         };
         match self.dispatch(id, body) {
             Ok(messages) => messages,
@@ -731,6 +732,18 @@ impl Session {
                 id,
                 server_message::Body::DistinctValues(self.distinct_values(&request)?),
             )],
+            client_message::Body::MeasureChart(request) => {
+                let open = self.view_mut(request.view_id)?;
+                let table = Arc::clone(&open.table);
+                let state = read_table(&table)?;
+                open.catch_up(&state)?;
+                let Computed::Chart(chart) = &open.view else {
+                    return Err("this view is a grid, which has nothing to measure".to_owned());
+                };
+                let mut measured = chart::measure(&state.table, chart, &request);
+                measured.view_id = request.view_id;
+                vec![reply(id, server_message::Body::ChartMeasure(measured))]
+            }
         })
     }
 

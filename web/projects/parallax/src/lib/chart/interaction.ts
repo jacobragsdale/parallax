@@ -214,6 +214,20 @@ function readNear(line: IndicatorLineData, style: IndicatorStyle, scale: Scale, 
   return [{ value, label, color: style.color }];
 }
 
+/**
+ * The events at axis position `x`: on a candle, those in its bucket; otherwise those within a few pixels. The event
+ * leads and its date follows, as values and labels do in other rows.
+ */
+export function eventRows(frame: ChartFrameData, model: ChartModel, x: number): TipRow[] {
+  const scale = model.x;
+  if (scale === null) {
+    return [];
+  }
+  const bucket = bucketAt(frame, x);
+  const near = (e: { readonly x: number; readonly px: number }): boolean => (bucket === null ? Math.abs(e.px - scale.map(x)) <= NEAR : e.x >= bucket[0] && e.x < bucket[1]);
+  return model.events.filter(near).map((e) => ({ value: e.text, label: e.xText, color: null }));
+}
+
 /** The bucket holding axis position `x`, as its start and the next one's, or null outside every bucket or without candles. */
 function bucketAt(frame: ChartFrameData, x: number): Range | null {
   if (frame.content.kind !== "candles") {

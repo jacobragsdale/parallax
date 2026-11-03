@@ -11,9 +11,10 @@ import { computed, signal } from "@angular/core";
 import type { Signal } from "@angular/core";
 
 import type { ChartFrameData } from "../chart-frame";
+import type { Measurement } from "../connection";
 import type { LayoutDrawing } from "../layout";
 import { drawingAt, drawingFrom, handleAt, moved, shapesOf, snap } from "./drawings";
-import type { DrawingTool, Point, Shape, Snap } from "./drawings";
+import type { DrawingTool, Point, Shape, Snap, Tool } from "./drawings";
 import type { ChartModel } from "./model";
 
 /** What the editor reads from its chart, and how it saves. */
@@ -27,6 +28,17 @@ export interface DrawingHost {
   readonly measure: (text: string) => number;
   /** Series hidden from the plot, by their legend labels, which anchors never snap to. */
   readonly hidden: Signal<readonly string[]>;
+  /** Asks the engine to measure between two axis positions. */
+  readonly measureChart: (from: number, to: number) => Promise<Measurement | null>;
+}
+
+/** A measurement: the band dragged, and what the engine said changed across it, once it answers. */
+export interface Measuring {
+  readonly from: Point;
+  readonly to: Point;
+  /** "dragging" until let go, then "asking" until the engine answers. */
+  readonly state: "dragging" | "asking" | "measured" | "nothing" | "failed";
+  readonly measurement: Measurement | null;
 }
 
 /** A drawing being made: its tool and its two anchors so far. */
@@ -60,7 +72,9 @@ const SMALLEST = 4;
 
 export class DrawingEditor {
   /** The tool in hand, or null. */
-  public readonly tool = signal<DrawingTool | null>(null);
+  public readonly tool = signal<Tool | null>(null);
+  /** The measurement shown, or null. */
+  public readonly measuring = signal<Measuring | null>(null);
   private readonly choice = signal<Choice | null>(null);
   /** The selected drawing, by its place in the layout, or null; none once the layout no longer holds it there. */
   public readonly selected = computed((): number | null => {
@@ -124,13 +138,15 @@ export class DrawingEditor {
   }
 
   /** Picks up a tool, or puts it down with null. */
-  public pick(tool: DrawingTool | null): void {
+  public pick(tool: Tool | null): void {
     this.tool.set(tool);
     this.select(null);
   }
 
   /** A press on the plot: true if it made, picked or grabbed a drawing, and so is not a pan or a brush. */
   public down(at: Point): boolean {
+    // Any press puts a measurement away.
+    this.measuring.set(null);
     const tool = this.tool();
     if (tool !== null && this.onPrice(at)) {
       this.start(tool, at);
@@ -149,12 +165,14 @@ export class DrawingEditor {
     return hit !== null;
   }
 
-  private start(tool: DrawingTool, at: Point): void {
+  private start(tool: Tool, at: Point): void {
     const anchor = this.snapAt(at);
     if (anchor === null) {
       return;
     }
-    if (tool === "horizontal") {
+    if (tool === "measure") {
+      this.measuring.set({ from: anchor.point, to: anchor.point, state: "dragging", measurement: null });
+    } else if (tool === "horizontal") {
       this.add(drawingFrom(tool, anchor, anchor));
     } else if (tool === "note") {
       // The tool is put down while the text is typed, so a press elsewhere only leaves the box.
@@ -168,6 +186,14 @@ export class DrawingEditor {
   /** A move of the pointer: true while it stretches or moves a drawing. */
   public move(at: Point): boolean {
     const [sketch, move] = [this.sketch(), this.moving()];
+    const measuring = this.measuring();
+    if (measuring?.state === "dragging") {
+      const to = this.snapAt(at);
+      if (to !== null) {
+        this.measuring.set({ ...measuring, to: to.point });
+      }
+      return true;
+    }
     if (sketch === null && move === null) {
       return false;
     }
@@ -183,6 +209,10 @@ export class DrawingEditor {
 
   /** The pointer let go: true if it finished making or moving a drawing, which then reaches the layout. */
   public up(): boolean {
+    if (this.measuring()?.state === "dragging") {
+      this.ask();
+      return true;
+    }
     const [sketch, move] = [this.sketch(), this.moving()];
     this.sketch.set(null);
     this.moving.set(null);
@@ -202,6 +232,32 @@ export class DrawingEditor {
       this.select(move.index);
     }
     return move !== null;
+  }
+
+  /** Asks the engine what changed across the band dragged, and shows its answer if the band is still shown. */
+  private ask(): void {
+    const measuring = this.measuring();
+    const x = this.host.model()?.x ?? null;
+    this.tool.set(null);
+    if (measuring === null || x === null || Math.abs(measuring.to.x - measuring.from.x) < SMALLEST) {
+      this.measuring.set(null);
+      return;
+    }
+    const asking: Measuring = { ...measuring, state: "asking" };
+    this.measuring.set(asking);
+    const settle = (next: Measuring): void => {
+      if (this.measuring() === asking) {
+        this.measuring.set(next);
+      }
+    };
+    this.host.measureChart(x.invert(measuring.from.x), x.invert(measuring.to.x)).then(
+      (measurement) => {
+        settle({ ...asking, state: measurement === null ? "nothing" : "measured", measurement });
+      },
+      () => {
+        settle({ ...asking, state: "failed" });
+      }
+    );
   }
 
   private add(drawing: LayoutDrawing): void {
@@ -240,10 +296,12 @@ export class DrawingEditor {
   /** Escape: puts down the tool, drops a drawing in progress and the selection. True if there was any. */
   public cancel(): boolean {
     const busy = this.tool() !== null || this.sketch() !== null || this.moving() !== null || this.selected() !== null;
+    const shown = this.measuring() !== null;
     this.tool.set(null);
     this.abandon();
     this.select(null);
-    return busy;
+    this.measuring.set(null);
+    return busy || shown;
   }
 }
 

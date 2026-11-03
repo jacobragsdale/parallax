@@ -25,6 +25,7 @@ message ClientMessage {
     DistinctValues distinct_values = 9;
     FetchWindow fetch_window = 10;
     SetChartWindow set_chart_window = 11;
+    MeasureChart measure_chart = 12;
   }
 }
 
@@ -40,6 +41,7 @@ message ServerMessage {
     TableStatus table_status = 6;
     DistinctValuesResult distinct_values = 7;
     ChartFrame chart_frame = 8;
+    ChartMeasure chart_measure = 9;
   }
 }
 
@@ -245,6 +247,54 @@ message ChartFrame {
   // Where each distinct x value the layout's drawings are anchored to sits on
   // the axis.
   repeated ChartAnchor anchors = 20;
+  // The rows the layout's events column marks in the range shown, at most 500,
+  // evenly chosen, and how many there are in all.
+  repeated ChartEvent events = 21;
+  uint32 events_total = 22;
+}
+
+// The rows a chart's events column marks in the range shown.
+message ChartEvent {
+  // The row's axis position.
+  double x = 1;
+  // The row's x value as text.
+  string x_text = 2;
+  // The event, as text; with a series column, after the series' value.
+  string text = 3;
+}
+
+// Asks what changed between two places on a chart: the price at the row nearest
+// each, the change between them, and the rows from one to the other.
+message MeasureChart {
+  uint32 view_id = 1;
+  // The two places, in axis positions.
+  double from = 2;
+  double to = 3;
+  // The series to measure, by the series column's value as text, or empty for
+  // the first.
+  string series = 4;
+}
+
+// What changed between two rows of a chart's series, all as the engine's text.
+message ChartMeasure {
+  uint32 view_id = 1;
+  // False when the series has no row with a price.
+  bool found = 2;
+  // The rows' x values, and their axis positions.
+  string from_x = 3;
+  string to_x = 4;
+  double from_position = 5;
+  double to_position = 6;
+  // Their prices, in the price column's format.
+  string from_value = 7;
+  string to_value = 8;
+  // The later price less the earlier, in the price's format, and as a percentage
+  // of the earlier; "" when the earlier is zero.
+  string change = 9;
+  string percent = 10;
+  // Rows with a price from the earlier to the later, counting the later and not
+  // the earlier: the bars between them.
+  uint64 rows = 11;
 }
 
 // An x value a drawing is anchored to, and its place on the axis.

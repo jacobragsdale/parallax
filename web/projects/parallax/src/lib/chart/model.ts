@@ -113,6 +113,21 @@ export interface ChartModel {
   readonly panes: readonly Pane[];
   /** The style of each of the frame's indicator lines, in its order. */
   readonly indicators: readonly IndicatorStyle[];
+  /** Rows the layout's events column marks, along the bottom of the price's plot. */
+  readonly events: readonly EventMark[];
+}
+
+/** An event marker: where, and what its tooltip says. */
+export interface EventMark {
+  readonly px: number;
+  /** The axis position, for reading events under a candle. */
+  readonly x: number;
+  readonly text: string;
+  readonly xText: string;
+}
+
+function eventMarks(frame: ChartFrameData, x: Scale): readonly EventMark[] {
+  return frame.events.map((e) => ({ px: x.map(e.x), x: e.x, text: e.text, xText: e.xText }));
 }
 
 /** The bottom of the lowest plot or pane, where the x axis runs. */
@@ -193,8 +208,9 @@ function valueScale(input: ModelInput, values: readonly number[], range: readonl
   return linearScale(niceDomain(all[0], all[1], count, zero), range);
 }
 
-function axis(side: "left" | "right", scale: Scale): ValueAxis {
-  return { side, scale, ticks: valueTicks(scale, Math.max(2, Math.abs(scale.range[0] - scale.range[1]) * TICKS_PER_PX)) };
+function axis(side: "left" | "right", scale: Scale, suffix = ""): ValueAxis {
+  const ticks = valueTicks(scale, Math.max(2, Math.abs(scale.range[0] - scale.range[1]) * TICKS_PER_PX));
+  return { side, scale, ticks: suffix === "" ? ticks : ticks.map((t) => ({ ...t, label: `${t.label}${suffix}` })) };
 }
 
 function gutter(input: ModelInput, ticks: readonly ValueTick[]): number {
@@ -215,7 +231,7 @@ function onto(scale: Scale, range: readonly [number, number]): Scale {
 
 function emptyModel(input: ModelInput, message: string): ChartModel {
   const plot = { x: PAD, y: PAD, w: Math.max(1, input.width - 2 * PAD), h: Math.max(1, input.height - PAD - X_AXIS) };
-  return { width: input.width, height: input.height, plot, xTicks: [], yLabels: [], yAxes: [], x: null, marks: [], legend: [], empty: message, panes: [], indicators: [] };
+  return { width: input.width, height: input.height, plot, xTicks: [], yLabels: [], yAxes: [], x: null, marks: [], legend: [], empty: message, panes: [], indicators: [], events: [] };
 }
 
 type Content<K extends ChartContent["kind"]> = Extract<ChartContent, { kind: K }>;
@@ -230,7 +246,9 @@ function lineModel(input: ModelInput, frame: ChartFrameData, content: Content<"s
   const leftScale = valueScale(input, values(false), range, area);
   const hasRight = visible.some(({ s }) => s.right);
   const rightScale = hasRight ? valueScale(input, values(true), range, area) : null;
-  const plot = plotFor(input, axis("left", leftScale).ticks, rightScale === null ? null : axis("right", rightScale).ticks);
+  // The gutters fit the labels as shown, a comparison's "%" included.
+  const percent = input.chart.compare ? "%" : "";
+  const plot = plotFor(input, axis("left", leftScale, percent).ticks, rightScale === null ? null : axis("right", rightScale, percent).ticks);
   const yRange: readonly [number, number] = [plot.y + plot.h, plot.y];
   const left = onto(leftScale, yRange);
   const right = rightScale === null ? null : onto(rightScale, yRange);
@@ -248,7 +266,8 @@ function lineModel(input: ModelInput, frame: ChartFrameData, content: Content<"s
     plot,
     xTicks: frame.ticks.map((t) => ({ px: x.map(t.x), label: t.label })),
     yLabels: [],
-    yAxes: right === null ? [axis("left", left)] : [axis("left", left), axis("right", right)],
+    // In compare mode the engine sends percentage changes: the axes say so.
+    yAxes: right === null ? [axis("left", left, percent)] : [axis("left", left, percent), axis("right", right, percent)],
     x,
     marks: [...marks, ...overlayMarks(input, frame, styles, x, left)],
     legend: legendWithOverlays(
@@ -259,7 +278,8 @@ function lineModel(input: ModelInput, frame: ChartFrameData, content: Content<"s
     ),
     empty: content.series.every((s) => s.x.length === 0) ? "No data in this range" : null,
     panes: [],
-    indicators: styles
+    indicators: styles,
+    events: eventMarks(frame, x)
   };
 }
 
@@ -371,7 +391,8 @@ function histogramModel(input: ModelInput, frame: ChartFrameData, content: Conte
     ),
     empty: counts.every((c) => c === 0) ? "No data in this range" : null,
     panes: [],
-    indicators: []
+    indicators: [],
+    events: []
   };
 }
 
@@ -416,7 +437,8 @@ function densityModel(input: ModelInput, frame: ChartFrameData, content: Content
     legend: [],
     empty: most === 0 ? "No data in this range" : null,
     panes: [],
-    indicators: []
+    indicators: [],
+    events: []
   };
 }
 
@@ -504,7 +526,8 @@ function candleModel(input: ModelInput, frame: ChartFrameData, content: Content<
     legend: legendWithOverlays(input, [], "line", styles),
     empty: marks.length === 0 ? "No data in this range" : null,
     panes: [],
-    indicators: styles
+    indicators: styles,
+    events: eventMarks(frame, x)
   };
 }
 
@@ -606,7 +629,8 @@ function barModel(input: ModelInput, data: CategoryData): ChartModel {
     ),
     empty: data.categories.length === 0 ? "No groups to show" : null,
     panes: [],
-    indicators: []
+    indicators: [],
+    events: []
   };
 }
 
@@ -659,7 +683,8 @@ function heatmapModel(input: ModelInput, data: CategoryData): ChartModel {
     legend: [],
     empty: marks.length === 0 ? "No values to show" : null,
     panes: [],
-    indicators: []
+    indicators: [],
+    events: []
   };
 }
 

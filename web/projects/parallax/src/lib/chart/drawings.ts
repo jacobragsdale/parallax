@@ -19,6 +19,9 @@ import type { Scale } from "./scale";
 /** A kind of drawing, as a tool that makes one. */
 export type DrawingTool = LayoutDrawing["kind"];
 
+/** A tool in hand: one that makes a drawing, or the measure, which only asks. */
+export type Tool = DrawingTool | "measure";
+
 /** A point in CSS pixels. */
 export interface Point {
   readonly x: number;

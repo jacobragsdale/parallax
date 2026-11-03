@@ -4,7 +4,8 @@ import { ChangeDetectionStrategy, Component, ViewEncapsulation, afterNextRender,
 import type { ElementRef } from "@angular/core";
 
 import { MAX_NOTE } from "../layout";
-import type { DrawingTool, Point } from "./drawings";
+import type { Measuring } from "./drawing-editor";
+import type { Point, Tool } from "./drawings";
 import type { TipRow } from "./interaction";
 import type { LegendEntry } from "./model";
 
@@ -65,12 +66,13 @@ export class ChartTipComponent {
 }
 
 /** The drawing tools, as their buttons name them. */
-const TOOLS: readonly { readonly tool: DrawingTool; readonly label: string }[] = [
+const TOOLS: readonly { readonly tool: Tool; readonly label: string }[] = [
   { tool: "trend", label: "Trend line" },
   { tool: "horizontal", label: "Horizontal line" },
   { tool: "fibonacci", label: "Fibonacci" },
   { tool: "rectangle", label: "Rectangle" },
-  { tool: "note", label: "Note" }
+  { tool: "note", label: "Note" },
+  { tool: "measure", label: "Measure" }
 ];
 
 /** The drawing tools: a button per kind of drawing, pressed while it is the one in hand, and one to delete the selected drawing. */
@@ -87,9 +89,9 @@ const TOOLS: readonly { readonly tool: DrawingTool; readonly label: string }[] =
   `
 })
 export class ChartToolsComponent {
-  public readonly tool = input.required<DrawingTool | null>();
+  public readonly tool = input.required<Tool | null>();
   public readonly selected = input.required<boolean>();
-  public readonly picked = output<DrawingTool | null>();
+  public readonly picked = output<Tool | null>();
   public readonly removed = output();
   protected readonly tools = TOOLS;
 }
@@ -165,9 +167,55 @@ export class ChartNoteComponent {
 export class ChartHeadComponent {
   public readonly entries = input.required<readonly LegendEntry[]>();
   public readonly drawable = input.required<boolean>();
-  public readonly tool = input.required<DrawingTool | null>();
+  public readonly tool = input.required<Tool | null>();
   public readonly selected = input.required<boolean>();
   public readonly toggled = output<string>();
-  public readonly picked = output<DrawingTool | null>();
+  public readonly picked = output<Tool | null>();
   public readonly removed = output();
+}
+
+/** What a measurement's card says, by its state. */
+const MEASURE_STATES: Readonly<Record<Exclude<Measuring["state"], "measured">, string>> = { dragging: "", asking: "Measuring…", nothing: "Nothing to measure here", failed: "The measurement failed" };
+
+/** A measurement: the band dragged, and a card of what the engine said changed across it. */
+@Component({
+  selector: "px-chart-measure",
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  encapsulation: ViewEncapsulation.None,
+  template: `
+    <div class="px-chart-measure-band" [style.left.px]="box().left" [style.top.px]="box().top" [style.width.px]="box().width" [style.height.px]="box().height"></div>
+    @if (card(); as c) {
+      <div class="px-chart-tip px-chart-measure" role="status" [style.left.px]="box().left + box().width + 8" [style.top.px]="box().top">
+        @for (line of c; track $index) {
+          <div class="px-tip-row">
+            <strong>{{ line.value }}</strong
+            ><span>{{ line.label }}</span>
+          </div>
+        }
+      </div>
+    }
+  `
+})
+export class ChartMeasureComponent {
+  public readonly measuring = input.required<Measuring>();
+
+  protected box(): { readonly left: number; readonly top: number; readonly width: number; readonly height: number } {
+    const { from, to } = this.measuring();
+    return { left: Math.min(from.x, to.x), top: Math.min(from.y, to.y), width: Math.abs(to.x - from.x), height: Math.max(1, Math.abs(to.y - from.y)) };
+  }
+
+  /** The card's lines: the change and its percentage, the bars, the dates and the prices, as the engine wrote them. */
+  protected card(): readonly { readonly value: string; readonly label: string }[] | null {
+    const { state, measurement: m } = this.measuring();
+    if (state === "measured" && m !== null) {
+      return [
+        { value: `${m.change}${m.percent === "" ? "" : ` (${m.percent})`}`, label: "change" },
+        { value: String(m.rows), label: m.rows === 1 ? "bar" : "bars" },
+        { value: `${m.fromValue} → ${m.toValue}`, label: "" },
+        { value: `${m.fromX} → ${m.toX}`, label: "" }
+      ];
+    }
+    const text = state === "measured" ? "" : MEASURE_STATES[state];
+    return text === "" ? null : [{ value: text, label: "" }];
+  }
 }

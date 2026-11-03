@@ -29,7 +29,9 @@ function frame(content: ChartContent): ChartFrameData {
     ticks: [{ x: 5, label: "Mid" }],
     content,
     indicators: [],
-    anchors: new Map()
+    anchors: new Map(),
+    events: [],
+    eventsTotal: 0
   };
 }
 

@@ -23,7 +23,7 @@ import type { ChartFrameData } from "./chart-frame";
 import { decodeDistinct, decodeFrame, FrameError } from "./frame";
 import type { DistinctValue, FrameData } from "./frame";
 import { ClientMessageSchema, ServerMessageSchema } from "./proto/parallax_pb";
-import type { ChartFrame, DatasetInfo, DistinctValuesResult, Frame, TableStatus, ViewOpened, Welcome } from "./proto/parallax_pb";
+import type { ChartFrame, ChartMeasure, DatasetInfo, DistinctValuesResult, Frame, TableStatus, ViewOpened, Welcome } from "./proto/parallax_pb";
 
 /** The body of a client message, as plain values. */
 export type ClientBody = NonNullable<MessageInitShape<typeof ClientMessageSchema>["body"]>;
@@ -68,6 +68,9 @@ function sameChartWindow(a: ChartWindow | null, b: ChartWindow): boolean {
   return a !== null && a.width === b.width && a.height === b.height && a.x?.[0] === b.x?.[0] && a.x?.[1] === b.x?.[1] && a.y?.[0] === b.y?.[0] && a.y?.[1] === b.y?.[1];
 }
 
+/** What changed between two rows of a chart's series, as the engine measured and wrote it; null when it had no row to measure. */
+export type Measurement = Omit<ChartMeasure, "$typeName" | "$unknown" | "viewId" | "found" | "rows"> & { readonly rows: number };
+
 /** A column's values for a filter pick-list. */
 export interface DistinctValues {
   readonly values: readonly DistinctValue[];
@@ -98,6 +101,7 @@ export class ViewHandle {
   private chartPending: { readonly window: ChartWindow; readonly askedAtMs: number } | null = null;
   private readonly fetches = new Map<bigint, Pending<FrameData>>();
   private readonly lists = new Map<bigint, Pending<DistinctValues>>();
+  private readonly measures = new Map<bigint, Pending<Measurement | null>>();
 
   constructor(
     public readonly id: number,
@@ -208,13 +212,28 @@ export class ViewHandle {
     });
   }
 
+  /**
+   * Measures a chart between two axis positions: the rows nearest each with a price, the change between them and the
+   * bars from one to the other, every value as the engine writes it. `series` picks a series by its value's text.
+   */
+  public measure(from: number, to: number, series = ""): Promise<Measurement | null> {
+    if (this.closed) {
+      return Promise.reject(new Error("the view is closed"));
+    }
+    return new Promise((resolve, reject) => {
+      const requestId = this.connection.send({ case: "measureChart", value: { viewId: this.id, from, to, series } });
+      this.measures.set(requestId, { resolve, reject });
+    });
+  }
+
   /** Fails every request still waiting for a reply. */
   private failPending(reason: string): void {
-    for (const pending of [...this.fetches.values(), ...this.lists.values()]) {
+    for (const pending of [...this.fetches.values(), ...this.lists.values(), ...this.measures.values()]) {
       pending.reject(new Error(reason));
     }
     this.fetches.clear();
     this.lists.clear();
+    this.measures.clear();
   }
 
   /** Replaces the view's layout. Frames from the old layout are dropped from now on. */
@@ -310,6 +329,17 @@ export class ViewHandle {
   }
 
   /** @internal Called by the connection. */
+  public receiveMeasure(result: ChartMeasure, requestId: bigint): void {
+    const pending = this.measures.get(requestId);
+    if (pending === undefined) {
+      return;
+    }
+    this.measures.delete(requestId);
+    const { fromX, toX, fromPosition, toPosition, fromValue, toValue, change, percent } = result;
+    pending.resolve(result.found ? { fromX, toX, fromPosition, toPosition, fromValue, toValue, change, percent, rows: Number(result.rows) } : null);
+  }
+
+  /** @internal Called by the connection. */
   public receiveOpened(opened: ViewOpened): void {
     this.listener.opened?.(opened);
   }
@@ -321,10 +351,11 @@ export class ViewHandle {
 
   /** @internal Called by the connection. */
   public receiveError(message: string, requestId: bigint): void {
-    const pending = this.fetches.get(requestId) ?? this.lists.get(requestId);
+    const pending = this.fetches.get(requestId) ?? this.lists.get(requestId) ?? this.measures.get(requestId);
     if (pending !== undefined) {
       this.fetches.delete(requestId);
       this.lists.delete(requestId);
+      this.measures.delete(requestId);
       pending.reject(new Error(message));
       return;
     }
@@ -485,6 +516,18 @@ export class Connection {
     view.receiveChartFrame(frame, requestId);
   }
 
+  /** An error for a view goes to it; one for no open view, to every error listener. */
+  private receiveError(viewId: number, message: string, requestId: bigint): void {
+    const view = this.views.get(viewId);
+    if (view === undefined) {
+      for (const listener of this.errors) {
+        listener(message);
+      }
+    } else {
+      view.receiveError(message, requestId);
+    }
+  }
+
   /** Handles one encoded server message. */
   public receive(bytes: Uint8Array): void {
     const message = fromBinary(ServerMessageSchema, bytes);
@@ -505,22 +548,17 @@ export class Connection {
       case "tableStatus":
         this.views.get(body.value.viewId)?.receiveStatus(body.value);
         return;
-      case "error": {
-        const view = this.views.get(body.value.viewId);
-        if (view === undefined) {
-          for (const listener of this.errors) {
-            listener(body.value.message);
-          }
-        } else {
-          view.receiveError(body.value.message, requestId);
-        }
+      case "error":
+        this.receiveError(body.value.viewId, body.value.message, requestId);
         return;
-      }
       case "distinctValues":
         this.views.get(body.value.viewId)?.receiveDistinct(body.value, requestId);
         return;
       case "chartFrame":
         this.receiveChartFrame(body.value, requestId);
+        return;
+      case "chartMeasure":
+        this.views.get(body.value.viewId)?.receiveMeasure(body.value, requestId);
         return;
       case undefined:
         return;

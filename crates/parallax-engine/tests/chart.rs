@@ -44,6 +44,8 @@ fn line(axis: XAxis) -> ChartConfig {
         axis,
         indicators: Vec::new(),
         volume: None,
+        compare: false,
+        events: None,
     }
 }
 
@@ -248,6 +250,8 @@ fn weekly_candles_match_the_daily_prices() {
         axis: XAxis::Value,
         indicators: Vec::new(),
         volume: None,
+        compare: false,
+        events: None,
     };
     let view = ChartView::new(&t, config).unwrap();
     let (from, to) = view.x_extent().unwrap();
@@ -552,6 +556,8 @@ fn candlestick(x: &str, filters: Vec<Filter>, axis: XAxis) -> ChartConfig {
         axis,
         indicators: Vec::new(),
         volume: None,
+        compare: false,
+        events: None,
     }
 }
 

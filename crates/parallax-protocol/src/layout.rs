@@ -433,6 +433,13 @@ pub struct LayoutChart {
     /// Lines, levels, rectangles and notes drawn over the price.
     #[serde(default)]
     pub drawings: Vec<LayoutDrawing>,
+    /// Each series as its percentage change from its first value in the range
+    /// shown, on a line or area chart.
+    #[serde(default)]
+    pub compare: bool,
+    /// A column whose non-null values mark rows as events, such as earnings.
+    #[serde(default)]
+    pub events: Option<String>,
 }
 
 impl LayoutChart {
@@ -458,6 +465,8 @@ impl LayoutChart {
             },
             indicators: self.indicators.iter().map(|i| i.to_engine()).collect(),
             volume: self.volume.clone(),
+            compare: self.compare,
+            events: self.events.clone(),
         })
     }
 }
@@ -1543,7 +1552,7 @@ mod tests {
             "dataset": "prices",
             "chart": {"kind": "line", "x": "date", "y": ["close"], "y_right": ["volume"],
                       "series": "ticker", "axis": "trading", "log_y": true, "stacked": true,
-                      "horizontal": true, "range": {"from": 1200.5, "to": 1450.0},
+                      "horizontal": true, "range": {"from": 1200.5, "to": 1450.0}, "compare": true, "events": "event",
                       "hidden": ["volume AAPL"]}
         }"#;
         let candles = r#"{

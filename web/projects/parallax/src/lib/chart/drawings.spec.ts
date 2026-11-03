@@ -1,4 +1,6 @@
 import { signal } from "@angular/core";
+
+import type { Measurement } from "../connection";
 import { describe, expect, it } from "vitest";
 
 import type { CandleData, ChartFrameData } from "../chart-frame";
@@ -54,7 +56,9 @@ function frame(anchors: ReadonlyMap<string, number> = new Map()): ChartFrameData
     ticks: [],
     content: { kind: "candles", candles: CANDLES },
     indicators: [],
-    anchors
+    anchors,
+    events: [],
+    eventsTotal: 0
   };
 }
 
@@ -168,16 +172,20 @@ describe("drawings placed on the chart", () => {
 });
 
 describe("the drawing editor", () => {
+  const MEASURED: Measurement = { fromX: "day 2", toX: "day 6", fromPosition: 2, toPosition: 6, fromValue: "102.50", toValue: "106.50", change: "4.00", percent: "3.90%", rows: 4 };
+
   function editor(start: readonly LayoutDrawing[] = []): {
     readonly edit: DrawingEditor;
     readonly saved: LayoutDrawing[][];
     readonly m: ChartModel;
     readonly drawings: ReturnType<typeof signal<readonly LayoutDrawing[]>>;
+    readonly asked: (readonly [number, number])[];
   } {
     const f = frame();
     const m = model(chart(), f);
     const drawings = signal<readonly LayoutDrawing[]>(start);
     const saved: LayoutDrawing[][] = [];
+    const asked: (readonly [number, number])[] = [];
     const edit = new DrawingEditor({
       model: signal(m),
       frame: signal(f),
@@ -187,9 +195,13 @@ describe("the drawing editor", () => {
         drawings.set(d);
       },
       measure,
-      hidden: signal([])
+      hidden: signal([]),
+      measureChart: (from, to) => {
+        asked.push([from, to]);
+        return Promise.resolve(MEASURED);
+      }
     });
-    return { edit, saved, m, drawings };
+    return { edit, saved, m, drawings, asked };
   }
   const point = (m: ChartModel, day: number, price: number): { x: number; y: number } => ({ x: m.x?.map(day) ?? 0, y: m.yAxes[0]?.scale.map(price) ?? 0 });
 
@@ -274,6 +286,23 @@ describe("the drawing editor", () => {
     edit.abandon();
     expect(edit.up()).toBe(false);
     expect(saved).toEqual([]);
+  });
+
+  it("measures across a band dragged: asks the engine at the snapped places and shows its answer", async () => {
+    const { edit, saved, m, asked } = editor();
+    edit.pick("measure");
+    edit.down(point(m, 2, 102));
+    edit.move(point(m, 6, 106));
+    expect(edit.measuring()?.state).toBe("dragging");
+    edit.up();
+    expect(edit.measuring()?.state).toBe("asking");
+    await Promise.resolve();
+    expect(edit.measuring()).toMatchObject({ state: "measured", measurement: MEASURED });
+    expect(asked.map(([a, b]) => [Math.round(a), Math.round(b)])).toEqual([[2, 6]]);
+    // A measurement is not a drawing, and a press puts it away.
+    expect(saved).toEqual([]);
+    edit.down(point(m, 8, 108));
+    expect(edit.measuring()).toBeNull();
   });
 
   it("puts the tool down and drops the selection on Escape", () => {

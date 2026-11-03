@@ -293,6 +293,11 @@
           "default": "value",
           "description": "How x values are placed."
         },
+        "compare": {
+          "default": false,
+          "description": "Each series as its percentage change from its first value in the range\nshown, on a line or area chart.",
+          "type": "boolean"
+        },
         "drawings": {
           "default": [],
           "description": "Lines, levels, rectangles and notes drawn over the price.",
@@ -300,6 +305,14 @@
             "$ref": "#/$defs/LayoutDrawing"
           },
           "type": "array"
+        },
+        "events": {
+          "default": null,
+          "description": "A column whose non-null values mark rows as events, such as earnings.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "hidden": {
           "default": [],

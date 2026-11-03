@@ -133,7 +133,9 @@ const chartSchema = z.strictObject({
   hidden: z._default(z.array(z.string()), []),
   indicators: z._default(z.array(indicatorSchema), []),
   volume: orNull(name),
-  drawings: z._default(z.array(drawingSchema), [])
+  drawings: z._default(z.array(drawingSchema), []),
+  compare: z._default(z.boolean(), false),
+  events: orNull(name)
 });
 
 /** The schema of a layout document. Unknown fields are errors, as in Rust. */

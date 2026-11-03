@@ -14,7 +14,10 @@ use parallax_engine::format::{Format, MAX_DECIMALS, OVERFLOW_TEXT};
 use parallax_engine::{ColumnType, Formatter, Scalar, Table};
 use parallax_protocol::ipc::encode_batch;
 use parallax_protocol::layout::LayoutChart;
-use parallax_protocol::v1::{ChartAnchor, ChartFrame, ChartIndicatorLine, ChartSeries, ChartTick};
+use parallax_protocol::v1::{
+    ChartAnchor, ChartEvent, ChartFrame, ChartIndicatorLine, ChartMeasure, ChartSeries, ChartTick,
+    MeasureChart,
+};
 
 /// A chart a view shows, and the window last asked for.
 pub(crate) struct ChartState {
@@ -130,6 +133,8 @@ pub(crate) fn chart_frame(table: &Table, state: &ChartState) -> Result<ChartFram
         extent,
         ticks,
         indicators,
+        events,
+        events_total,
     } = state.view.reduce(table, &request);
     let config = state.view.config();
     let texts_of = |column: &str| Texts::new(table, &state.formats, column);
@@ -160,8 +165,35 @@ pub(crate) fn chart_frame(table: &Table, state: &ChartState) -> Result<ChartFram
                 label: t.label,
             })
             .collect(),
+        events_total: u32::try_from(events_total).unwrap_or(u32::MAX),
         ..ChartFrame::default()
     };
+    if let Some(column) = config.events.as_deref() {
+        let event_text = texts_of(column);
+        frame.events = events
+            .iter()
+            .map(|e| {
+                let text = event_text.cell(Some(e.slot)).unwrap_or_default();
+                ChartEvent {
+                    x: e.x,
+                    x_text: x_text.cell(Some(e.slot)).unwrap_or_default(),
+                    text: match (&e.key, &series_text) {
+                        (Some(key), Some(series)) => format!("{}: {text}", series.value(key)),
+                        _ => text,
+                    },
+                }
+            })
+            .collect();
+    }
+    // In compare mode a series' values are percentage changes, written as such.
+    let percent = config.compare.then(|| {
+        Formatter::new(&Format {
+            decimals: Some(2),
+            percent: true,
+            ..Format::default()
+        })
+        .unwrap_or_default()
+    });
     match data {
         ChartData::Series(series) => {
             let (mut ids, mut xs, mut ys, mut x_texts, mut y_texts, mut x_json) = (
@@ -186,7 +218,13 @@ pub(crate) fn chart_frame(table: &Table, state: &ChartState) -> Result<ChartFram
                     xs.push(p.x);
                     ys.push(p.y);
                     x_texts.push(x_text.cell(p.slot));
-                    y_texts.push(y_text.cell(p.slot));
+                    y_texts.push(match &percent {
+                        Some(f) if !p.y.is_nan() => {
+                            Some(f.scalar(&ColumnType::Float64, &Scalar::Float64(p.y / 100.0)))
+                        }
+                        Some(_) => None,
+                        None => y_text.cell(p.slot),
+                    });
                     x_json.push(x_text.json(p.slot));
                 }
             }
@@ -352,6 +390,62 @@ pub(crate) fn chart_frame(table: &Table, state: &ChartState) -> Result<ChartFram
         lines.fill(&mut frame, config, &indicators)?;
     }
     Ok(frame)
+}
+
+/// Measures a chart between two places, every value in the engine's text.
+pub(crate) fn measure(table: &Table, state: &ChartState, request: &MeasureChart) -> ChartMeasure {
+    let config = state.view.config();
+    let series_text = config
+        .series
+        .as_deref()
+        .map(|s| Texts::new(table, &state.formats, s));
+    // The series asked for by its value's text, or the first.
+    let wanted = series_text.as_ref().and_then(|texts| {
+        let column = table.column(texts.index?);
+        table
+            .live_slots()
+            .map(|slot| column.scalar(slot))
+            .find(|v| texts.value(v) == request.series)
+    });
+    let Some(m) = state
+        .view
+        .measure(table, request.from, request.to, wanted.as_ref())
+    else {
+        return ChartMeasure::default();
+    };
+    let x_text = Texts::new(table, &state.formats, &config.x);
+    let price_name = config.indicator_price().unwrap_or_default();
+    let price = Texts::new(table, &state.formats, price_name);
+    let format = price_format(table, &state.formats, price_name);
+    let formatter = Formatter::new(&format).unwrap_or_default();
+    let value = |slot| parallax_engine::chart::number(table.column(m.price), slot);
+    let (a, b) = (value(m.from), value(m.to));
+    let change = a
+        .zip(b)
+        .map(|(a, b)| formatter.scalar(&ColumnType::Float64, &Scalar::Float64(b - a)));
+    let percent = Formatter::new(&Format {
+        decimals: Some(2),
+        percent: true,
+        ..Format::default()
+    })
+    .unwrap_or_default();
+    ChartMeasure {
+        view_id: 0,
+        found: true,
+        from_x: x_text.cell(Some(m.from)).unwrap_or_default(),
+        to_x: x_text.cell(Some(m.to)).unwrap_or_default(),
+        from_position: m.from_x,
+        to_position: m.to_x,
+        from_value: price.cell(Some(m.from)).unwrap_or_default(),
+        to_value: price.cell(Some(m.to)).unwrap_or_default(),
+        change: change.unwrap_or_default(),
+        percent: a
+            .zip(b)
+            .filter(|(a, _)| *a != 0.0)
+            .map(|(a, b)| percent.scalar(&ColumnType::Float64, &Scalar::Float64(b / a - 1.0)))
+            .unwrap_or_default(),
+        rows: m.rows as u64,
+    }
 }
 
 /// The format of a price-unit indicator: the price column's, showing at least

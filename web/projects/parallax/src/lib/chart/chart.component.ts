@@ -32,12 +32,12 @@ import { DRAWABLE_KINDS, checkLayout } from "../layout";
 import type { Layout, LayoutFilter, LayoutInput } from "../layout";
 import { CHART_COLORS, THEMES, installThemeStyles, readChartColors, readTheme } from "../theme";
 import type { ChartColors, Theme, ThemeName } from "../theme";
-import { ChartHeadComponent, ChartNoteComponent, ChartTipComponent } from "./chart-parts.component";
+import { ChartHeadComponent, ChartMeasureComponent, ChartNoteComponent, ChartTipComponent } from "./chart-parts.component";
 import { DrawingEditor } from "./drawing-editor";
 import type { PlacedReading } from "./chart-parts.component";
 import { chartSource } from "./chart-source";
 import type { PlotSize } from "./chart-source";
-import { brushFilters, indicatorRows, markAt, panRange, readSeries, zoomRange } from "./interaction";
+import { brushFilters, eventRows, indicatorRows, markAt, panRange, readSeries, zoomRange } from "./interaction";
 import type { Range, Reading } from "./interaction";
 import { chartModel, describeChart, plotBottom } from "./model";
 import type { ChartModel } from "./model";
@@ -93,6 +93,13 @@ const CHART_STYLES = `
   px-chart .px-tool:disabled {
     color: var(--px-muted-fg);
     cursor: default;
+  }
+  px-chart .px-chart-measure-band {
+    position: absolute;
+    border: 1px dashed var(--px-selection-border);
+    background: var(--px-selection-bg);
+    opacity: 0.6;
+    pointer-events: none;
   }
   px-chart .px-chart-note-input {
     position: absolute;
@@ -246,7 +253,7 @@ const KEYS: Readonly<Partial<Record<string, "in" | "out" | "left" | "right" | "a
   selector: "px-chart",
   changeDetection: ChangeDetectionStrategy.OnPush,
   encapsulation: ViewEncapsulation.None,
-  imports: [ChartHeadComponent, ChartNoteComponent, ChartTipComponent, StatusBarComponent],
+  imports: [ChartHeadComponent, ChartMeasureComponent, ChartNoteComponent, ChartTipComponent, StatusBarComponent],
   host: { "[attr.data-px-theme]": "theme()" },
   template: `
     <px-chart-head
@@ -284,6 +291,9 @@ const KEYS: Readonly<Partial<Record<string, "in" | "out" | "left" | "right" | "a
       }
       @if (editor.note(); as note) {
         <px-chart-note [at]="note.point" (done)="noteDone($event)" />
+      }
+      @if (editor.measuring(); as m) {
+        <px-chart-measure [measuring]="m" />
       }
     </div>
     <px-status-bar
@@ -375,7 +385,10 @@ export class ChartComponent {
     // Drawings whose anchors this axis cannot place, as after the x column changed, are said, not silently dropped.
     const unplaced = this.drawable() ? this.editor.shown().length - this.editor.shapes().length : 0;
     const note = unplaced === 0 ? "" : `, ${String(unplaced)} ${unplaced === 1 ? "drawing" : "drawings"} not placed`;
-    return `${drawn}${zoomed}${note}`;
+    // More events than are marked: say how many there are.
+    const frame = this.source.frame();
+    const events = frame === null || frame.eventsTotal <= frame.events.length ? "" : `, ${COUNT.format(frame.events.length)} of ${COUNT.format(frame.eventsTotal)} events marked`;
+    return `${drawn}${zoomed}${note}${events}`;
   });
 
   private readonly drawn = computed(() => {
@@ -422,7 +435,8 @@ export class ChartComponent {
       }
     },
     measure: (text) => this.measure(text, this.tokens().font),
-    hidden: computed(() => this.current()?.chart?.hidden ?? [])
+    hidden: computed(() => this.current()?.chart?.hidden ?? []),
+    measureChart: (from, to) => this.source.measure(from, to)
   });
 
   protected removeDrawing(): void {
@@ -487,7 +501,7 @@ export class ChartComponent {
     const hidden = this.current()?.chart?.hidden ?? [];
     const reading = frame?.content.kind === "series" ? readSeries(frame, model, hidden, x) : this.markReading(model, x);
     // Indicators read at the crosshair too, under the price's rows.
-    return reading === null || frame === null ? reading : { ...reading, rows: [...reading.rows, ...indicatorRows(frame, model, hidden, x)] };
+    return reading === null || frame === null ? reading : { ...reading, rows: [...reading.rows, ...indicatorRows(frame, model, hidden, x), ...eventRows(frame, model, x)] };
   }
 
   /** The candle or other mark at axis position `x`, at the pointer's height or the plot's middle. */

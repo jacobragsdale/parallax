@@ -8,7 +8,7 @@ import { expect, test } from "@playwright/test";
 
 test.skip(process.env["PARALLAX_PINNED_IMAGE"] !== "1", "Screenshots are compared only in the pinned Playwright image: run pnpm screenshots.");
 
-const CHARTS = 11;
+const CHARTS = 12;
 
 for (const theme of ["light", "dark"] as const) {
   test(`every chart draws as in its screenshot, ${theme} theme`, async ({ page }) => {
