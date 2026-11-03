@@ -16,6 +16,7 @@ arrow-schema.workspace = true
 clap.workspace = true
 jiff.workspace = true
 libm.workspace = true
+parallax-engine.workspace = true
 rayon.workspace = true
 
 [lints]

@@ -50,6 +50,23 @@ Milestone 1 is done when all of the following hold:
 - Every test layer passes in CI.
 - The demo has run on a real Citrix VDI.
 
+## Milestone 2 build order
+
+1. Chart reductions in the engine: M4 series, densities, histogram bins and
+   OHLC buckets, the trading-time axis on the NYSE calendar, and x-axis ticks
+   with their labels.
+2. Charts in the layout, the protocol and the session, with chart frames that
+   carry each value's exact text, and the native and WebAssembly transcripts.
+3. `<px-chart>`: Canvas 2D renderers for line, area, bar (vertical or
+   horizontal, grouped or stacked), scatter density, heatmap, histogram,
+   candlestick and OHLC, with the legend, two y-axes and a log scale.
+4. Interaction: the crosshair with tooltips synced across charts, wheel and
+   drag zoom and pan, and the range brush that filters linked views.
+5. Charts in the demo, with Playwright screenshots in Chromium without a GPU.
+
+Milestone 2 is done when every chart kind draws from reduced data in the demo
+and every test layer passes in CI.
+
 ## Target data for milestone 1
 
 The generator produces two datasets for milestone 1:

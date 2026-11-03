@@ -12,6 +12,8 @@
 pub mod aggregate;
 mod bignum;
 pub mod bitmap;
+pub mod calendar;
+pub mod chart;
 pub mod column;
 pub mod dictionary;
 pub mod error;

@@ -14,7 +14,8 @@
 //! magnitudes, Unicode and blank tickers, duplicate keys, and wall-clock times that
 //! daylight-saving changes make ambiguous or impossible.
 
-pub mod calendar;
+/// NYSE trading days, from the engine, which also places charts in trading time.
+pub use parallax_engine::calendar;
 pub mod decimal;
 pub mod dist;
 pub mod error;

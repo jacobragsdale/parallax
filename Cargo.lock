@@ -2595,6 +2595,7 @@ dependencies = [
  "clap",
  "jiff",
  "libm",
+ "parallax-engine",
  "rayon",
  "thiserror 2.0.21",
 ]

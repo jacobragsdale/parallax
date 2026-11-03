@@ -337,6 +337,25 @@ aggregated. Indicators are computed on full-resolution data before the
 reduction. A 200-day moving average computed from downsampled points would be
 wrong.
 
+Candlestick and OHLC charts bucket rows by a calendar interval cut in New York
+time: minutes, days, Monday-started weeks, months, quarters or years, the
+shortest that keeps candles at least 4 pixels wide. Each bucket keeps its first
+open, highest high, lowest low and last close. A histogram computes its bin
+edges once and places every value by comparing it with them, so a value on an
+edge lands in the bin that edge's label opens. Every reduced value carries the
+row it came from, so tooltips show the exact value, formatted by the engine like
+any cell.
+
+A chart's x axis is either its values or trading time on the NYSE calendar,
+where closed days and the hours outside the 09:30 to 16:00 session take no
+space, so trading days sit one apart and Friday's close meets Monday's open.
+The engine places the axis's ticks and writes their labels, because only it can
+map trading time back to dates.
+
+M4's guarantee is tested directly: for random series with gaps and repeated x
+values, the line through the reduced points reaches exactly the same lowest and
+highest value in every pixel column as the line through every point.
+
 The client draws with Canvas 2D:
 
 - only on animation frames

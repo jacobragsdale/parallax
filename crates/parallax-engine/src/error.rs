@@ -86,6 +86,19 @@ pub enum ConfigError {
         /// The column's Arrow type.
         data_type: String,
     },
+    /// A chart column's type does not suit its role in the chart.
+    #[error("the {role} of a chart cannot be column {column} of type {data_type}")]
+    ChartColumn {
+        /// What the column is for, such as the x axis.
+        role: String,
+        /// Column name.
+        column: String,
+        /// The column's Arrow type.
+        data_type: String,
+    },
+    /// A chart lacks columns its kind needs.
+    #[error("this chart needs {0}")]
+    MissingChartColumns(String),
     /// A filter value does not match the column's type.
     #[error("filter on {column}: {reason}")]
     Filter {
