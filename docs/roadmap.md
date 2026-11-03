@@ -90,12 +90,12 @@ On the build host, single-threaded, an Excel export of 1,000,000 generated
 positions by 40 columns took 28.0 s and the same CSV 8.1 s (2026-11-02).
 
 Grouped views build on 16 threads of the build host. Its timings vary about
-twofold under load, so these are the best of three runs (2026-11-03):
+twofold under load, so these are the best of three runs (2026-11-02):
 
 | Grouped view of generated positions | 1M rows | 2.5M rows |
 |---|---|---|
-| Count by fund | 8 ms | 23 ms |
-| Three sums by fund | 16 ms | 44 ms |
+| Count by fund | 5 ms | 23 ms |
+| Three sums by fund | 11 ms | 44 ms |
 | Three sums by fund, strategy, sector and ticker | 121 ms | 261 ms |
 | The reference pivot: those groups by asset class | 217 ms | 426 ms |
 

@@ -1172,27 +1172,32 @@ fn fill_inputs(measures: &[CompiledMeasure], source: Source<'_>, row: usize, out
     );
 }
 
-/// Rows per task when a grouped view sorts its rows into partitions.
+#[cfg(not(target_arch = "wasm32"))]
+/// Rows per task when a grouped view builds in parallel.
 const BUILD_CHUNK: usize = 1 << 16;
+#[cfg(not(target_arch = "wasm32"))]
 /// Hash partitions of the leaf keys; each is aggregated by one task.
 const PARTITIONS: usize = 64;
+#[cfg(not(target_arch = "wasm32"))]
+/// Distinct leaf keys, in a sample of the first rows, up to which every task
+/// aggregates its own rows into its own cells and the tasks' cells are merged.
+/// With few keys that is cheap and keeps every thread busy however unevenly the
+/// rows spread over the keys; with many, partitioning by key builds each cell
+/// once.
+const FEW_LEAVES: usize = 4_096;
 
 /// Maps items to results in parallel where threads exist, keeping their order.
+#[cfg(not(target_arch = "wasm32"))]
 fn map_ordered<T: Send, R: Send>(items: Vec<T>, f: impl Fn(T) -> R + Sync + Send) -> Vec<R> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        use rayon::iter::{IntoParallelIterator, ParallelIterator};
-        items.into_par_iter().map(f).collect()
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        items.into_iter().map(f).collect()
-    }
+    use rayon::iter::{IntoParallelIterator, ParallelIterator};
+    items.into_par_iter().map(f).collect()
 }
 
 /// The partition of a leaf key. The hash is mixed again so that the partition
 /// does not follow the bits the hash map uses for its buckets.
+#[cfg(not(target_arch = "wasm32"))]
 fn partition(keys: &[Key]) -> usize {
+    const _: () = assert!(PARTITIONS == 1 << 6, "partition keeps 6 bits");
     use std::hash::{Hash, Hasher};
     let mut hasher = rustc_hash::FxHasher::default();
     keys.hash(&mut hasher);
@@ -1213,6 +1218,112 @@ fn arrangement(key: &Key) -> (u8, i128) {
     }
 }
 
+type LeafMap = FxHashMap<Box<[Key]>, Cell>;
+
+/// What aggregating rows into leaf cells needs.
+struct Leaves<'a> {
+    measures: &'a [CompiledMeasure],
+    columns: &'a [usize],
+    table: &'a Table,
+    passes: &'a (dyn Fn(usize) -> bool + Sync),
+}
+
+impl Leaves<'_> {
+    fn keys(&self, slot: usize, keys: &mut Vec<Key>) {
+        keys.clear();
+        keys.extend(self.columns.iter().map(|&c| self.table.column(c).key(slot)));
+    }
+
+    /// Adds the rows at `slots` that pass the filters into `cells`.
+    fn aggregate(&self, slots: impl Iterator<Item = usize>, cells: &mut LeafMap) {
+        let source = Source::Table(self.table);
+        let mut keys = Vec::with_capacity(self.columns.len());
+        let mut inputs = Vec::with_capacity(self.measures.len());
+        for slot in slots {
+            if !(self.passes)(slot) {
+                continue;
+            }
+            self.keys(slot, &mut keys);
+            fill_inputs(self.measures, source, slot, &mut inputs);
+            if let Some(cell) = cells.get_mut(keys.as_slice()) {
+                cell.apply(self.measures, &inputs, 1);
+            } else {
+                let mut cell = Cell::new(self.measures, true);
+                cell.apply(self.measures, &inputs, 1);
+                cells.insert(keys.as_slice().into(), cell);
+            }
+        }
+    }
+
+    /// Whether the first rows hold at most [`FEW_LEAVES`] distinct keys.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn few(&self) -> bool {
+        let mut seen = rustc_hash::FxHashSet::default();
+        let mut keys = Vec::with_capacity(self.columns.len());
+        for slot in self.table.live_slots_in(0..BUILD_CHUNK) {
+            if (self.passes)(slot) {
+                self.keys(slot, &mut keys);
+                if seen.insert(keys.clone()) && seen.len() > FEW_LEAVES {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// Every task aggregates its own chunks; the cells are merged pairwise.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn merged(&self, chunks: Vec<Range<usize>>) -> LeafMap {
+        use rayon::iter::{IntoParallelIterator, ParallelIterator};
+        chunks
+            .into_par_iter()
+            .map(|range| {
+                let mut cells = LeafMap::default();
+                self.aggregate(self.table.live_slots_in(range), &mut cells);
+                cells
+            })
+            .reduce_with(|mut a, b| {
+                for (keys, cell) in b {
+                    match a.get_mut(&keys) {
+                        Some(into) => into.merge(&cell),
+                        None => {
+                            a.insert(keys, cell);
+                        }
+                    }
+                }
+                a
+            })
+            .unwrap_or_default()
+    }
+
+    /// Rows are sorted into partitions by key, and each partition is aggregated
+    /// by one task, so every cell is built once.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn partitioned(&self, chunks: Vec<Range<usize>>) -> Vec<LeafMap> {
+        let sorted: Vec<Vec<Vec<u32>>> = map_ordered(chunks, |range| {
+            let mut parts = vec![Vec::new(); PARTITIONS];
+            let mut keys = Vec::with_capacity(self.columns.len());
+            for slot in self.table.live_slots_in(range) {
+                if (self.passes)(slot) {
+                    self.keys(slot, &mut keys);
+                    // The caller keeps slots below 2^32.
+                    parts[partition(&keys)].push(slot as u32);
+                }
+            }
+            parts
+        });
+        map_ordered((0..PARTITIONS).collect(), |p| {
+            let mut cells = LeafMap::default();
+            let slots = sorted
+                .iter()
+                .flat_map(|chunk| chunk[p].iter().map(|&s| s as usize));
+            // Every slot here passed the filters already; checking again is cheap.
+            self.aggregate(slots, &mut cells);
+            cells
+        })
+    }
+}
+
 /// One cell for every distinct key over `columns` among the rows `passes`
 /// accepts, with the keys, sorted by [`arrangement`] key by key.
 fn leaf_cells(
@@ -1221,63 +1332,44 @@ fn leaf_cells(
     table: &Table,
     passes: &(dyn Fn(usize) -> bool + Sync),
 ) -> Vec<(Box<[Key]>, Cell)> {
-    const _: () = assert!(PARTITIONS == 1 << 6, "partition() keeps 6 bits");
-    let slots = table.num_slots();
-    let chunks: Vec<Range<usize>> = (0..slots)
-        .step_by(BUILD_CHUNK)
-        .map(|start| start..(start + BUILD_CHUNK).min(slots))
-        .collect();
-    let keys_of = |slot: usize, keys: &mut Vec<Key>| {
-        keys.clear();
-        keys.extend(columns.iter().map(|&c| table.column(c).key(slot)));
+    let leaves = Leaves {
+        measures,
+        columns,
+        table,
+        passes,
     };
-    // Each chunk sorts its rows into partitions by their keys.
-    let partitioned: Vec<Vec<Vec<u32>>> = map_ordered(chunks, |range| {
-        let mut parts = vec![Vec::new(); PARTITIONS];
-        let mut keys = Vec::with_capacity(columns.len());
-        for slot in range {
-            if table.is_live(slot) && passes(slot) {
-                keys_of(slot, &mut keys);
-                let slot = u32::try_from(slot).expect("fewer than 2^32 row slots");
-                parts[partition(&keys)].push(slot);
-            }
+    // WebAssembly runs on one thread, so one pass over the rows does it.
+    #[cfg(target_arch = "wasm32")]
+    let maps = {
+        let mut cells = LeafMap::default();
+        leaves.aggregate(table.live_slots(), &mut cells);
+        vec![cells]
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    let maps = {
+        let slots = table.num_slots();
+        let chunks: Vec<Range<usize>> = (0..slots)
+            .step_by(BUILD_CHUNK)
+            .map(|start| start..(start + BUILD_CHUNK).min(slots))
+            .collect();
+        if u32::try_from(slots).is_err() || leaves.few() {
+            vec![leaves.merged(chunks)]
+        } else {
+            leaves.partitioned(chunks)
         }
-        parts
-    });
-    // Each partition aggregates its rows, so every cell is built by one task.
-    let source = Source::Table(table);
-    let parts: Vec<Vec<(Box<[Key]>, Cell)>> = map_ordered((0..PARTITIONS).collect(), |p| {
-        let mut cells: FxHashMap<Box<[Key]>, Cell> = FxHashMap::default();
-        let mut keys = Vec::with_capacity(columns.len());
-        let mut inputs = Vec::with_capacity(measures.len());
-        for chunk in &partitioned {
-            for &slot in &chunk[p] {
-                let slot = slot as usize;
-                keys_of(slot, &mut keys);
-                fill_inputs(measures, source, slot, &mut inputs);
-                if let Some(cell) = cells.get_mut(keys.as_slice()) {
-                    cell.apply(measures, &inputs, 1);
-                } else {
-                    let mut cell = Cell::new(measures, true);
-                    cell.apply(measures, &inputs, 1);
-                    cells.insert(keys.as_slice().into(), cell);
-                }
-            }
-        }
-        cells.into_iter().collect()
-    });
-    let mut leaves: Vec<(Box<[Key]>, Cell)> = parts.into_iter().flatten().collect();
+    };
+    let mut cells: Vec<(Box<[Key]>, Cell)> = maps.into_iter().flatten().collect();
     let order = |a: &(Box<[Key]>, Cell), b: &(Box<[Key]>, Cell)| {
         a.0.iter().map(arrangement).cmp(b.0.iter().map(arrangement))
     };
     #[cfg(not(target_arch = "wasm32"))]
     {
         use rayon::slice::ParallelSliceMut;
-        leaves.par_sort_unstable_by(order);
+        cells.par_sort_unstable_by(order);
     }
     #[cfg(target_arch = "wasm32")]
-    leaves.sort_unstable_by(order);
-    leaves
+    cells.sort_unstable_by(order);
+    cells
 }
 
 impl Grouped {
@@ -1319,10 +1411,6 @@ impl Grouped {
         self.visible = None;
         self.columns = None;
         self.lazy_values.get_mut().clear();
-    }
-
-    fn fill_inputs(&self, source: Source<'_>, row: usize, out: &mut Vec<Input>) {
-        fill_inputs(&self.measures, source, row, out);
     }
 
     /// The id of a column-pivot key, assigned on first sight.
@@ -1380,7 +1468,7 @@ impl Grouped {
             let shared = previous.as_ref().map_or(0, |p| {
                 p.iter().zip(group).take_while(|(a, b)| a == b).count()
             });
-            path.truncate(shared.min(levels) + 1);
+            path.truncate(shared + 1);
             for &key in &group[path.len() - 1..] {
                 let parent = *path.last().expect("the root");
                 path.push(self.child(parent, key));
@@ -1419,7 +1507,7 @@ impl Grouped {
 
     fn apply_row(&mut self, source: Source<'_>, row: usize, sign: i64) {
         let mut inputs = std::mem::take(&mut self.scratch_inputs);
-        self.fill_inputs(source, row, &mut inputs);
+        fill_inputs(&self.measures, source, row, &mut inputs);
         let split = if self.split_columns.is_empty() {
             None
         } else {

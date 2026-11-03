@@ -1,5 +1,6 @@
 //! Tables: columns addressed by stable slots, loaded and updated as diffs.
 
+use std::ops::Range;
 use std::sync::Arc;
 
 use arrow_array::RecordBatch;
@@ -213,6 +214,11 @@ impl Table {
     /// Iterates over live slots in slot order.
     pub fn live_slots(&self) -> impl Iterator<Item = usize> + '_ {
         self.live.ones()
+    }
+
+    /// Iterates over live slots within `range`, in order.
+    pub fn live_slots_in(&self, range: Range<usize>) -> impl Iterator<Item = usize> + '_ {
+        self.live.ones_in(range)
     }
 
     /// Returns the insertion sequence number of `slot`. Rows that are updated keep

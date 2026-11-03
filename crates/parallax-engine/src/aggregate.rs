@@ -532,8 +532,10 @@ impl State {
                 },
             ) => {
                 sum.merge(s2);
-                if let (Some(a), Some(b)) = (squares.as_deref_mut(), q2.as_deref()) {
-                    a.merge(b);
+                match (squares.as_deref_mut(), q2.as_deref()) {
+                    (Some(a), Some(b)) => a.merge(b),
+                    (None, None) => {}
+                    _ => unreachable!("states of one measure keep squares alike"),
                 }
                 *n += n2;
             }

@@ -70,6 +70,36 @@ impl Bitmap {
         self.words.iter().map(|w| w.count_ones() as usize).sum()
     }
 
+    /// Iterates over the indices of set bits within `range`, in order, skipping
+    /// empty words whole.
+    pub fn ones_in(&self, range: std::ops::Range<usize>) -> impl Iterator<Item = usize> + '_ {
+        let end = range.end.min(self.len);
+        let first = range.start / 64;
+        let last = end.div_ceil(64).min(self.words.len());
+        let start = range.start;
+        self.words[first.min(last)..last]
+            .iter()
+            .enumerate()
+            .flat_map(move |(i, &word)| {
+                let w = first + i;
+                let mut bits = word;
+                if w == range.start / 64 {
+                    bits &= u64::MAX.checked_shl((start % 64) as u32).unwrap_or(0);
+                }
+                if w + 1 == end.div_ceil(64) && !end.is_multiple_of(64) {
+                    bits &= (1u64 << (end % 64)) - 1;
+                }
+                std::iter::from_fn(move || {
+                    if bits == 0 {
+                        return None;
+                    }
+                    let bit = bits.trailing_zeros() as usize;
+                    bits &= bits - 1;
+                    Some(w * 64 + bit)
+                })
+            })
+    }
+
     /// Iterates over the indices of set bits, in order.
     pub fn ones(&self) -> impl Iterator<Item = usize> + '_ {
         self.words.iter().enumerate().flat_map(|(w, &word)| {
@@ -104,5 +134,25 @@ mod tests {
         let ones: Vec<usize> = b.ones().collect();
         assert_eq!(ones.len(), 67);
         assert_eq!(&ones[..3], &[0, 1, 3]);
+        for (start, end) in [
+            (0, 200),
+            (1, 64),
+            (63, 129),
+            (64, 128),
+            (130, 131),
+            (150, 999),
+            (5, 5),
+        ] {
+            let expected: Vec<usize> = ones
+                .iter()
+                .copied()
+                .filter(|&i| i >= start && i < end)
+                .collect();
+            assert_eq!(
+                b.ones_in(start..end).collect::<Vec<_>>(),
+                expected,
+                "{start}..{end}"
+            );
+        }
     }
 }
