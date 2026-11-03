@@ -31,3 +31,15 @@ for (const theme of ["light", "dark"] as const) {
     expect(errors).toEqual([]);
   });
 }
+
+for (const theme of ["light", "dark"] as const) {
+  test(`the technical-analysis page draws as in its screenshot, ${theme} theme`, async ({ page }) => {
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await page.goto(`/?preset=technical&theme=${theme}`);
+    const chart = page.locator("demo-technical section.chart");
+    await expect(chart.locator(".px-status-rows")).not.toHaveText(/loading/, { timeout: 60_000 });
+    await expect(chart).toHaveScreenshot(`technical-page-${theme}.png`, { mask: [chart.locator("px-status-bar")], animations: "disabled", caret: "hide", threshold: 0, maxDiffPixels: 0 });
+    expect(errors).toEqual([]);
+  });
+}

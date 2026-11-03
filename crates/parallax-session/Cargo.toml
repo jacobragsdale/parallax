@@ -24,8 +24,9 @@ testing = ["dep:parallax-datagen"]
 
 [dev-dependencies]
 arrow-select.workspace = true
-parallax-datagen.workspace = true
-parallax-session = { workspace = true, features = ["testing"] }
+# Path only, so that publishing drops it: the generator depends on the engine.
+parallax-datagen = { path = "../parallax-datagen" }
+parallax-session = { path = "../parallax-session", features = ["testing"] }
 
 [lints]
 workspace = true

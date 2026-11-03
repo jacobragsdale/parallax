@@ -21,8 +21,9 @@ serde_json.workspace = true
 wasm-bindgen = "=0.2.130"
 
 [dev-dependencies]
-parallax-datagen.workspace = true
-parallax-session = { workspace = true, features = ["testing"] }
+# Path only, so that publishing drops it: the generator depends on the engine.
+parallax-datagen = { path = "../parallax-datagen" }
+parallax-session = { path = "../parallax-session", features = ["testing"] }
 wasm-bindgen-test = "0.3.80"
 
 [lints]

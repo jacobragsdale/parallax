@@ -100,6 +100,37 @@ recorded in the file.
    it merges.
 4. A change is finished when it is merged to `main`.
 
+## Release
+
+A release publishes the `parallax-*` crates to crates.io and
+`@jacobragsdale/parallax`, with its WebAssembly worker, to npm. Publishing
+cannot be undone, so it is done by hand by the maintainer, never by CI. From a
+clean checkout of `main` with CI green:
+
+1. Set the version in `Cargo.toml` (`[workspace.package]` and the
+   `[workspace.dependencies]` entries of the `parallax-*` crates) and in
+   `web/projects/parallax/package.json`.
+2. Check that every crate packages:
+
+   ```sh
+   cargo package --workspace
+   ```
+
+   Dev-dependencies on other `parallax-*` crates name only a path, so
+   publishing drops them; the generator and the engine depend on each other
+   only through tests.
+3. Build the library and its worker, and look at what npm would receive:
+
+   ```sh
+   cd web
+   pnpm build:wasm && pnpm build
+   cd dist/parallax && npm pack --dry-run
+   ```
+
+4. Publish the crates (`cargo publish --workspace`), then the package
+   (`npm publish --access public` from `web/dist/parallax`), and tag the
+   commit `v<version>`.
+
 ## Dependencies
 
 Only permissive licences are allowed. The list is in `deny.toml`, and

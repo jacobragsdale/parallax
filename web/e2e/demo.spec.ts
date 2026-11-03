@@ -17,7 +17,7 @@ test("every view opens from its tab, and the browser-held ones say so", async ({
   await page.goto("/");
   await ready(page);
   const titles = await page.getByRole("navigation", { name: "Views" }).getByRole("link").allTextContents();
-  expect(titles).toEqual(["Positions pivot", "Pivot in the browser", "1,000,000 trades", "Largest trades", "Daily prices", "Charts"]);
+  expect(titles).toEqual(["Positions pivot", "Pivot in the browser", "1,000,000 trades", "Largest trades", "Daily prices", "Charts", "Technical analysis"]);
   for (const [title, where] of [
     ["1,000,000 trades", null],
     ["Daily prices", "in browser"],

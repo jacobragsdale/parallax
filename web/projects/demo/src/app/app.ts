@@ -4,6 +4,7 @@ import type { Density, DrawStats, LayoutInput, ThemeName } from "parallax";
 import * as z from "zod/mini";
 
 import { ChartsComponent } from "./charts.component";
+import { TechnicalComponent } from "./technical.component";
 import { PerformanceComponent } from "./performance.component";
 
 /** A view the demo opens, and what it shows off. */
@@ -21,7 +22,7 @@ const REFERENCE_PIVOT = {
 } as const satisfies LayoutInput;
 
 /** The views the demo opens, in the order of their tabs. */
-const PRESET_NAMES = ["pivot", "browser", "trades", "sorted", "prices", "charts"] as const;
+const PRESET_NAMES = ["pivot", "browser", "trades", "sorted", "prices", "charts", "technical"] as const;
 
 type PresetName = (typeof PRESET_NAMES)[number];
 
@@ -53,6 +54,12 @@ const PRESETS: Readonly<Record<PresetName, Preset>> = {
     title: "Charts",
     about:
       "Every chart kind, reduced by the engine to the pixels it fills: lines on trading days, candles bucketed to fit, stacked bars, a histogram, a density of a thousand points and a heatmap that diverges around zero. Hover for values; the price charts share a crosshair. Drag to pan, scroll to zoom, double-click to show everything, and Shift-drag on the candles to list those days.",
+    layout: { dataset: "prices" }
+  },
+  technical: {
+    title: "Technical analysis",
+    about:
+      "One ticker's prices with the indicators, chart kind and range the controls set. Indicators are computed by the engine over every row and checked against TA-Lib. Draw with the tools above the chart, measure with Measure, Shift-drag to list those days below, or compare three tickers as percentage changes.",
     layout: { dataset: "prices" }
   },
   prices: {
@@ -91,7 +98,7 @@ function remember(name: string, value: string): void {
   selector: "demo-root",
   changeDetection: ChangeDetectionStrategy.OnPush,
   host: { "[class.dark]": "theme() === 'dark'" },
-  imports: [ChartsComponent, GridComponent, PivotComponent, PerformanceComponent],
+  imports: [ChartsComponent, GridComponent, PivotComponent, PerformanceComponent, TechnicalComponent],
   template: `
     <header>
       <strong>parallax</strong>
@@ -126,6 +133,8 @@ function remember(name: string, value: string): void {
     <main>
       @if (charts()) {
         <demo-charts [theme]="theme()" />
+      } @else if (technical()) {
+        <demo-technical [theme]="theme()" />
       } @else if (ready()) {
         @if (grouped()) {
           <px-pivot [(layout)]="layout" [theme]="theme()" [density]="density()" />
@@ -230,6 +239,8 @@ export class App {
   protected readonly note = signal("");
   /** The charts page, which shows several views of its own. */
   protected readonly charts = computed(() => this.search.preset === "charts" && this.search.layout === undefined);
+  /** The technical-analysis page, which has its own controls. */
+  protected readonly technical = computed(() => this.search.preset === "technical" && this.search.layout === undefined);
   /** False while a linked layout is being read, so the preset never opens in its place. */
   protected readonly ready = signal(this.search.layout === undefined);
   protected readonly about = computed(() => (this.search.layout === undefined ? PRESETS[this.search.preset].about : "A view opened from a shared link."));

@@ -11,9 +11,9 @@
     "format": "prettier . --write",
     "format:check": "prettier . --check",
     "test": "ng test parallax --watch=false",
-    "e2e": "playwright test -c e2e/playwright.config.ts grid.spec browser.spec demo.spec charts.spec",
+    "e2e": "playwright test -c e2e/playwright.config.ts grid.spec browser.spec demo.spec charts.spec technical.spec",
     "performance": "playwright test -c e2e/playwright.config.ts grid-performance",
-    "e2e:image": "bash e2e/in-image.sh grid.spec browser.spec demo.spec charts.spec screenshots.spec",
+    "e2e:image": "bash e2e/in-image.sh grid.spec browser.spec demo.spec charts.spec technical.spec screenshots.spec",
     "screenshots": "bash e2e/in-image.sh screenshots.spec"
   },
   "private": true,

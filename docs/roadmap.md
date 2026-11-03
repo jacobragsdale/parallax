@@ -38,7 +38,9 @@ Releases are semver 0.x until milestone 3. Each milestone publishes
 4. Drawing tools: trend line, horizontal line, Fibonacci retracement, rectangle
    and text note, anchored to data values and saved in the layout.
 5. Compare mode, event markers and the measure tool.
-6. The demo's technical-analysis page, with screenshots, and the release.
+6. The demo's technical-analysis page, with screenshots, and the release,
+   whose publishing the maintainer does by hand; see
+   [Release](../CONTRIBUTING.md#release).
 
 ## Milestone 1 build order
 

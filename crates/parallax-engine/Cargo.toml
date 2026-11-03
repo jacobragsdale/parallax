@@ -23,7 +23,8 @@ rayon.workspace = true
 duckdb = { version = "=1.20000.1", features = ["download-lib", "appender-arrow"] }
 arrow-select.workspace = true
 num-bigint = "0.4.8"
-parallax-datagen.workspace = true
+# Path only, so that publishing drops it: the generator depends on the engine.
+parallax-datagen = { path = "../parallax-datagen" }
 proptest = "1.12"
 serde_json.workspace = true
 
