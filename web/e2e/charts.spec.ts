@@ -188,3 +188,46 @@ test("the technical card stacks RSI, MACD and volume under the candles, and its 
   await page.mouse.move(at.x + 1, at.y);
   await expect(tip.locator(".px-tip-row")).toHaveCount(10);
 });
+
+test("the drawing tools draw a trend line and a note, select one and delete it", async ({ page }) => {
+  await open(page);
+  const chart = card(page, "technical");
+  const canvas = chart.locator("canvas");
+  const plot = chart.locator(".px-chart-plot");
+  const centred = await centre(plot);
+  // The price's plot is the top of the chart, above its panes.
+  const box = await plot.boundingBox();
+  const at = { ...centred, y: (box?.y ?? 0) + (box?.height ?? 0) * 0.2 };
+  // Away from the pointer, so no tooltip covers what is drawn.
+  await page.mouse.move(at.x, at.y - 400);
+  const before = await inked(canvas);
+  const remove = chart.getByRole("button", { name: "Delete drawing" });
+  await expect(remove).toBeDisabled();
+  await chart.getByRole("button", { name: "Trend line" }).click();
+  await expect(chart.getByRole("button", { name: "Trend line" })).toHaveAttribute("aria-pressed", "true");
+  await page.mouse.move(at.x - at.width / 4, at.y + 40);
+  await page.mouse.down();
+  await page.mouse.move(at.x + at.width / 4, at.y - 30, { steps: 5 });
+  await page.mouse.up();
+  // The new line is selected and the tool put down.
+  await expect(remove).toBeEnabled();
+  await expect(chart.getByRole("button", { name: "Trend line" })).toHaveAttribute("aria-pressed", "false");
+  await page.mouse.move(at.x, at.y - 400);
+  await expect.poll(() => inked(canvas)).not.toBe(before);
+  // Delete removes it, and the chart draws as before.
+  await plot.focus();
+  await page.keyboard.press("Delete");
+  await expect(remove).toBeDisabled();
+  await expect.poll(() => inked(canvas)).toBe(before);
+  // A note asks for its text and keeps it on Enter.
+  await chart.getByRole("button", { name: "Note" }).click();
+  await page.mouse.click(at.x, at.y);
+  const text = chart.getByRole("textbox", { name: "Note text" });
+  await expect(text).toBeFocused();
+  await text.fill("Breakout");
+  await text.press("Enter");
+  await expect(text).toHaveCount(0);
+  await expect(remove).toBeEnabled();
+  await page.mouse.move(at.x, at.y - 400);
+  await expect.poll(() => inked(canvas)).not.toBe(before);
+});

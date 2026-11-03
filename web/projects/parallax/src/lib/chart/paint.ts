@@ -5,6 +5,8 @@
  */
 
 import type { Theme } from "../theme";
+import { handles } from "./drawings";
+import type { Point, Shape } from "./drawings";
 import { plotBottom } from "./model";
 import type { ChartModel, Mark, Pane, Rect, ValueAxis } from "./model";
 
@@ -286,7 +288,124 @@ class Painter {
   }
 }
 
-/** Paints `model` over the whole canvas. The context's transform must already map CSS pixels. */
-export function paintChart(ctx: CanvasRenderingContext2D, model: ChartModel, theme: Theme): void {
+/** Drawings over the price, and which is selected. */
+export interface DrawingLayer {
+  readonly shapes: readonly Shape[];
+  readonly selected: number | null;
+}
+
+/** Paints drawings in the price plot: in the text colour, the selected one in the selection colour with its handles. */
+class DrawingPainter {
+  constructor(
+    private readonly ctx: CanvasRenderingContext2D,
+    private readonly theme: Theme
+  ) {}
+
+  private segment(a: Point, b: Point): void {
+    this.ctx.beginPath();
+    this.ctx.moveTo(a.x, a.y);
+    this.ctx.lineTo(b.x, b.y);
+    this.ctx.stroke();
+  }
+
+  private shape(shape: Shape, color: string): void {
+    const ctx = this.ctx;
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    switch (shape.kind) {
+      case "trend":
+        this.segment(shape.a, shape.b);
+        return;
+      case "horizontal":
+        this.segment({ x: shape.left, y: shape.y }, { x: shape.right, y: shape.y });
+        return;
+      case "fibonacci":
+        this.fibonacci(shape);
+        return;
+      case "rectangle":
+        this.rectangle(shape.a, shape.b);
+        return;
+      case "note":
+        this.note(shape, color);
+        return;
+    }
+  }
+
+  private fibonacci(shape: Extract<Shape, { kind: "fibonacci" }>): void {
+    const ctx = this.ctx;
+    const [left, right] = [Math.min(shape.a.x, shape.b.x), Math.max(shape.a.x, shape.b.x)];
+    ctx.setLineDash([3, 3]);
+    this.segment(shape.a, shape.b);
+    ctx.setLineDash([]);
+    ctx.textAlign = "left";
+    ctx.textBaseline = "bottom";
+    for (const level of shape.levels) {
+      this.segment({ x: left, y: level.y }, { x: right, y: level.y });
+      ctx.fillText(level.label, left + 2, level.y - 1);
+    }
+  }
+
+  private rectangle(a: Point, b: Point): void {
+    const ctx = this.ctx;
+    const [x, y, w, h] = [Math.min(a.x, b.x), Math.min(a.y, b.y), Math.abs(b.x - a.x), Math.abs(b.y - a.y)];
+    ctx.globalAlpha = 0.08;
+    ctx.fillRect(x, y, w, h);
+    ctx.globalAlpha = 1;
+    ctx.strokeRect(x, y, w, h);
+  }
+
+  private note(shape: Extract<Shape, { kind: "note" }>, color: string): void {
+    const ctx = this.ctx;
+    const { box } = shape;
+    ctx.beginPath();
+    ctx.arc(shape.at.x, shape.at.y, 3, 0, 2 * Math.PI);
+    ctx.fill();
+    ctx.fillStyle = this.theme.background;
+    ctx.fillRect(box.x, box.y, box.w, box.h);
+    ctx.strokeRect(box.x + 0.5, box.y + 0.5, box.w - 1, box.h - 1);
+    ctx.fillStyle = this.theme.foreground;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText(shape.text, box.x + 6, box.y + box.h / 2);
+    ctx.fillStyle = color;
+  }
+
+  private handles(shape: Shape): void {
+    const ctx = this.ctx;
+    for (const h of handles(shape)) {
+      ctx.fillStyle = this.theme.background;
+      ctx.fillRect(h.x - 3.5, h.y - 3.5, 7, 7);
+      ctx.strokeRect(h.x - 3.5, h.y - 3.5, 7, 7);
+    }
+  }
+
+  public paint(model: ChartModel, layer: DrawingLayer): void {
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(model.plot.x, model.plot.y, model.plot.w, model.plot.h);
+    ctx.clip();
+    ctx.font = this.theme.font;
+    ctx.lineWidth = 1.5;
+    for (const shape of layer.shapes) {
+      const selected = shape.index === layer.selected;
+      const color = selected ? this.theme.selectionBorder : this.theme.foreground;
+      ctx.lineWidth = selected ? 2 : 1.5;
+      this.shape(shape, color);
+      if (selected) {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1;
+        this.handles(shape);
+      }
+    }
+    ctx.restore();
+  }
+}
+
+/** Paints `model` over the whole canvas, and any drawings over its price. The context's transform must already map CSS pixels. */
+export function paintChart(ctx: CanvasRenderingContext2D, model: ChartModel, theme: Theme, drawings: DrawingLayer = { shapes: [], selected: null }): void {
   new Painter(ctx, theme).paint(model);
+  if (drawings.shapes.length > 0 && model.empty === null) {
+    new DrawingPainter(ctx, theme).paint(model, drawings);
+  }
 }

@@ -28,7 +28,8 @@ function frame(content: ChartContent): ChartFrameData {
     extentTo: 10,
     ticks: [{ x: 5, label: "Mid" }],
     content,
-    indicators: []
+    indicators: [],
+    anchors: new Map()
   };
 }
 

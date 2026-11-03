@@ -102,7 +102,7 @@ export class ChartsComponent {
   }
 
   protected readonly cards: readonly Card[] = [
-    card("technical", "QYE since 2025: SMA 50 and Bollinger Bands over the candles, RSI, MACD and volume below", {
+    card("technical", "QYE since 2025: SMA 50, Bollinger Bands and drawings over the candles, RSI, MACD and volume below", {
       dataset: "prices",
       filters: [
         { column: "ticker", op: "eq", value: "QYE" },
@@ -114,7 +114,13 @@ export class ChartsComponent {
         axis: "trading",
         ohlc: { open: "open", high: "high", low: "low", close: "close" },
         volume: "volume",
-        indicators: [{ kind: "sma", period: 50 }, { kind: "bollinger" }, { kind: "rsi" }, { kind: "macd" }, { kind: "volume" }]
+        indicators: [{ kind: "sma", period: 50 }, { kind: "bollinger" }, { kind: "rsi" }, { kind: "macd" }, { kind: "volume" }],
+        drawings: [
+          { kind: "trend", from: { x: "2025-04-07", y: 8100 }, to: { x: "2026-02-02", y: 12900 } },
+          { kind: "fibonacci", from: { x: "2025-11-03", y: 9300 }, to: { x: "2026-03-02", y: 13700 } },
+          { kind: "horizontal", y: 12000 },
+          { kind: "note", at: { x: "2026-03-02", y: 13700 }, text: "Year's high" }
+        ]
       }
     }),
     card("closes-log", "Closing prices on trading days, log scale", {

@@ -32,7 +32,8 @@ import { checkLayout } from "../layout";
 import type { Layout, LayoutFilter, LayoutInput } from "../layout";
 import { CHART_COLORS, THEMES, installThemeStyles, readChartColors, readTheme } from "../theme";
 import type { ChartColors, Theme, ThemeName } from "../theme";
-import { ChartLegendComponent, ChartTipComponent } from "./chart-parts.component";
+import { ChartHeadComponent, ChartNoteComponent, ChartTipComponent } from "./chart-parts.component";
+import { DrawingEditor } from "./drawing-editor";
 import type { PlacedReading } from "./chart-parts.component";
 import { chartSource } from "./chart-source";
 import type { PlotSize } from "./chart-source";
@@ -53,11 +54,56 @@ const CHART_STYLES = `
     color: var(--px-grid-fg);
     font: var(--px-font);
   }
+  px-chart .px-chart-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 12px;
+  }
+  px-chart .px-chart-head:empty {
+    display: none;
+  }
   px-chart .px-chart-legend {
     display: flex;
     flex-wrap: wrap;
     gap: 2px 12px;
     padding: 6px 8px 0;
+  }
+  px-chart .px-chart-tools {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-left: auto;
+    padding: 6px 8px 0;
+  }
+  px-chart .px-tool {
+    padding: 1px 6px;
+    border: 1px solid var(--px-grid-line);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--px-grid-fg);
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  px-chart .px-tool[aria-pressed="true"] {
+    border-color: var(--px-selection-border);
+    background: var(--px-selection-bg);
+  }
+  px-chart .px-tool:disabled {
+    color: var(--px-muted-fg);
+    cursor: default;
+  }
+  px-chart .px-chart-note-input {
+    position: absolute;
+    width: 220px;
+    padding: 2px 6px;
+    border: 1px solid var(--px-selection-border);
+    border-radius: 4px;
+    background: var(--px-grid-bg);
+    color: var(--px-grid-fg);
+    font: inherit;
+    font-size: 12px;
   }
   px-chart .px-legend-entry {
     display: inline-flex;
@@ -182,13 +228,15 @@ const ZOOM_IN = 0.8;
 const ZOOM_OUT = 1.25;
 
 /** What each key does to the plot. */
-const KEYS: Readonly<Partial<Record<string, "in" | "out" | "left" | "right" | "all" | "clear">>> = {
+const KEYS: Readonly<Partial<Record<string, "in" | "out" | "left" | "right" | "all" | "clear" | "remove">>> = {
   "+": "in",
   "=": "in",
   "-": "out",
   ArrowLeft: "left",
   ArrowRight: "right",
   "0": "all",
+  Delete: "remove",
+  Backspace: "remove",
   Escape: "clear"
 };
 
@@ -198,12 +246,18 @@ const KEYS: Readonly<Partial<Record<string, "in" | "out" | "left" | "right" | "a
   selector: "px-chart",
   changeDetection: ChangeDetectionStrategy.OnPush,
   encapsulation: ViewEncapsulation.None,
-  imports: [ChartLegendComponent, ChartTipComponent, StatusBarComponent],
+  imports: [ChartHeadComponent, ChartNoteComponent, ChartTipComponent, StatusBarComponent],
   host: { "[attr.data-px-theme]": "theme()" },
   template: `
-    @if (legend().length > 0) {
-      <px-chart-legend [entries]="legend()" (toggled)="toggle($event)" />
-    }
+    <px-chart-head
+      [entries]="legend()"
+      [drawable]="drawable()"
+      [tool]="editor.tool()"
+      [selected]="editor.selected() !== null"
+      (toggled)="toggle($event)"
+      (picked)="editor.pick($event)"
+      (removed)="removeDrawing()"
+    />
     <div
       class="px-chart-plot"
       #plot
@@ -227,6 +281,9 @@ const KEYS: Readonly<Partial<Record<string, "in" | "out" | "left" | "right" | "a
       }
       @if (problem(); as message) {
         <div class="px-error" role="alert">{{ message }}</div>
+      }
+      @if (editor.note(); as note) {
+        <px-chart-note [at]="note.point" (done)="noteDone($event)" />
       }
     </div>
     <px-status-bar
@@ -339,6 +396,34 @@ export class ChartComponent {
   });
 
   private readonly syncing = inject(ChartSync);
+
+  /** Charts the engine reduces along an x axis take drawings. */
+  protected readonly drawable = computed(() => ["line", "area", "candlestick", "ohlc"].includes(this.current()?.chart?.kind ?? ""));
+
+  /** Makes and edits drawings, which it saves in the layout. */
+  protected readonly editor = new DrawingEditor({
+    model: computed(() => this.model()),
+    frame: this.source.frame,
+    drawings: computed(() => this.current()?.chart?.drawings ?? []),
+    save: (drawings) => {
+      const layout = this.current();
+      const chart = layout?.chart;
+      if (layout !== null && chart !== undefined && chart !== null) {
+        this.layout.set({ ...layout, chart: { ...chart, drawings: [...drawings] } });
+      }
+    },
+    measure: (text) => this.measure(text, this.tokens().font)
+  });
+
+  protected removeDrawing(): void {
+    this.editor.remove();
+    this.plot().nativeElement.focus();
+  }
+
+  protected noteDone(text: string | null): void {
+    this.editor.noteDone(text);
+    this.plot().nativeElement.focus();
+  }
   /** The pointer over the plot, in pixels. */
   private readonly hover = signal<{ readonly x: number; readonly y: number } | null>(null);
   protected readonly panning = signal(false);
@@ -535,6 +620,10 @@ export class ChartComponent {
     }
     this.plot().nativeElement.setPointerCapture(event.pointerId);
     const at = this.local(event);
+    // A press that makes, picks or grabs a drawing is neither a pan nor a brush.
+    if (!event.shiftKey && this.editor.down(at)) {
+      return;
+    }
     this.drag = { start: at.x, brush: event.shiftKey, range, perPixel: (range[1] - range[0]) / model.plot.w };
     if (event.shiftKey) {
       this.brush.set(null);
@@ -552,7 +641,7 @@ export class ChartComponent {
       this.syncing.pointer.set({ group, x: x.invert(at.x), source: this });
     }
     const drag = this.drag;
-    if (drag === null || x === null) {
+    if (this.editor.move(at) || drag === null || x === null) {
       return;
     }
     if (drag.brush) {
@@ -576,7 +665,8 @@ export class ChartComponent {
 
   /** Ends a pan, or a brush, which then snaps to what it selects and names the filters selecting it. */
   protected onPointerUp(event: PointerEvent): void {
-    if (this.endDrag(event)?.brush !== true) {
+    const drag = this.endDrag(event);
+    if (this.editor.up() || drag?.brush !== true) {
       return;
     }
     const brush = this.brush();
@@ -645,7 +735,13 @@ export class ChartComponent {
         this.reset();
         return;
       case "clear":
-        this.clearBrush();
+        // Escape first drops a drawing in progress or the selection, then the brush.
+        if (!this.editor.cancel()) {
+          this.clearBrush();
+        }
+        return;
+      case "remove":
+        this.editor.remove();
         return;
     }
   }
@@ -693,6 +789,6 @@ export class ChartComponent {
       element.style.height = `${String(model.height)}px`;
     }
     context.setTransform(ratio, 0, 0, ratio, 0, 0);
-    paintChart(context, model, this.tokens());
+    paintChart(context, model, this.tokens(), { shapes: this.editor.shapes(), selected: this.editor.selected() });
   }
 }

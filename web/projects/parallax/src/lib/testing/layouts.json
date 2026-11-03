@@ -175,6 +175,7 @@
   {
     "chart": {
       "axis": "trading",
+      "drawings": [],
       "hidden": [
         "volume AAPL"
       ],
@@ -221,6 +222,53 @@
   {
     "chart": {
       "axis": "value",
+      "drawings": [
+        {
+          "from": {
+            "x": "2026-01-05",
+            "y": 101.25
+          },
+          "kind": "trend",
+          "to": {
+            "x": "2026-03-02",
+            "y": 118.0
+          }
+        },
+        {
+          "kind": "horizontal",
+          "y": 110.5
+        },
+        {
+          "from": {
+            "x": "2026-01-05",
+            "y": 90.0
+          },
+          "kind": "fibonacci",
+          "to": {
+            "x": "2026-02-02",
+            "y": 120.0
+          }
+        },
+        {
+          "from": {
+            "x": "2026-02-02",
+            "y": 100.0
+          },
+          "kind": "rectangle",
+          "to": {
+            "x": "2026-02-27",
+            "y": 112.0
+          }
+        },
+        {
+          "at": {
+            "x": "2026-02-13",
+            "y": 115.0
+          },
+          "kind": "note",
+          "text": "Earnings: \"beat\""
+        }
+      ],
       "hidden": [],
       "horizontal": false,
       "indicators": [
@@ -314,6 +362,7 @@
   {
     "chart": {
       "axis": "value",
+      "drawings": [],
       "hidden": [],
       "horizontal": false,
       "indicators": [],

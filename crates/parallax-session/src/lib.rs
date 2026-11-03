@@ -408,6 +408,7 @@ fn build_view(
             view,
             layout: chart.clone(),
             formats: resolved.config.formats,
+            anchors: resolved.anchors,
             window: None,
         })));
     }
@@ -610,9 +611,10 @@ impl Session {
                         && chart.view.config() == config
                     {
                         // Only how the chart is drawn changed, such as hidden series,
-                        // scales or formats: the reduction stays.
+                        // scales, formats or drawings: the reduction stays.
                         chart.layout = new.clone();
                         chart.formats = resolved.config.formats;
+                        chart.anchors = resolved.anchors;
                     } else {
                         // A chart rebuilds and keeps the window it was asked for.
                         let window = match &open.view {

@@ -609,3 +609,176 @@ mod indicators {
         );
     }
 }
+
+/// Drawings in chart frames: each anchor's place on the axis, from the engine,
+/// which alone can place a date on trading time.
+mod drawings {
+    use std::collections::HashMap;
+    use std::sync::{Arc, RwLock};
+
+    use arrow_array::RecordBatch;
+    use parallax_datagen::Dataset;
+    use parallax_datagen::prices::{Prices, PricesOptions};
+    use parallax_engine::TableOptions;
+    use parallax_protocol::v1::{
+        ChartFrame, OpenView, SetChartWindow, UpdateView, client_message, server_message::Body,
+    };
+    use parallax_session::{MemoryCatalog, Session, TableState};
+
+    use super::send;
+
+    fn session() -> (Session, RecordBatch) {
+        let prices = Prices::new(PricesOptions {
+            tickers: 1,
+            securities: 200,
+            ..PricesOptions::default()
+        })
+        .unwrap();
+        let batch = prices.batch(0..prices.num_rows());
+        let state = TableState::from_batches(
+            &batch.schema(),
+            std::slice::from_ref(&batch),
+            TableOptions::default(),
+            1,
+            1,
+        )
+        .unwrap();
+        let catalog = Arc::new(MemoryCatalog::new());
+        catalog.insert("prices", Arc::new(RwLock::new(state)));
+        (Session::new(catalog), batch)
+    }
+
+    fn layout(drawings: &str) -> String {
+        format!(
+            r#"{{"chart": {{"kind": "candlestick", "x": "date", "axis": "trading",
+                "ohlc": {{"open": "open", "high": "high", "low": "low", "close": "close"}},
+                "drawings": {drawings}}}}}"#
+        )
+    }
+
+    fn only_frame(replies: &[Body]) -> ChartFrame {
+        match replies {
+            [Body::ChartFrame(frame)] => frame.clone(),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn anchors_take_their_dates_places_on_the_trading_axis() {
+        let (mut session, _) = session();
+        // 2016-01-04 is the first trading day generated; a week later is five
+        // trading days on, past a weekend; 2016-01-18 is Martin Luther King Day,
+        // a holiday, which takes the place where the market next opens.
+        let drawings = r#"[
+            {"kind": "trend", "from": {"x": "2016-01-04", "y": 100}, "to": {"x": "2016-01-11", "y": 110}},
+            {"kind": "horizontal", "y": 105},
+            {"kind": "note", "at": {"x": "2016-01-18", "y": 99.5}, "text": "Holiday"}
+        ]"#;
+        send(
+            &mut session,
+            1,
+            client_message::Body::OpenView(OpenView {
+                view_id: 1,
+                dataset: "prices".into(),
+                parameters: HashMap::new(),
+                layout_json: layout(drawings),
+            }),
+        );
+        let frame = only_frame(&send(
+            &mut session,
+            2,
+            client_message::Body::SetChartWindow(SetChartWindow {
+                view_id: 1,
+                width: 800,
+                height: 300,
+                ..SetChartWindow::default()
+            }),
+        ));
+        let place = |frame: &ChartFrame, x: &str| {
+            frame
+                .anchors
+                .iter()
+                .find(|a| a.x_json == format!("\"{x}\""))
+                .map(|a| a.position)
+                .unwrap()
+        };
+        assert_eq!(frame.anchors.len(), 3);
+        let [first, week, holiday] = [
+            place(&frame, "2016-01-04"),
+            place(&frame, "2016-01-11"),
+            place(&frame, "2016-01-18"),
+        ];
+        assert_eq!(first, frame.extent_from);
+        assert_eq!(week - first, 5.0);
+        // The Tuesday after the holiday Monday is ten trading days on, and the
+        // holiday takes its place.
+        assert_eq!(holiday - first, 10.0);
+        // Moving a drawing changes only how the chart is drawn: the anchors move,
+        // and the answer still comes back.
+        // An x value shared by two drawings is placed once.
+        let moved = r#"[{"kind": "trend", "from": {"x": "2016-01-05", "y": 100}, "to": {"x": "2016-01-11", "y": 110}},
+                        {"kind": "note", "at": {"x": "2016-01-11", "y": 120}, "text": "Here"}]"#;
+        let frame = only_frame(&send(
+            &mut session,
+            3,
+            client_message::Body::UpdateView(UpdateView {
+                view_id: 1,
+                layout_json: layout(moved),
+                config_version: 3,
+            }),
+        ));
+        assert_eq!(frame.anchors.len(), 2);
+        assert_eq!(
+            (place(&frame, "2016-01-05"), place(&frame, "2016-01-11")),
+            (first + 1.0, week)
+        );
+        assert_eq!(frame.config_version, 3);
+    }
+
+    #[test]
+    fn drawings_that_do_not_fit_the_chart_are_refused() {
+        let (mut session, _) = session();
+        let open = |session: &mut Session, layout_json: String| {
+            send(
+                session,
+                1,
+                client_message::Body::OpenView(OpenView {
+                    view_id: 1,
+                    dataset: "prices".into(),
+                    parameters: HashMap::new(),
+                    layout_json,
+                }),
+            )
+        };
+        let refused = |replies: &[Body], words: &str| {
+            replies
+                .iter()
+                .any(|r| matches!(r, Body::Error(e) if e.message.contains(words)))
+        };
+        let replies = open(
+            &mut session,
+            layout(r#"[{"kind": "note", "at": {"x": "not a date", "y": 1}, "text": "x"}]"#),
+        );
+        assert!(refused(&replies, "date"), "{replies:?}");
+        let replies = open(
+            &mut session,
+            layout(
+                r#"[{"kind": "trend", "from": {"x": null, "y": 1}, "to": {"x": "2016-01-05", "y": 2}}]"#,
+            ),
+        );
+        assert!(refused(&replies, "needs an x value"), "{replies:?}");
+        let long = "x".repeat(501);
+        let replies = open(
+            &mut session,
+            layout(&format!(
+                r#"[{{"kind": "note", "at": {{"x": "2016-01-05", "y": 1}}, "text": "{long}"}}]"#
+            )),
+        );
+        assert!(refused(&replies, "at most 500"), "{replies:?}");
+        let replies = open(
+            &mut session,
+            r#"{"group_by": ["ticker"], "chart": {"kind": "bar", "drawings": [{"kind": "horizontal", "y": 1}]}}"#.into(),
+        );
+        assert!(refused(&replies, "drawings go on"), "{replies:?}");
+    }
+}

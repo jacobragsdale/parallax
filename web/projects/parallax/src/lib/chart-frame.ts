@@ -89,6 +89,8 @@ export interface ChartFrameData {
   readonly content: ChartContent;
   /** The indicators' lines, each for one series. */
   readonly indicators: readonly IndicatorLineData[];
+  /** Where each x value the layout's drawings are anchored to sits on the axis, by the value as JSON; NaN where the axis cannot place it. */
+  readonly anchors: ReadonlyMap<string, number>;
   /** When the chart window this frame answers was asked for, by `performance.now()`. */
   readonly requestedAtMs?: number;
 }
@@ -303,6 +305,7 @@ export function decodeChartFrame(frame: ChartFrame): ChartFrameData {
     extentTo: frame.extentTo,
     ticks: frame.ticks.map((t) => ({ x: t.x, label: t.label })),
     content: decodeContent(frame, new Columns(decoded)),
-    indicators: decodeIndicators(frame)
+    indicators: decodeIndicators(frame),
+    anchors: new Map(frame.anchors.map((a) => [a.xJson, a.position]))
   };
 }

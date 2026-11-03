@@ -283,7 +283,7 @@ fn chart_frames_carry_reduced_data_and_exact_text() {
 
 /// The WebAssembly test suite checks the same value, so both builds must answer
 /// byte for byte the same.
-pub const TRANSCRIPT_FINGERPRINT: u64 = 2_290_088_687_113_481_011;
+pub const TRANSCRIPT_FINGERPRINT: u64 = 10_114_224_339_110_833_939;
 
 #[test]
 fn transcript_fingerprint_is_stable() {

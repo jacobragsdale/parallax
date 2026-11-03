@@ -242,6 +242,17 @@ message ChartFrame {
   // indicator_lines), x, y (NaN at a break), x_text (null at a break) and y_text.
   // Empty without indicators.
   bytes indicator_batch = 19;
+  // Where each distinct x value the layout's drawings are anchored to sits on
+  // the axis.
+  repeated ChartAnchor anchors = 20;
+}
+
+// An x value a drawing is anchored to, and its place on the axis.
+message ChartAnchor {
+  // The value as JSON, as the layout gave it.
+  string x_json = 1;
+  // Its axis position, NaN for a value the axis cannot place.
+  double position = 2;
 }
 
 // One line of an indicator, for one series.

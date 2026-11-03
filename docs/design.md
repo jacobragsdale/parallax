@@ -378,6 +378,17 @@ shares a price's colour. The tooltip lists each indicator line's value at the
 crosshair: on a candle, at the last row of its bucket, the one its close comes
 from, and under that row's own date when it differs from the crosshair's.
 
+Drawings (trend lines, horizontal lines, Fibonacci retracements, rectangles
+and notes) are saved in the layout, anchored to data rather than to pixels:
+each anchor holds an x value of the x column, exactly as the frame's points
+carry it, and a price. A new anchor snaps to the nearest point or candle, and
+its price is rounded to what a pixel tells apart. The engine places every
+anchored x value on the axis and sends the positions with each frame, because
+only it can place a date on trading time, so a drawing stays with its data
+however the chart is zoomed, panned or its axis placed. Changing a drawing is a
+change of how the chart is drawn, so the reduction stays and only the
+positions are sent again.
+
 A candle at either edge of the visible range keeps its whole bucket, so panning
 never changes its prices, and each price comes from a row that has one. Minute
 buckets are cut by each instant's own offset, so the repeated autumn hour gets

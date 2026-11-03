@@ -13,8 +13,22 @@ export type { CandleData, ChartContent, ChartFrameData, ChartTickData, Histogram
 export { CellFlag, decodeFrame, decimalFromWords, FrameError } from "./lib/frame";
 export type { CellValue, DistinctValue, FrameColumn, FrameData, GroupKey, TreeRows } from "./lib/frame";
 export { exactDecimal, isNegativeText, pathValue } from "./lib/format";
-export { AGGREGATES, CHART_KINDS, FILTER_OPS, INDICATOR_KINDS, LAYOUT_VERSION, SHOW_AS, TREE_WIDTH_KEY, checkLayout, layoutSchema, measureWidthKey, parseLayout } from "./lib/layout";
-export type { Layout, LayoutChart, LayoutCheck, LayoutFilter, LayoutFormat, LayoutIndicator, LayoutInput, LayoutMeasure, LayoutScalar } from "./lib/layout";
+export {
+  AGGREGATES,
+  CHART_KINDS,
+  DRAWING_KINDS,
+  FILTER_OPS,
+  INDICATOR_KINDS,
+  LAYOUT_VERSION,
+  MAX_NOTE,
+  SHOW_AS,
+  TREE_WIDTH_KEY,
+  checkLayout,
+  layoutSchema,
+  measureWidthKey,
+  parseLayout
+} from "./lib/layout";
+export type { Layout, LayoutChart, LayoutCheck, LayoutFilter, LayoutAnchor, LayoutDrawing, LayoutFormat, LayoutIndicator, LayoutInput, LayoutMeasure, LayoutScalar } from "./lib/layout";
 export { CHART_COLORS, THEMES, TOKENS, readChartColors, readTheme } from "./lib/theme";
 export type { ChartColors, Theme, ThemeName } from "./lib/theme";
 export { GridComponent } from "./lib/grid/grid.component";

@@ -265,6 +265,25 @@
         }
       ]
     },
+    "LayoutAnchor": {
+      "additionalProperties": false,
+      "description": "A point a drawing is anchored to: a value of the chart's x column, as in a\nfilter, and a value on the price's axis. Drawings stay with the data however\nthe chart is zoomed or its axis placed.",
+      "properties": {
+        "x": {
+          "description": "The x value: a date, an instant or a number."
+        },
+        "y": {
+          "description": "The value on the price's axis.",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "type": "object"
+    },
     "LayoutChart": {
       "additionalProperties": false,
       "description": "A chart, in a layout. Bar charts and heatmaps draw the layout's grouped view;\nthe other kinds are reduced by the engine to the plot's pixels.",
@@ -273,6 +292,14 @@
           "$ref": "#/$defs/XAxisName",
           "default": "value",
           "description": "How x values are placed."
+        },
+        "drawings": {
+          "default": [],
+          "description": "Lines, levels, rectangles and notes drawn over the price.",
+          "items": {
+            "$ref": "#/$defs/LayoutDrawing"
+          },
+          "type": "array"
         },
         "hidden": {
           "default": [],
@@ -375,6 +402,128 @@
         "kind"
       ],
       "type": "object"
+    },
+    "LayoutDrawing": {
+      "description": "A drawing on a chart, in a layout.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A line between two points.",
+          "properties": {
+            "from": {
+              "$ref": "#/$defs/LayoutAnchor",
+              "description": "One end."
+            },
+            "kind": {
+              "const": "trend",
+              "type": "string"
+            },
+            "to": {
+              "$ref": "#/$defs/LayoutAnchor",
+              "description": "The other end."
+            }
+          },
+          "required": [
+            "kind",
+            "from",
+            "to"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A line across the chart at a value.",
+          "properties": {
+            "kind": {
+              "const": "horizontal",
+              "type": "string"
+            },
+            "y": {
+              "description": "The value on the price's axis.",
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "kind",
+            "y"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Fibonacci retracement levels between two points: 0 %, 23.6 %, 38.2 %,\n50 %, 61.8 %, 78.6 % and 100 % of the way from one to the other.",
+          "properties": {
+            "from": {
+              "$ref": "#/$defs/LayoutAnchor",
+              "description": "Where the move starts."
+            },
+            "kind": {
+              "const": "fibonacci",
+              "type": "string"
+            },
+            "to": {
+              "$ref": "#/$defs/LayoutAnchor",
+              "description": "Where it ends."
+            }
+          },
+          "required": [
+            "kind",
+            "from",
+            "to"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A rectangle between two corners.",
+          "properties": {
+            "from": {
+              "$ref": "#/$defs/LayoutAnchor",
+              "description": "One corner."
+            },
+            "kind": {
+              "const": "rectangle",
+              "type": "string"
+            },
+            "to": {
+              "$ref": "#/$defs/LayoutAnchor",
+              "description": "The opposite corner."
+            }
+          },
+          "required": [
+            "kind",
+            "from",
+            "to"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A text note at a point.",
+          "properties": {
+            "at": {
+              "$ref": "#/$defs/LayoutAnchor",
+              "description": "Where it is."
+            },
+            "kind": {
+              "const": "note",
+              "type": "string"
+            },
+            "text": {
+              "description": "What it says.",
+              "maxLength": 500,
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "at",
+            "text"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "LayoutExpanded": {
       "additionalProperties": false,

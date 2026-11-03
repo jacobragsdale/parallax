@@ -98,6 +98,23 @@ const indicatorSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("volume") })
 ]);
 
+/** The kinds of drawing a chart holds. */
+export const DRAWING_KINDS = ["trend", "horizontal", "fibonacci", "rectangle", "note"] as const;
+
+/** The longest note a drawing holds, in characters, as in the engine. */
+export const MAX_NOTE = 500;
+
+/** A point a drawing is anchored to: a value of the x column, as in a filter, and a value on the price's axis. */
+const anchorSchema = z.strictObject({ x: z.union([z.string(), z.number(), z.boolean()]), y: z.number() });
+
+const drawingSchema = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("trend"), from: anchorSchema, to: anchorSchema }),
+  z.strictObject({ kind: z.literal("horizontal"), y: z.number() }),
+  z.strictObject({ kind: z.literal("fibonacci"), from: anchorSchema, to: anchorSchema }),
+  z.strictObject({ kind: z.literal("rectangle"), from: anchorSchema, to: anchorSchema }),
+  z.strictObject({ kind: z.literal("note"), at: anchorSchema, text: z.string().check(z.maxLength(MAX_NOTE)) })
+]);
+
 const chartSchema = z.strictObject({
   kind: z.enum(CHART_KINDS),
   x: z._default(z.string(), ""),
@@ -112,7 +129,8 @@ const chartSchema = z.strictObject({
   range: orNull(z.strictObject({ from: z.number(), to: z.number() })),
   hidden: z._default(z.array(z.string()), []),
   indicators: z._default(z.array(indicatorSchema), []),
-  volume: orNull(name)
+  volume: orNull(name),
+  drawings: z._default(z.array(drawingSchema), [])
 });
 
 /** The schema of a layout document. Unknown fields are errors, as in Rust. */
@@ -152,6 +170,10 @@ export type LayoutFilter = z.output<typeof filterSchema>;
 export type LayoutChart = z.output<typeof chartSchema>;
 /** A technical-analysis indicator of a chart. */
 export type LayoutIndicator = z.output<typeof indicatorSchema>;
+/** A drawing on a chart. */
+export type LayoutDrawing = z.output<typeof drawingSchema>;
+/** A point a drawing is anchored to. */
+export type LayoutAnchor = z.output<typeof anchorSchema>;
 /** A display format. */
 export type LayoutFormat = z.output<typeof formatSchema>;
 /** A JSON scalar in a filter or group path. */

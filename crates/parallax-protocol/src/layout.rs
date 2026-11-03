@@ -302,6 +302,78 @@ impl LayoutIndicator {
     }
 }
 
+/// A point a drawing is anchored to: a value of the chart's x column, as in a
+/// filter, and a value on the price's axis. Drawings stay with the data however
+/// the chart is zoomed or its axis placed.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LayoutAnchor {
+    /// The x value: a date, an instant or a number.
+    pub x: Value,
+    /// The value on the price's axis.
+    pub y: f64,
+}
+
+/// The longest note a drawing holds, in characters.
+pub const MAX_NOTE: usize = 500;
+
+/// A drawing on a chart, in a layout.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum LayoutDrawing {
+    /// A line between two points.
+    Trend {
+        /// One end.
+        from: LayoutAnchor,
+        /// The other end.
+        to: LayoutAnchor,
+    },
+    /// A line across the chart at a value.
+    Horizontal {
+        /// The value on the price's axis.
+        y: f64,
+    },
+    /// Fibonacci retracement levels between two points: 0 %, 23.6 %, 38.2 %,
+    /// 50 %, 61.8 %, 78.6 % and 100 % of the way from one to the other.
+    Fibonacci {
+        /// Where the move starts.
+        from: LayoutAnchor,
+        /// Where it ends.
+        to: LayoutAnchor,
+    },
+    /// A rectangle between two corners.
+    Rectangle {
+        /// One corner.
+        from: LayoutAnchor,
+        /// The opposite corner.
+        to: LayoutAnchor,
+    },
+    /// A text note at a point.
+    Note {
+        /// Where it is.
+        at: LayoutAnchor,
+        /// What it says.
+        #[schemars(length(max = 500))]
+        text: String,
+    },
+}
+
+impl LayoutDrawing {
+    /// Its anchors, in order.
+    #[must_use]
+    pub fn anchors(&self) -> Vec<&LayoutAnchor> {
+        match self {
+            Self::Trend { from, to }
+            | Self::Fibonacci { from, to }
+            | Self::Rectangle { from, to } => {
+                vec![from, to]
+            }
+            Self::Horizontal { .. } => Vec::new(),
+            Self::Note { at, .. } => vec![at],
+        }
+    }
+}
+
 /// A chart, in a layout. Bar charts and heatmaps draw the layout's grouped view;
 /// the other kinds are reduced by the engine to the plot's pixels.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -349,6 +421,9 @@ pub struct LayoutChart {
     /// The volume column, which a VWAP and volume read.
     #[serde(default)]
     pub volume: Option<String>,
+    /// Lines, levels, rectangles and notes drawn over the price.
+    #[serde(default)]
+    pub drawings: Vec<LayoutDrawing>,
 }
 
 impl LayoutChart {
@@ -889,6 +964,9 @@ pub struct ResolvedLayout {
     pub chart: Option<ChartConfig>,
     /// Group paths and whether each is expanded.
     pub expanded: Vec<(Vec<Scalar>, bool)>,
+    /// The distinct x values the chart's drawings are anchored to: as the layout
+    /// gave them in JSON, and read as values of the x column.
+    pub anchors: Vec<(String, Scalar)>,
 }
 
 impl Layout {
@@ -1088,12 +1166,58 @@ impl Layout {
             .chart
             .as_ref()
             .and_then(|c| c.to_engine(&config.filters));
+        let anchors = match &self.chart {
+            Some(c) if !c.drawings.is_empty() => drawing_anchors(table, c)?,
+            _ => Vec::new(),
+        };
         Ok(ResolvedLayout {
             config,
             chart,
             expanded,
+            anchors,
         })
     }
+}
+
+/// A chart's drawings' distinct anchors, read as values of its x column.
+fn drawing_anchors(
+    table: &Table,
+    chart: &LayoutChart,
+) -> Result<Vec<(String, Scalar)>, LayoutError> {
+    if chart.kind.reduced().is_none() {
+        return Err(value_error(
+            &chart.x,
+            "drawings go on line, area, candlestick and OHLC charts",
+        ));
+    }
+    if let Some(LayoutDrawing::Note { text, .. }) = chart
+        .drawings
+        .iter()
+        .find(|d| matches!(d, LayoutDrawing::Note { text, .. } if text.chars().count() > MAX_NOTE))
+    {
+        return Err(value_error(
+            &chart.x,
+            format!(
+                "a drawing's note holds at most {MAX_NOTE} characters, not {}",
+                text.chars().count()
+            ),
+        ));
+    }
+    let ty = column_type(table, &chart.x)?;
+    let mut anchors: Vec<(String, Scalar)> = Vec::new();
+    for anchor in chart.drawings.iter().flat_map(LayoutDrawing::anchors) {
+        let json = anchor.x.to_string();
+        if anchors.iter().any(|(j, _)| *j == json) {
+            continue;
+        }
+        match scalar(&chart.x, &ty, &anchor.x)? {
+            Scalar::Null => {
+                return Err(value_error(&chart.x, "a drawing's anchor needs an x value"));
+            }
+            value => anchors.push((json, value)),
+        }
+    }
+    Ok(anchors)
 }
 
 /// Converts one engine value of `column` to JSON. Decimals become strings so that no
@@ -1428,7 +1552,12 @@ mod tests {
                       "indicators": [{"kind": "sma"}, {"kind": "bollinger", "period": 10, "deviations": 1.5},
                                      {"kind": "rsi"}, {"kind": "macd", "fast": 5, "slow": 35, "signal": 5},
                                      {"kind": "atr"}, {"kind": "stochastic", "k": 9}, {"kind": "vwap"},
-                                     {"kind": "volume"}, {"kind": "ema", "period": 50}, {"kind": "wma"}]}
+                                     {"kind": "volume"}, {"kind": "ema", "period": 50}, {"kind": "wma"}],
+                      "drawings": [{"kind": "trend", "from": {"x": "2026-01-05", "y": 101.25}, "to": {"x": "2026-03-02", "y": 118}},
+                                   {"kind": "horizontal", "y": 110.5},
+                                   {"kind": "fibonacci", "from": {"x": "2026-01-05", "y": 90}, "to": {"x": "2026-02-02", "y": 120}},
+                                   {"kind": "rectangle", "from": {"x": "2026-02-02", "y": 100}, "to": {"x": "2026-02-27", "y": 112}},
+                                   {"kind": "note", "at": {"x": "2026-02-13", "y": 115}, "text": "Earnings: \"beat\""}]}
         }"#;
         [
             Layout::default(),

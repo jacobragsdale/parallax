@@ -64,7 +64,8 @@ function frame(indicators: readonly IndicatorLineData[]): ChartFrameData {
     extentTo: 10,
     ticks: [],
     content: { kind: "candles", candles: CANDLES },
-    indicators
+    indicators,
+    anchors: new Map()
   };
 }
 

@@ -17,7 +17,7 @@ function chart(partial: Partial<LayoutChart> & Pick<LayoutChart, "kind">): Layou
 }
 
 function frame(content: ChartContent, xFrom = 0, xTo = 10): ChartFrameData {
-  return { viewId: 1, configVersion: 0n, loadVersion: 1n, sourceAsOfMicros: 0n, pushed: false, xFrom, xTo, extentFrom: xFrom, extentTo: xTo, ticks: [], content, indicators: [] };
+  return { viewId: 1, configVersion: 0n, loadVersion: 1n, sourceAsOfMicros: 0n, pushed: false, xFrom, xTo, extentFrom: xFrom, extentTo: xTo, ticks: [], content, indicators: [], anchors: new Map() };
 }
 
 function model(c: LayoutChart, f: ChartFrameData): ChartModel {

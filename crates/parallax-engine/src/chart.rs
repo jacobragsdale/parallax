@@ -825,6 +825,21 @@ impl ChartView {
         starts
     }
 
+    /// The axis position of a value of the x column, such as a drawing's anchor,
+    /// or `None` for a value of another type, a null or a NaN.
+    #[must_use]
+    pub fn position(&self, value: &Scalar) -> Option<f64> {
+        let key = match *value {
+            Scalar::Int64(v) => Key::Int(v),
+            Scalar::Float64(v) => Key::float(v),
+            Scalar::Decimal(v) => Key::Decimal(v),
+            Scalar::Date32(d) => Key::Date(d),
+            Scalar::Timestamp(t) => Key::Ts(t),
+            _ => return None,
+        };
+        self.placement.position(key)
+    }
+
     /// The x range of the data, in axis positions, or `None` without rows.
     #[must_use]
     pub fn x_extent(&self) -> Option<(f64, f64)> {

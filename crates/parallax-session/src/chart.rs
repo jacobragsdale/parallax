@@ -14,13 +14,16 @@ use parallax_engine::format::{Format, MAX_DECIMALS, OVERFLOW_TEXT};
 use parallax_engine::{ColumnType, Formatter, Scalar, Table};
 use parallax_protocol::ipc::encode_batch;
 use parallax_protocol::layout::LayoutChart;
-use parallax_protocol::v1::{ChartFrame, ChartIndicatorLine, ChartSeries, ChartTick};
+use parallax_protocol::v1::{ChartAnchor, ChartFrame, ChartIndicatorLine, ChartSeries, ChartTick};
 
 /// A chart a view shows, and the window last asked for.
 pub(crate) struct ChartState {
     pub(crate) view: ChartView,
     pub(crate) layout: LayoutChart,
     pub(crate) formats: BTreeMap<String, Format>,
+    /// The distinct x values the layout's drawings are anchored to, as JSON and as
+    /// values of the x column.
+    pub(crate) anchors: Vec<(String, Scalar)>,
     pub(crate) window: Option<ChartRequest>,
 }
 
@@ -142,6 +145,14 @@ pub(crate) fn chart_frame(table: &Table, state: &ChartState) -> Result<ChartFram
         x_to: x.1,
         extent_from: extent.0,
         extent_to: extent.1,
+        anchors: state
+            .anchors
+            .iter()
+            .map(|(json, value)| ChartAnchor {
+                x_json: json.clone(),
+                position: state.view.position(value).unwrap_or(f64::NAN),
+            })
+            .collect(),
         ticks: ticks
             .into_iter()
             .map(|t| ChartTick {
