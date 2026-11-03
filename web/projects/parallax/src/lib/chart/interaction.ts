@@ -4,9 +4,11 @@
  * and panning move the x range, and the filters a brushed range selects.
  */
 
-import type { CandleData, ChartFrameData, SeriesData } from "../chart-frame";
+import type { CandleData, ChartFrameData, IndicatorLineData, SeriesData } from "../chart-frame";
 import type { LayoutFilter, LayoutScalar } from "../layout";
+import type { IndicatorStyle } from "./indicators";
 import type { ChartModel, Hit, Mark } from "./model";
+import type { Scale } from "./scale";
 
 /** A row of a tooltip: the value leads, the label follows, the series' colour keys it. */
 export interface TipRow {
@@ -41,13 +43,13 @@ export function nearestIndex(xs: Float64Array, x: number): number {
   return before >= 0 && Math.abs((xs[before] ?? 0) - x) <= Math.abs((xs[low] ?? 0) - x) ? before : low;
 }
 
-/** Whether point `i` of `s` is drawn, rather than a break between segments. */
 /** A line with text per point: a series or an indicator's line. */
 interface Points {
   readonly x: Float64Array;
   readonly yText: readonly (string | null)[];
 }
 
+/** Whether point `i` of `s` is drawn, rather than a break between segments. */
 function drawn(s: Points, i: number): boolean {
   return (s.yText[i] ?? null) !== null;
 }
@@ -187,32 +189,49 @@ export function indicatorRows(frame: ChartFrameData, model: ChartModel, hidden: 
   const bucket = bucketAt(frame, x);
   return frame.indicators.flatMap((line, i): TipRow[] => {
     const style = model.indicators[i];
-    if (style === undefined || hidden.includes(style.group)) {
+    if (style === undefined || hidden.includes(style.group) || hidden.includes(style.follows)) {
       return [];
     }
-    const at = bucket === null ? nearestDrawn(line, x) : lastDrawnIn(line, bucket);
-    if (bucket !== null) {
-      const [near, value] = [line.x[at], line.yText[at]];
-      return near === undefined || value === null || value === undefined ? [] : [{ value, label: `${style.label}, ${line.xText[at] ?? ""}`, color: style.color }];
-    }
-    const [near, value] = [line.x[at], line.yText[at]];
-    if (near === undefined || value === null || value === undefined || Math.abs(scale.map(near) - scale.map(x)) > NEAR) {
-      return [];
-    }
-    const label = Math.abs(scale.map(near) - scale.map(x)) < 0.5 ? style.label : `${style.label}, ${line.xText[at] ?? ""}`;
-    return [{ value, label, color: style.color }];
+    return bucket === null ? readNear(line, style, scale, x) : readBucket(line, style, bucket);
   });
 }
 
-/** The bucket of the candle at axis position `x`, as its start and the next one's, or null on a chart without candles. */
+/** An indicator line's value in a candle's bucket, at its last row, under that row's date. */
+function readBucket(line: IndicatorLineData, style: IndicatorStyle, bucket: Range): TipRow[] {
+  const at = lastDrawnIn(line, bucket);
+  const [near, value] = [line.x[at], line.yText[at]];
+  return near === undefined || value === null || value === undefined ? [] : [{ value, label: `${style.label}, ${line.xText[at] ?? ""}`, color: style.color }];
+}
+
+/** An indicator line's value at its drawn point nearest `x`, within a few pixels, under its own x if that differs. */
+function readNear(line: IndicatorLineData, style: IndicatorStyle, scale: Scale, x: number): TipRow[] {
+  const at = nearestDrawn(line, x);
+  const [near, value] = [line.x[at], line.yText[at]];
+  if (near === undefined || value === null || value === undefined || Math.abs(scale.map(near) - scale.map(x)) > NEAR) {
+    return [];
+  }
+  const label = Math.abs(scale.map(near) - scale.map(x)) < 0.5 ? style.label : `${style.label}, ${line.xText[at] ?? ""}`;
+  return [{ value, label, color: style.color }];
+}
+
+/** The bucket holding axis position `x`, as its start and the next one's, or null outside every bucket or without candles. */
 function bucketAt(frame: ChartFrameData, x: number): Range | null {
   if (frame.content.kind !== "candles") {
     return null;
   }
   const c = frame.content.candles;
-  const i = nearestIndex(c.from, x);
-  const [from, to] = [c.from[i], c.to[i]];
-  return from === undefined || to === undefined ? null : [from, to];
+  // The last bucket starting at or before `x`, if `x` is before its end.
+  let [low, high] = [0, c.from.length];
+  while (low < high) {
+    const mid = (low + high) >> 1;
+    if ((c.from[mid] ?? 0) <= x) {
+      low = mid + 1;
+    } else {
+      high = mid;
+    }
+  }
+  const [from, to] = [c.from[low - 1], c.to[low - 1]];
+  return from === undefined || to === undefined || x >= to ? null : [from, to];
 }
 
 /** The index of the last drawn point of `line` inside `[from, to)`, or -1 if none is. */

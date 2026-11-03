@@ -30,8 +30,10 @@ export interface IndicatorStyle {
   readonly pane: number | null;
   /** Bars from zero rather than a line, for MACD's histogram. */
   readonly columns: boolean;
-  /** A thinner, dashed line, for Bollinger Bands' middle. */
+  /** A dashed line: Bollinger Bands' middle, or a pane's second line when several series share its colours. */
   readonly dashed: boolean;
+  /** The legend label of the series it follows, which hides it too, or "" for none. */
+  readonly follows: string;
 }
 
 /** A pane of its own for one indicator. */
@@ -121,40 +123,71 @@ function paneIndexes(chart: LayoutChart): readonly (number | null)[] {
  * histogram the up and down colours.
  */
 export function indicatorStyles(chart: LayoutChart, frame: ChartFrameData, colors: ChartColors, muted: string, plotted: number): readonly IndicatorStyle[] {
+  // Lines follow a series of a line chart, whose legend label is its price column and the series' value.
+  const price = chart.y[0] ?? "";
   const panes = paneIndexes(chart);
   const groups = new Map<string, number>();
   const order = [...new Set(frame.indicators.map((l) => l.series))];
   const many = order.length > 1;
+  const color = (slot: number): string => colors.series[slot] ?? muted;
   return frame.indicators.map((line): IndicatorStyle => {
     const indicator = chart.indicators[line.indicator] ?? { kind: "volume" };
-    const name = indicatorLabel(indicator);
     const series = many && line.series !== "" ? ` ${line.series}` : "";
+    const group = `${indicatorLabel(indicator)}${series}`;
+    const follows = line.series === "" || price === "" ? "" : `${price} ${line.series}`;
     const pane = panes[line.indicator] ?? null;
-    const group = `${name}${series}`;
     if (pane === null) {
       if (!groups.has(group)) {
         groups.set(group, groups.size);
       }
-      const slot = plotted + (groups.get(group) ?? 0);
-      const part = indicator.kind === "bollinger" ? ` ${line.line}` : "";
-      return { label: `${group}${part}`, group, color: colors.series[slot] ?? muted, pane, columns: false, dashed: line.line === "middle" };
+      return overlayStyle(indicator, line.line, group, follows, color(plotted + (groups.get(group) ?? 0)));
     }
-    // In a pane, a series keeps its place's slot; with one series, a second line such as MACD's signal takes the next.
-    const second = line.line === "signal" || line.line === "d" ? 1 : 0;
-    const slot = many ? order.indexOf(line.series) : second;
-    const label = `${LINE_NAMES[line.line] ?? name}${series}`;
-    return { label, group, color: colors.series[slot] ?? muted, pane, columns: line.line === "histogram", dashed: false };
+    return paneStyle(line, { group, follows, pane, series, many, order, color });
   });
 }
 
-/** Pixel heights of panes: about a fifth of the plot each, never leaving the price less than two fifths. */
+function overlayStyle(indicator: LayoutIndicator, line: string, group: string, follows: string, color: string): IndicatorStyle {
+  const part = indicator.kind === "bollinger" ? ` ${line}` : "";
+  return { label: `${group}${part}`, group, color, pane: null, columns: false, dashed: line === "middle", follows };
+}
+
+/** What a pane's line needs to know of its neighbours. */
+interface PaneContext {
+  readonly group: string;
+  readonly follows: string;
+  readonly pane: number;
+  readonly series: string;
+  readonly many: boolean;
+  readonly order: readonly string[];
+  readonly color: (slot: number) => string;
+}
+
+/**
+ * In a pane, a second line such as MACD's signal takes the next slot; with several series, each keeps its own slot and
+ * the second line is dashed instead.
+ */
+function paneStyle(line: IndicatorLineData, c: PaneContext): IndicatorStyle {
+  const second = line.line === "signal" || line.line === "d";
+  const slot = c.many ? c.order.indexOf(line.series) : Number(second);
+  const label = `${LINE_NAMES[line.line] ?? c.group}${c.series}`;
+  return { label, group: c.group, color: c.color(slot), pane: c.pane, columns: line.line === "histogram", dashed: c.many && second, follows: c.follows };
+}
+
+/** The shortest pane worth drawing. */
+const SHORTEST = 16;
+
+/**
+ * Pixel heights of panes: about a fifth of the plot each, never leaving the price less than two fifths. Zero when that
+ * leaves panes too short to read, and then none are drawn.
+ */
 export function paneHeight(count: number, available: number): number {
   if (count === 0) {
     return 0;
   }
   const wanted = Math.min(140, Math.max(48, Math.round(available / 5)));
   const most = (available * 0.6) / count - PANE_GAP;
-  return Math.max(24, Math.min(wanted, most));
+  const height = Math.min(wanted, most);
+  return height < SHORTEST ? 0 : height;
 }
 
 /** Pixels between the price and the first pane, and between panes. */

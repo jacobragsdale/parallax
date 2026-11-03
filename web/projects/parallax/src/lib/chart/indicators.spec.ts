@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { CandleData, ChartFrameData, IndicatorLineData } from "../chart-frame";
+import type { CandleData, ChartFrameData, IndicatorLineData, SeriesData } from "../chart-frame";
 import { parseLayout } from "../layout";
 import type { LayoutChart } from "../layout";
 import { CHART_COLORS } from "../theme";
@@ -111,12 +111,25 @@ describe("indicator labels, panes and styles", () => {
     expect(indicatorStyles(c, f, COLORS, "#999", 1)[0]?.color).toBe(COLORS.series[1]);
   });
 
+  it("keeps each series' colour in a pane shared by several, dashing the second line, and ties lines to their series", () => {
+    const lines = chart([{ kind: "macd" }], "line");
+    const both = frame([line(0, "macd", [[0, 1]], "AAPL"), line(0, "signal", [[0, 1]], "AAPL"), line(0, "macd", [[0, 1]], "MSFT"), line(0, "signal", [[0, 1]], "MSFT")]);
+    const styles = indicatorStyles({ ...lines, y: ["close"] }, both, COLORS, "#999", 2);
+    expect(styles.map((s) => [s.label, s.color, s.dashed, s.follows])).toEqual([
+      ["MACD AAPL", COLORS.series[0], false, "close AAPL"],
+      ["Signal AAPL", COLORS.series[0], true, "close AAPL"],
+      ["MACD MSFT", COLORS.series[1], false, "close MSFT"],
+      ["Signal MSFT", COLORS.series[1], true, "close MSFT"]
+    ]);
+  });
+
   it("keeps panes between a fifth and two fifths of the height, and fits their ranges", () => {
     expect(paneHeight(0, 400)).toBe(0);
     expect(paneHeight(1, 400)).toBe(80);
     expect(paneHeight(1, 1000)).toBe(140);
-    // Five panes in 400 pixels share three fifths of it.
+    // Five panes in 400 pixels share three fifths of it; four in 160 would be too short to read, so there are none.
     expect(paneHeight(5, 400)).toBeCloseTo(240 / 5 - 10);
+    expect(paneHeight(4, 160)).toBe(0);
     const [rsi, macd, volume] = paneSpecs(chart([{ kind: "rsi" }, { kind: "macd" }, { kind: "volume" }]));
     if (rsi === undefined || macd === undefined || volume === undefined) {
       throw new Error("no panes");
@@ -238,5 +251,60 @@ describe("panes and overlays in the draw model", () => {
       ["Histogram, day 9", "4.00"]
     ]);
     expect(indicatorRows(f, m, ["BB 20 2"], 1).map((r) => r.label)[0]).toBe("RSI 14, day 4");
+    // Late in the first week is still the first week: its candle, its last day.
+    expect(indicatorRows(f, m, ["BB 20 2"], 4.8).map((r) => r.label)[0]).toBe("RSI 14, day 4");
+  });
+
+  it("washes between the bands only where neither has a gap", () => {
+    const gappy = DAYS.map((d): readonly [number, number] => [d, d === 5 ? Number.NaN : 20]);
+    const low = DAYS.map((d): readonly [number, number] => [d, d === 5 ? Number.NaN : 2]);
+    const g = model(chart([{ kind: "bollinger" }]), frame([line(0, "upper", gappy), line(0, "middle", gappy), line(0, "lower", low)]));
+    // Two washes, one each side of the gap, none across it.
+    const bands = kinds(g.marks, "band");
+    expect(bands.length).toBe(2);
+    expect(bands.every((b) => b.upper.length === b.lower.length)).toBe(true);
+  });
+});
+
+describe("indicators over a line chart of several series", () => {
+  it("hides a series' indicators with it", () => {
+    const c = parseLayout({ chart: { kind: "line", x: "date", y: ["close"], series: "ticker", indicators: [{ kind: "sma" }] } }).chart;
+    if (c === null) {
+      throw new Error("no chart");
+    }
+    const series = (label: string, y: number): SeriesData => ({
+      label,
+      column: "close",
+      right: false,
+      x: Float64Array.from(DAYS),
+      y: Float64Array.from(DAYS.map(() => y)),
+      xText: DAYS.map(String),
+      yText: DAYS.map(() => String(y)),
+      xJson: DAYS.map(String)
+    });
+    const f: ChartFrameData = {
+      ...frame([
+        line(
+          0,
+          "sma",
+          DAYS.map((d) => [d, 100]),
+          "AAPL"
+        ),
+        line(
+          0,
+          "sma",
+          DAYS.map((d) => [d, 1]),
+          "MSFT"
+        )
+      ]),
+      content: { kind: "series", series: [series("close AAPL", 100), series("close MSFT", 1)] }
+    };
+    const all = model(c, f);
+    expect(all.legend.map((e) => e.label)).toEqual(["close AAPL", "close MSFT", "SMA 20 AAPL", "SMA 20 MSFT"]);
+    const without = model({ ...c, hidden: ["close AAPL"] }, f);
+    // AAPL's average goes with it: not drawn, not in the scale, not in the tooltip.
+    expect(kinds(without.marks, "line").length).toBe(2);
+    expect(without.yAxes[0]?.scale.domain[1]).toBeLessThan(100);
+    expect(indicatorRows(f, without, ["close AAPL"], 3).map((r) => r.label)).toEqual(["SMA 20 MSFT"]);
   });
 });

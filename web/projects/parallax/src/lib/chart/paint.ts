@@ -214,6 +214,9 @@ class Painter {
     for (const pane of model.panes) {
       this.paneAxes(pane);
     }
+    ctx.fillStyle = this.theme.muted;
+    ctx.strokeStyle = this.theme.gridLine;
+    ctx.textAlign = "center";
     this.xLabels(model);
     this.horizontal(plotBottom(model), plot.x, plot.x + plot.w);
   }
