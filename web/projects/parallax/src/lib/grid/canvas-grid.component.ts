@@ -11,7 +11,7 @@
 import { ChangeDetectionStrategy, Component, DestroyRef, afterNextRender, afterRenderEffect, computed, inject, input, signal, viewChild } from "@angular/core";
 import type { ElementRef } from "@angular/core";
 
-import { cellText, isNegative } from "../format";
+import { isNegative } from "../format";
 import type { FrameColumn, FrameData, TreeRows } from "../frame";
 import { readTheme } from "../theme";
 import type { Theme } from "../theme";
@@ -135,7 +135,7 @@ export class CanvasGridComponent {
   private readonly geometry = computed(() => scrollGeometry(this.totalRows() + 1, this.rowHeight()));
   protected readonly spacerHeight = computed(() => this.geometry().spacerPx);
   protected readonly contentWidth = computed(() => this.treePx() + (this.source.frame()?.totalColumns ?? 0) * CELL_WIDTH);
-  private readonly columns = computed(() => placeColumns(this.source.frame(), this.source.groupBy(), this.treePx()));
+  private readonly columns = computed(() => placeColumns(this.source.frame(), this.treePx()));
 
   private stats: DrawStats = { frames: 0, fullDraws: 0, cellDraws: 0, drawMs: 0 };
   private drawn = new Map<string, string>();
@@ -354,7 +354,7 @@ export class CanvasGridComponent {
 
   private drawCell(pass: Pass, column: Column, data: FrameColumn, local: number, row: number, y: number, stripe: string): boolean {
     const value = data.value(local);
-    const text = cellText(value, data.flag(local));
+    const text = data.text(local);
     const key = `${String(row)}:${String(column.x)}`;
     if (!pass.full && this.drawn.get(key) === text) {
       return false;
@@ -391,17 +391,9 @@ export class CanvasGridComponent {
 }
 
 /** Places a frame's data columns at their absolute positions in the content. */
-function placeColumns(frame: FrameData | null, groupBy: readonly string[], treePx: number): readonly Column[] {
+function placeColumns(frame: FrameData | null, treePx: number): readonly Column[] {
   if (frame === null) {
     return [];
   }
-  const columns: Column[] = [];
-  let index = frame.firstColumn;
-  frame.columns.forEach((column, frameIndex) => {
-    if (!groupBy.includes(column.name)) {
-      columns.push({ frameIndex, title: column.name, x: treePx + index * CELL_WIDTH, numeric: column.numeric });
-      index += 1;
-    }
-  });
-  return columns;
+  return frame.columns.map((column, frameIndex) => ({ frameIndex, title: column.title, x: treePx + (frame.firstColumn + frameIndex) * CELL_WIDTH, numeric: column.numeric }));
 }

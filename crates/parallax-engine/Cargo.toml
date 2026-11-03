@@ -11,6 +11,7 @@ repository.workspace = true
 arrow-array.workspace = true
 arrow-buffer = { version = "60.1", default-features = false }
 arrow-schema.workspace = true
+jiff.workspace = true
 libm.workspace = true
 rustc-hash = "2.1"
 thiserror.workspace = true
@@ -21,6 +22,7 @@ rayon.workspace = true
 [dev-dependencies]
 duckdb = { version = "=1.20000.1", features = ["download-lib", "appender-arrow"] }
 arrow-select = { version = "60.1", default-features = false }
+num-bigint = "0.4.8"
 parallax-datagen.workspace = true
 proptest = "1.12"
 

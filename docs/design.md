@@ -140,10 +140,13 @@ in this section follows from that.
 ### Numbers
 
 Money columns use exact decimals (Arrow Decimal128) alongside f64, i64 and
-time-zone-aware timestamps. Floating-point sums use summation that is exactly
-rounded and independent of order: Radford Neal's superaccumulator, through the
-`xsum` crate. A total therefore comes out the same, to the last bit, however it
-is computed:
+time-zone-aware timestamps. Floating-point sums are exact until one final
+rounding: each double is added to a fixed-point integer wide enough for every
+finite double (a Kulisch accumulator), and the total is rounded once. The `xsum`
+crate, the first choice, returned a neighbouring double for some single values,
+so the engine carries its own accumulator and the tests compare it with a port of
+CPython's `math.fsum`. A total comes out the same, to the last bit, however it is
+computed:
 
 - incrementally
 - from scratch
@@ -191,23 +194,43 @@ machine and matches the test oracle.
 ### Display
 
 The screen and the Excel export show the same digits because both use one
-formatter. It follows Excel's display rules: round to 15 significant digits,
-then round half away from zero. So 2.675 at two decimals shows as 2.68 in both.
+formatter, in the engine. Frames carry its text next to each value, so the
+browser draws what the engine wrote and never formats a number itself. It
+follows Excel's display rules: a double is rounded to 15 significant digits, then
+to the shown decimals, both half away from zero. So 2.675 at two decimals shows
+as 2.68 in both.
+
+Exact decimals and integers skip the 15-digit step: they never were doubles. A
+decimal of 15 significant digits or fewer converts to a double and back
+unchanged, so Excel shows the same digits. A longer one shows in full on screen;
+how the export writes it is decided with the export.
 
 - A value that rounds to zero never shows a minus sign.
 - A number too wide for its column shows `###`, as Excel does, never with
   digits clipped off.
 - Text truncates with an ellipsis and shows in full on hover.
 - K/M/B abbreviations are opt-in per column and always show the suffix.
+- Percent and K/M/B scaling move the decimal point exactly, before the one
+  rounding to the shown decimals.
+- Booleans show as `TRUE` and `FALSE`, as in Excel.
 - Copy and export carry full-precision values. Display formats travel as Excel
   number formats.
 
-Rounding happens only in this formatter.
+A layout sets formats per source column: decimals, thousands separators,
+percent, K/M/B, negatives in parentheses, the display zone, and sub-second
+digits. A measure takes its column's format unless it sets its own; counts and
+variances use their type's default, and shares of a total show as percentages.
+
+Rounding happens only in this formatter. The tests compare it with exact
+big-integer arithmetic on random doubles, many of them next to rounding
+midpoints, and compare its time zones with DuckDB's.
 
 ### Time
 
 Timestamps are stored as UTC instants. They are displayed in a zone that each
 column declares, defaulting to `America/New_York`, and headers name the zone.
+Digits below the shown precision are cut rather than rounded, so a time never
+shows later than it happened and 23:59:59.9 never becomes the next day.
 
 SQL Server `datetime` and `datetime2` values carry no zone, so each such column
 declares its source zone, also defaulting to New York. Daylight-saving changes
@@ -327,6 +350,11 @@ it, tagged by view ID.
   the worker.
 - Every data frame carries the view ID, configuration version, window bounds,
   table load version and source timestamp.
+- Each data column in a frame travels with its display text, its cell flags
+  (overflow, mixed units, undefined) and, for timestamps, full-precision text
+  for copying. Every Arrow field names its role and column index in its
+  metadata, so the client pairs them by index, never by name. Column-pivot names
+  can display alike: 1.001 and 1.004 both read 1.00 at two decimals.
 
 The browser worker that hosts the WebAssembly engine speaks the same messages
 over `postMessage`, through the same session code as the server. The server

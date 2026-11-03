@@ -8,8 +8,11 @@
 //! table's column types when the view opens, and never rounded: a decimal filter
 //! value with more digits than the column's scale is an error.
 
+use std::collections::BTreeMap;
+
 use parallax_engine::aggregate::{Aggregate, Measure, ShowAs};
 use parallax_engine::filter::{Filter, FilterOp};
+use parallax_engine::format::{Abbreviation, Format, Negative, TimePrecision};
 use parallax_engine::view::{Comparison, GroupOrder, GroupSort, Having, Sort, TopN, ViewConfig};
 use parallax_engine::{ColumnType, Scalar, Table};
 use schemars::JsonSchema;
@@ -47,6 +50,120 @@ pub struct Layout {
     pub expand_depth: usize,
     /// Groups expanded or collapsed by the user, by value.
     pub expanded: Vec<LayoutExpanded>,
+    /// Display formats by source column. Measures take their column's format
+    /// unless they set their own.
+    pub formats: BTreeMap<String, LayoutFormat>,
+}
+
+/// How a column's values are displayed. Unset fields take the type's default:
+/// a decimal's scale, no decimals for integers, one when abbreviating, and two
+/// otherwise; thousands grouped; instants in `America/New_York` to the second.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct LayoutFormat {
+    /// Digits after the decimal point, at most 30.
+    #[schemars(range(max = 30))]
+    pub decimals: Option<u8>,
+    /// Group thousands with commas.
+    pub thousands: Option<bool>,
+    /// Multiply by 100 and append `%`.
+    pub percent: bool,
+    /// Divide by a thousand, million or billion and append `K`, `M` or `B`.
+    pub abbreviate: Option<AbbreviationName>,
+    /// How negative numbers are written.
+    pub negative: NegativeName,
+    /// The IANA zone instants are shown in.
+    pub zone: Option<String>,
+    /// The sub-second digits instants show.
+    pub precision: PrecisionName,
+}
+
+/// A K, M or B scaling in a layout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AbbreviationName {
+    /// Thousands, `K`.
+    Thousands,
+    /// Millions, `M`.
+    Millions,
+    /// Billions, `B`.
+    Billions,
+}
+
+/// How negative numbers are written, in a layout.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum NegativeName {
+    /// `-1,234.50`
+    #[default]
+    Minus,
+    /// `(1,234.50)`
+    Parentheses,
+}
+
+/// Sub-second digits in a layout.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PrecisionName {
+    /// Whole seconds.
+    #[default]
+    Seconds,
+    /// Milliseconds.
+    Milliseconds,
+    /// Microseconds.
+    Microseconds,
+}
+
+impl LayoutFormat {
+    /// The engine's format.
+    #[must_use]
+    pub fn to_engine(&self) -> Format {
+        Format {
+            decimals: self.decimals,
+            thousands: self.thousands,
+            percent: self.percent,
+            abbreviate: self.abbreviate.map(|a| match a {
+                AbbreviationName::Thousands => Abbreviation::Thousands,
+                AbbreviationName::Millions => Abbreviation::Millions,
+                AbbreviationName::Billions => Abbreviation::Billions,
+            }),
+            negative: match self.negative {
+                NegativeName::Minus => Negative::Minus,
+                NegativeName::Parentheses => Negative::Parentheses,
+            },
+            zone: self.zone.clone(),
+            precision: match self.precision {
+                PrecisionName::Seconds => TimePrecision::Seconds,
+                PrecisionName::Milliseconds => TimePrecision::Milliseconds,
+                PrecisionName::Microseconds => TimePrecision::Microseconds,
+            },
+        }
+    }
+
+    /// The layout form of an engine format.
+    #[must_use]
+    pub fn from_engine(format: &Format) -> Self {
+        Self {
+            decimals: format.decimals,
+            thousands: format.thousands,
+            percent: format.percent,
+            abbreviate: format.abbreviate.map(|a| match a {
+                Abbreviation::Thousands => AbbreviationName::Thousands,
+                Abbreviation::Millions => AbbreviationName::Millions,
+                Abbreviation::Billions => AbbreviationName::Billions,
+            }),
+            negative: match format.negative {
+                Negative::Minus => NegativeName::Minus,
+                Negative::Parentheses => NegativeName::Parentheses,
+            },
+            zone: format.zone.clone(),
+            precision: match format.precision {
+                TimePrecision::Seconds => PrecisionName::Seconds,
+                TimePrecision::Milliseconds => PrecisionName::Milliseconds,
+                TimePrecision::Microseconds => PrecisionName::Microseconds,
+            },
+        }
+    }
 }
 
 /// An aggregate's name in a layout.
@@ -121,6 +238,9 @@ pub struct LayoutMeasure {
     /// How the value is shown.
     #[serde(default)]
     pub show_as: ShowAsName,
+    /// The display format, overriding the one derived from the column's.
+    #[serde(default)]
+    pub format: Option<LayoutFormat>,
 }
 
 /// A filter operator in a layout.
@@ -513,6 +633,7 @@ impl Layout {
                         ShowAsName::PercentOfRowTotal => ShowAs::PercentOfRowTotal,
                         ShowAsName::PercentOfParent => ShowAs::PercentOfParent,
                     },
+                    format: m.format.as_ref().map(LayoutFormat::to_engine),
                 })
             })
             .collect::<Result<Vec<_>, LayoutError>>()?;
@@ -614,6 +735,14 @@ impl Layout {
                 other: t.other,
             }),
             expand_depth: self.expand_depth,
+            formats: self
+                .formats
+                .iter()
+                .map(|(column, f)| {
+                    column_type(table, column)?;
+                    Ok((column.clone(), f.to_engine()))
+                })
+                .collect::<Result<_, LayoutError>>()?,
         };
         Ok(ResolvedLayout { config, expanded })
     }
@@ -730,6 +859,11 @@ impl Layout {
                     column: s.column.clone(),
                     descending: s.descending,
                 })
+                .collect(),
+            formats: config
+                .formats
+                .iter()
+                .map(|(c, f)| (c.clone(), LayoutFormat::from_engine(f)))
                 .collect(),
             ..Self::default()
         }

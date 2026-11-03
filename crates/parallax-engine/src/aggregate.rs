@@ -13,6 +13,7 @@ use rustc_hash::FxHashMap;
 
 use crate::bignum::{BigUint, big_ratio_to_f64, ratio_to_f64};
 use crate::exact::ExactSum;
+use crate::format::Format;
 use crate::types::{ColumnType, Key};
 
 /// How a measure combines the values of a group.
@@ -129,6 +130,8 @@ pub struct Measure {
     pub unit_column: Option<String>,
     /// How the value is shown.
     pub show_as: ShowAs,
+    /// The display format; `None` derives one from the column's.
+    pub format: Option<Format>,
 }
 
 impl Measure {
@@ -141,6 +144,7 @@ impl Measure {
             weight: None,
             unit_column: None,
             show_as: ShowAs::Value,
+            format: None,
         }
     }
 
@@ -153,6 +157,7 @@ impl Measure {
             weight: None,
             unit_column: None,
             show_as: ShowAs::Value,
+            format: None,
         }
     }
 

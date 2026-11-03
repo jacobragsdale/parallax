@@ -42,13 +42,15 @@ const PIVOT: &str = r#"{"version":1,"group_by":["fund","sector"],"split_by":["lo
 "measures":[{"column":"market_value_usd","aggregate":"sum"},
 {"column":"beta","aggregate":"mean"},{"aggregate":"count_all"},
 {"column":"market_value_usd","aggregate":"sum","show_as":"percent_of_grand_total"}],
-"filters":[{"column":"asset_class","op":"in","values":["Equity","Bond"]}]}"#;
+"filters":[{"column":"asset_class","op":"in","values":["Equity","Bond"]}],
+"formats":{"market_value_usd":{"abbreviate":"millions","negative":"parentheses"},"beta":{"decimals":3}}}"#;
 
 const RESORTED: &str = r#"{"version":1,"group_by":["fund","sector"],"split_by":["long_short"],
 "measures":[{"column":"market_value_usd","aggregate":"sum"},
 {"column":"beta","aggregate":"mean"},{"aggregate":"count_all"}],
 "group_sort":{"by":{"measure":0},"descending":true},"expand_depth":1,
-"filters":[{"column":"asset_class","op":"in","values":["Equity","Bond"]}]}"#;
+"filters":[{"column":"asset_class","op":"in","values":["Equity","Bond"]}],
+"formats":{"market_value_usd":{"decimals":0},"as_of_date":{}}}"#;
 
 /// Runs the conversation and returns every server message, encoded, in order.
 ///

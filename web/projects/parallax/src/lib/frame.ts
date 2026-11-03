@@ -2,15 +2,21 @@
  * Frames: windows of a view, decoded from Arrow IPC.
  *
  * A frame crosses an I/O boundary, so every column is checked against the type the
- * engine promises before any UI code reads it. Values are read from the raw Arrow
- * buffers rather than Arrow JS's convenience getters: those turn microsecond
- * timestamps into fractional milliseconds and decimals into objects, and either
- * would lose digits.
+ * engine promises before any UI code reads it. Each field names its role in its
+ * metadata, and data columns are matched to their flags and text by index, never by
+ * name: names are for people and can repeat.
+ *
+ * Display text comes from the engine's formatter, the one the Excel export uses,
+ * so the screen and the export agree. Values are read from the raw Arrow buffers
+ * rather than Arrow JS's convenience getters: those turn microsecond timestamps
+ * into fractional milliseconds and decimals into objects, and either would lose
+ * digits.
  */
 
 import { DataType, Table, tableFromIPC } from "apache-arrow";
 import type { Field, Vector } from "apache-arrow";
 
+import { exactDecimal } from "./format";
 import type { Frame } from "./proto/parallax_pb";
 
 /** A cell value, typed by what the engine sent. */
@@ -32,16 +38,28 @@ export const enum CellFlag {
   Undefined = 3
 }
 
-/** One column of a frame. */
+/** One data column of a frame. */
 export interface FrameColumn {
-  /** The column's name as the engine produced it. */
+  /** The column's identity as the engine produced it. */
   readonly name: string;
+  /** The header text, naming the display zone of instants. */
+  readonly title: string;
   /** Reads row `row` of the window. */
   readonly value: (row: number) => CellValue;
   /** Reads row `row`'s flag, for measure columns that carry one. */
   readonly flag: (row: number) => CellFlag;
+  /** Reads row `row`'s display text. */
+  readonly text: (row: number) => string;
+  /** Reads row `row`'s text for copying: every digit of numbers and timestamps. */
+  readonly copy: (row: number) => string;
   /** `true` for numbers, which align right. */
   readonly numeric: boolean;
+}
+
+/** The key of one group level, on every row of a grouped view. */
+export interface GroupKey {
+  readonly name: string;
+  readonly value: (row: number) => CellValue;
 }
 
 /** Tree columns of a grouped view's rows. */
@@ -66,6 +84,8 @@ export interface FrameData {
   readonly pushed: boolean;
   /** Data columns, in display order. */
   readonly columns: readonly FrameColumn[];
+  /** Group keys from the outermost level, for grouped views. */
+  readonly groups: readonly GroupKey[];
   /** Present for grouped views. */
   readonly tree: TreeRows | null;
 }
@@ -74,8 +94,6 @@ export interface FrameData {
 export class FrameError extends Error {
   public override readonly name = "FrameError";
 }
-
-const META = new Set(["__depth", "__kind", "__expanded", "__label", "__seq"]);
 
 /** The single chunk of a frame column, with its values typed as unknown until checked. */
 interface Chunk {
@@ -178,7 +196,25 @@ function reader(field: Field, vector: Vector): (row: number) => CellValue {
   throw new FrameError(`${name}: unsupported type ${String(type)}`);
 }
 
-function flagReader(vector: Vector | null): (row: number) => CellFlag {
+function cellFlag(value: number): CellFlag {
+  switch (value) {
+    case 0:
+      return CellFlag.Ok;
+    case 1:
+      return CellFlag.Overflow;
+    case 2:
+      return CellFlag.Mixed;
+    case 3:
+      return CellFlag.Undefined;
+    default:
+      throw new FrameError(`unknown cell flag ${String(value)}`);
+  }
+}
+
+// Flags and text are checked for every row at decode time, so a frame the client
+// cannot draw is refused before any grid reads it.
+
+function flagReader(vector: Vector | null, rowCount: number): (row: number) => CellFlag {
   if (vector === null) {
     return () => CellFlag.Ok;
   }
@@ -186,19 +222,20 @@ function flagReader(vector: Vector | null): (row: number) => CellFlag {
   if (!(values instanceof Uint8Array)) {
     throw new FrameError("flag columns must be 8-bit");
   }
-  return (row) => {
-    const value = values[row] ?? 0;
-    switch (value) {
-      case 1:
-        return CellFlag.Overflow;
-      case 2:
-        return CellFlag.Mixed;
-      case 3:
-        return CellFlag.Undefined;
-      default:
-        return CellFlag.Ok;
+  const flags = Array.from({ length: rowCount }, (_, row) => cellFlag(values[row] ?? 0));
+  return (row) => flags[row] ?? CellFlag.Ok;
+}
+
+function textReader(name: string, vector: Vector, rowCount: number): (row: number) => string {
+  const chunk = only(vector);
+  const texts = Array.from({ length: rowCount }, (_, row) => {
+    const text = chunk.get(row);
+    if (typeof text !== "string") {
+      throw new FrameError(`${name}: display text is missing`);
     }
-  };
+    return text;
+  });
+  return (row) => texts[row] ?? "";
 }
 
 function rowKind(value: unknown): "total" | "group" | "leaf" | "other" {
@@ -213,13 +250,46 @@ function rowKind(value: unknown): "total" | "group" | "leaf" | "other" {
   }
 }
 
-function treeRows(table: Table): TreeRows | null {
-  const depth = table.getChild("__depth");
-  const kind = table.getChild("__kind");
-  const expanded = table.getChild("__expanded");
-  const label = table.getChild("__label");
-  if (depth === null || kind === null || expanded === null || label === null) {
+/** The roles a frame field can have, as the engine writes them. */
+type Role = "seq" | "depth" | "kind" | "expanded" | "label" | "group" | "value" | "flag" | "text" | "copy";
+
+function roleOf(field: Field): Role {
+  const role = field.metadata.get("parallax.role") ?? "";
+  switch (role) {
+    case "seq":
+    case "depth":
+    case "kind":
+    case "expanded":
+    case "label":
+    case "group":
+    case "value":
+    case "flag":
+    case "text":
+    case "copy":
+      return role;
+    default:
+      throw new FrameError(`${field.name}: unknown role "${role}"`);
+  }
+}
+
+function indexOf(field: Field, key: "parallax.index" | "parallax.level"): number {
+  const text = field.metadata.get(key) ?? "";
+  if (!/^\d+$/.test(text)) {
+    throw new FrameError(`${field.name}: ${key} must be a non-negative integer`);
+  }
+  return Number(text);
+}
+
+function treeRows(rowCount: number, byRole: ReadonlyMap<Role, Vector>): TreeRows | null {
+  const depth = byRole.get("depth");
+  const kind = byRole.get("kind");
+  const expanded = byRole.get("expanded");
+  const label = byRole.get("label");
+  if (depth === undefined && kind === undefined && expanded === undefined && label === undefined) {
     return null;
+  }
+  if (depth === undefined || kind === undefined || expanded === undefined || label === undefined) {
+    throw new FrameError("a grouped frame needs depth, kind, expanded and label columns");
   }
   const depths = only(depth).values;
   if (!(depths instanceof Int32Array)) {
@@ -228,9 +298,9 @@ function treeRows(table: Table): TreeRows | null {
   const kinds = only(kind);
   // Every row kind is checked here, at decode time, so a frame the client does not
   // understand is refused before any grid draws it.
-  const rowKinds = Array.from({ length: table.numRows }, (_, row) => rowKind(kinds.get(row)));
+  const rowKinds = Array.from({ length: rowCount }, (_, row) => rowKind(kinds.get(row)));
   const flags = only(expanded);
-  const labels = only(label);
+  const labels = textReader("__label", label, rowCount);
   return {
     depth: (row) => depths[row] ?? 0,
     kind: (row) => rowKinds[row] ?? "leaf",
@@ -238,10 +308,62 @@ function treeRows(table: Table): TreeRows | null {
       const value = flags.get(row);
       return typeof value === "boolean" ? value : null;
     },
-    label: (row) => {
-      const value = labels.get(row);
-      return typeof value === "string" ? value : "";
-    }
+    label: labels
+  };
+}
+
+/** Text for copying a value: every digit, in a form spreadsheets parse. */
+function exactText(value: CellValue): string | null {
+  switch (value.kind) {
+    case "number":
+      return Number.isFinite(value.value) ? String(value.value) : null;
+    case "integer":
+      return value.value.toString();
+    case "decimal":
+      return exactDecimal(value.unscaled, value.scale);
+    case "null":
+    case "text":
+    case "boolean":
+    case "date":
+    case "timestamp":
+      return null;
+  }
+}
+
+interface DataParts {
+  value?: { readonly field: Field; readonly vector: Vector };
+  flag?: Vector;
+  text?: Vector;
+  copy?: Vector;
+}
+
+function dataColumn(index: number, parts: DataParts, rowCount: number): FrameColumn {
+  const { value, text } = parts;
+  if (value === undefined || text === undefined) {
+    throw new FrameError(`data column ${String(index)} needs values and display text`);
+  }
+  const { field, vector } = value;
+  const read = reader(field, vector);
+  const flag = flagReader(parts.flag ?? null, rowCount);
+  const shown = textReader(`${field.name}#text`, text, rowCount);
+  const copied = parts.copy === undefined ? null : textReader(`${field.name}#copy`, parts.copy, rowCount);
+  const title = field.metadata.get("parallax.title") ?? field.name;
+  return {
+    name: field.name,
+    title,
+    value: read,
+    flag,
+    text: shown,
+    copy: (row) => {
+      if (flag(row) !== CellFlag.Ok) {
+        return shown(row);
+      }
+      if (copied !== null) {
+        return copied(row);
+      }
+      return exactText(read(row)) ?? shown(row);
+    },
+    numeric: DataType.isFloat(field.type) || DataType.isInt(field.type) || DataType.isDecimal(field.type)
   };
 }
 
@@ -252,23 +374,59 @@ export function decodeFrame(frame: Frame): FrameData {
     throw new FrameError("a frame's batch must decode synchronously");
   }
   const table = decoded;
-  const columns: FrameColumn[] = [];
-  for (const field of table.schema.fields) {
-    if (META.has(field.name) || field.name.endsWith("#flag")) {
-      continue;
-    }
-    const vector = table.getChild(field.name);
+  const byRole = new Map<Role, Vector>();
+  const data = new Map<number, DataParts>();
+  const groups = new Map<number, GroupKey>();
+  table.schema.fields.forEach((field, i) => {
+    const vector = table.getChildAt(i);
     if (vector === null) {
       throw new FrameError(`missing column ${field.name}`);
     }
-    const value = reader(field, vector);
-    columns.push({
-      name: field.name,
-      value,
-      flag: flagReader(table.getChild(`${field.name}#flag`)),
-      numeric: DataType.isFloat(field.type) || DataType.isInt(field.type) || DataType.isDecimal(field.type)
-    });
-  }
+    const role = roleOf(field);
+    switch (role) {
+      case "seq":
+      case "depth":
+      case "kind":
+      case "expanded":
+      case "label":
+        byRole.set(role, vector);
+        return;
+      case "group":
+        groups.set(indexOf(field, "parallax.level"), { name: field.name, value: reader(field, vector) });
+        return;
+      case "value":
+      case "flag":
+      case "text":
+      case "copy": {
+        const index = indexOf(field, "parallax.index");
+        const parts = data.get(index) ?? {};
+        if (parts[role] !== undefined) {
+          throw new FrameError(`data column ${String(index)} has two ${role} columns`);
+        }
+        if (role === "value") {
+          parts.value = { field, vector };
+        } else {
+          parts[role] = vector;
+        }
+        data.set(index, parts);
+        return;
+      }
+    }
+  });
+  const columns = Array.from({ length: data.size }, (_, index) => {
+    const parts = data.get(index);
+    if (parts === undefined) {
+      throw new FrameError(`data columns must be numbered from 0; ${String(index)} is missing`);
+    }
+    return dataColumn(index, parts, table.numRows);
+  });
+  const levels = Array.from({ length: groups.size }, (_, level) => {
+    const key = groups.get(level);
+    if (key === undefined) {
+      throw new FrameError(`group levels must be numbered from 0; ${String(level)} is missing`);
+    }
+    return key;
+  });
   return {
     viewId: frame.viewId,
     configVersion: frame.configVersion,
@@ -281,6 +439,7 @@ export function decodeFrame(frame: Frame): FrameData {
     sourceAsOfMicros: frame.sourceAsOfMicros,
     pushed: frame.pushed,
     columns,
-    tree: treeRows(table)
+    groups: levels,
+    tree: treeRows(table.numRows, byRole)
   };
 }

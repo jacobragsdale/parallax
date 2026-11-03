@@ -74,6 +74,107 @@ fn frames_carry_versions_and_decode() {
     assert_eq!(kind.value(0), "total");
 }
 
+/// The value and display-text columns of a frame, paired by their index metadata.
+fn text_columns(
+    batch: &arrow_array::RecordBatch,
+) -> Vec<(String, arrow_array::ArrayRef, Vec<String>)> {
+    use arrow_array::Array;
+    let schema = batch.schema();
+    let role = |i: usize| {
+        schema
+            .field(i)
+            .metadata()
+            .get("parallax.role")
+            .cloned()
+            .unwrap_or_default()
+    };
+    let index = |i: usize| schema.field(i).metadata().get("parallax.index").cloned();
+    (0..schema.fields().len())
+        .filter(|&i| role(i) == "value")
+        .map(|i| {
+            let text = (0..schema.fields().len())
+                .find(|&j| role(j) == "text" && index(j) == index(i))
+                .expect("every value has display text");
+            let text = arrow_array::cast::AsArray::as_string::<i32>(batch.column(text).as_ref());
+            assert_eq!(text.len(), batch.column(i).len());
+            let title = schema.field(i).metadata()["parallax.title"].clone();
+            (
+                title,
+                batch.column(i).clone(),
+                text.iter().map(|t| t.unwrap().to_owned()).collect(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn frames_carry_display_text_in_the_layouts_formats() {
+    use arrow_array::Array;
+    let messages = decoded();
+    let frames: Vec<_> = messages
+        .iter()
+        .filter_map(|m| match m.body.as_ref().unwrap() {
+            Body::Frame(f) => Some(f.clone()),
+            _ => None,
+        })
+        .collect();
+    let pivot = decode_batches(&frames[0].batch).unwrap().remove(0);
+    let columns = text_columns(&pivot);
+    assert!(!columns.is_empty());
+    let mut seen = [false; 4];
+    for (title, values, text) in &columns {
+        for (row, t) in text.iter().enumerate() {
+            if values.is_null(row) {
+                continue;
+            }
+            if title.ends_with("% of total") {
+                seen[0] = true;
+                assert!(t.ends_with('%'), "{title}: {t}");
+            } else if title.ends_with("sum(market_value_usd)") {
+                seen[1] = true;
+                // Millions, one decimal, negatives in parentheses.
+                let body = t.trim_start_matches('(').trim_end_matches(')');
+                let number = body
+                    .strip_suffix('M')
+                    .unwrap_or_else(|| panic!("{title}: {t}"));
+                assert_eq!(
+                    number.split('.').nth(1).map(str::len),
+                    Some(1),
+                    "{title}: {t}"
+                );
+                assert!(!t.contains('-'), "{title}: {t}");
+            } else if title.ends_with("mean(beta)") && !t.contains('∞') {
+                seen[2] = true;
+                assert_eq!(t.split('.').nth(1).map(str::len), Some(3), "{title}: {t}");
+            } else if title.ends_with("count(*)") {
+                seen[3] = true;
+                assert!(!t.contains('.'), "{title}: {t}");
+            }
+        }
+    }
+    assert_eq!(seen, [true; 4], "every measure was checked");
+    // Column pivots are titled by their values in display form.
+    assert!(
+        columns
+            .iter()
+            .any(|(title, _, _)| title.starts_with("Long | ")),
+        "{:?}",
+        columns.iter().map(|c| &c.0).collect::<Vec<_>>()
+    );
+    // The drill-through is a flat view; its dates show as dates.
+    let flat = decode_batches(&frames[3].batch).unwrap().remove(0);
+    let (_, _, dates) = text_columns(&flat)
+        .into_iter()
+        .find(|(title, _, _)| title == "as_of_date")
+        .unwrap();
+    assert!(
+        dates
+            .iter()
+            .all(|d| d.len() == 10 && d.as_bytes()[4] == b'-'),
+        "{dates:?}"
+    );
+}
+
 #[test]
 fn drill_through_opens_a_flat_view_of_the_group() {
     let messages = decoded();
@@ -122,7 +223,7 @@ fn errors_name_the_problem() {
 
 /// The WebAssembly test suite checks the same value, so both builds must answer
 /// byte for byte the same.
-pub const TRANSCRIPT_FINGERPRINT: u64 = 11_268_558_718_760_388_314;
+pub const TRANSCRIPT_FINGERPRINT: u64 = 14_545_074_016_733_717_796;
 
 #[test]
 fn transcript_fingerprint_is_stable() {

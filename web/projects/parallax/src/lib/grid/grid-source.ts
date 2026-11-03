@@ -6,7 +6,6 @@
 
 import { DestroyRef, effect, inject, signal, untracked } from "@angular/core";
 import type { InputSignal, Signal } from "@angular/core";
-import { z } from "zod";
 
 import { ParallaxClient } from "../client";
 import type { Viewport, ViewHandle } from "../connection";
@@ -24,18 +23,6 @@ const MAX_SCROLL_PX = 15_000_000;
 const ROW_MARGIN = 40;
 const COLUMN_MARGIN = 2;
 
-/** The fields of a layout the grid itself needs; the engine validates the rest. */
-const layoutFields = z.looseObject({ group_by: z.array(z.string()).optional() });
-
-function parseJson(text: string): unknown {
-  try {
-    const value: unknown = JSON.parse(text);
-    return value;
-  } catch {
-    return null;
-  }
-}
-
 /** A JSON value in a group path. */
 export type PathValue = string | number | boolean | null;
 
@@ -43,7 +30,6 @@ export type PathValue = string | number | boolean | null;
 export interface GridSource {
   readonly frame: Signal<FrameData | null>;
   readonly error: Signal<string | null>;
-  readonly groupBy: Signal<readonly string[]>;
   /** Makes rows and data columns visible, fetching only what is not already held. */
   readonly show: (visible: Viewport) => void;
   /** Expands or collapses the group in the frame's row `local`, if it is one. */
@@ -56,19 +42,15 @@ function covers(outer: Viewport, inner: Viewport, totalRows: number, totalColumn
   return outer.firstRow <= inner.firstRow && outer.firstRow + outer.rowCount >= rowEnd && outer.firstColumn <= inner.firstColumn && outer.firstColumn + outer.columnCount >= columnEnd;
 }
 
-/** The rows and data columns a frame holds. Group key columns are not data columns. */
-function held(frame: FrameData, groupBy: readonly string[]): Viewport {
-  const dataColumns = frame.columns.filter((c) => !groupBy.includes(c.name)).length;
-  return { firstRow: frame.firstRow, rowCount: frame.rowCount, firstColumn: frame.firstColumn, columnCount: dataColumns };
+/** The rows and data columns a frame holds. */
+function held(frame: FrameData): Viewport {
+  return { firstRow: frame.firstRow, rowCount: frame.rowCount, firstColumn: frame.firstColumn, columnCount: frame.columns.length };
 }
 
 /** Returns the JSON path of the group in the frame's row `local`. */
-export function groupPath(frame: FrameData, local: number, groupBy: readonly string[]): readonly PathValue[] {
+export function groupPath(frame: FrameData, local: number): readonly PathValue[] {
   const depth = frame.tree?.depth(local) ?? 0;
-  return groupBy.slice(0, depth).map((name) => {
-    const column = frame.columns.find((c) => c.name === name);
-    return column === undefined ? null : pathValue(column.value(local));
-  });
+  return frame.groups.slice(0, depth).map((key) => pathValue(key.value(local)));
 }
 
 /** Opens a view for a grid component and follows its inputs. Call in an injection context. */
@@ -76,7 +58,6 @@ export function gridSource(dataset: InputSignal<string>, layout: InputSignal<str
   const client = inject(ParallaxClient);
   const frame = signal<FrameData | null>(null);
   const error = signal<string | null>(null);
-  const groupBy = signal<readonly string[]>([]);
   let current: { readonly dataset: string; readonly view: ViewHandle } | null = null;
   let generation = 0;
   let destroyed = false;
@@ -84,7 +65,7 @@ export function gridSource(dataset: InputSignal<string>, layout: InputSignal<str
 
   const fetch = (view: ViewHandle, wanted: Viewport): void => {
     const shown = frame();
-    if (shown !== null && covers(held(shown, groupBy()), wanted, shown.totalRows, shown.totalColumns)) {
+    if (shown !== null && covers(held(shown), wanted, shown.totalRows, shown.totalColumns)) {
       return;
     }
     const asked = view.requested();
@@ -135,8 +116,6 @@ export function gridSource(dataset: InputSignal<string>, layout: InputSignal<str
   effect(() => {
     const name = dataset();
     const json = layout();
-    const parsed = layoutFields.safeParse(parseJson(json));
-    groupBy.set(parsed.success ? (parsed.data.group_by ?? []) : []);
     untracked(() => {
       if (current !== null && current.dataset === name && !current.view.isClosed) {
         current.view.update(json);
@@ -155,7 +134,6 @@ export function gridSource(dataset: InputSignal<string>, layout: InputSignal<str
   return {
     frame,
     error,
-    groupBy,
     show: (wanted) => {
       visible = wanted;
       if (current !== null) {
@@ -165,7 +143,7 @@ export function gridSource(dataset: InputSignal<string>, layout: InputSignal<str
     toggle: (shown, local) => {
       const expanded = shown.tree?.expanded(local) ?? null;
       if (expanded !== null) {
-        current?.view.setExpanded(groupPath(shown, local, groupBy()), !expanded);
+        current?.view.setExpanded(groupPath(shown, local), !expanded);
       }
     }
   };

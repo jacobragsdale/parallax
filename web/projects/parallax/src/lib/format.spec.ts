@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { cellText, formatDecimal, pathValue } from "./format";
-import { CellFlag, decimalFromWords } from "./frame";
+import { exactDecimal, pathValue } from "./format";
+import { decimalFromWords } from "./frame";
 
 function words(value: bigint): Uint32Array {
   const out = new Uint32Array(4);
@@ -24,26 +24,16 @@ describe("decimalFromWords", () => {
   });
 });
 
-describe("formatDecimal", () => {
+describe("exactDecimal", () => {
   it.each([
     [12_345n, 2, "123.45"],
     [-5n, 3, "-0.005"],
     [0n, 2, "0.00"],
-    [123_456_789_012n, 2, "1,234,567,890.12"],
-    [-(10n ** 20n), 2, "-1,000,000,000,000,000,000.00"],
+    [123_456_789_012n, 2, "1234567890.12"],
+    [-(10n ** 20n), 2, "-1000000000000000000.00"],
     [42n, 0, "42"]
-  ])("formats %s at scale %s as %s", (unscaled, scale, expected) => {
-    expect(formatDecimal(unscaled, scale)).toBe(expected);
-  });
-});
-
-describe("cellText", () => {
-  it("shows markers for flagged cells instead of a value", () => {
-    const value = { kind: "decimal", unscaled: 100n, scale: 2 } as const;
-    expect(cellText(value, CellFlag.Ok)).toBe("1.00");
-    expect(cellText(value, CellFlag.Mixed)).toBe("mixed");
-    expect(cellText(value, CellFlag.Overflow)).toBe("overflow");
-    expect(cellText(value, CellFlag.Undefined)).toBe("—");
+  ])("writes %s at scale %s as %s", (unscaled, scale, expected) => {
+    expect(exactDecimal(unscaled, scale)).toBe(expected);
   });
 });
 

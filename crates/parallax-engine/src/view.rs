@@ -8,6 +8,7 @@
 
 use std::cell::RefCell;
 use std::cmp::Ordering;
+use std::collections::{BTreeMap, HashMap};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -25,6 +26,7 @@ use crate::bignum::ratio_to_f64;
 use crate::column::Column;
 use crate::error::ConfigError;
 use crate::filter::{CompiledFilter, Filter};
+use crate::format::{self, Format, Formatter};
 use crate::table::{ChangeSet, RemovedRows, Table};
 use crate::types::{ColumnType, Key, Scalar};
 
@@ -130,6 +132,9 @@ pub struct ViewConfig {
     /// Levels expanded by default: 0 shows the grand total and the first level, 1
     /// also shows the second level, and so on.
     pub expand_depth: usize,
+    /// Display formats by source column. A measure without its own format takes its
+    /// column's, except counts and variances.
+    pub formats: BTreeMap<String, Format>,
 }
 
 impl ViewConfig {
@@ -185,6 +190,44 @@ pub struct Frame {
     pub config_version: u64,
     /// The table load the frame reflects.
     pub load_version: u64,
+}
+
+/// Field metadata on frames. Every field carries a role, so a client finds each
+/// column by role and index rather than by name: names are for people and can
+/// repeat, for instance when two measures are the same.
+pub mod meta {
+    /// The field's role: one of the constants in [`role`](super::role).
+    pub const ROLE: &str = "parallax.role";
+    /// For data-column roles, the column's position within the frame.
+    pub const INDEX: &str = "parallax.index";
+    /// For group keys, the level, from 0 for the outermost.
+    pub const LEVEL: &str = "parallax.level";
+    /// For values, the header text, which names the display zone of instants.
+    pub const TITLE: &str = "parallax.title";
+}
+
+/// The roles a frame field can have.
+pub mod role {
+    /// A flat view row's insertion sequence.
+    pub const SEQ: &str = "seq";
+    /// A grouped row's depth.
+    pub const DEPTH: &str = "depth";
+    /// A grouped row's kind: total, group, leaf or other.
+    pub const KIND: &str = "kind";
+    /// Whether a grouped row is expanded, null for rows that cannot expand.
+    pub const EXPANDED: &str = "expanded";
+    /// A grouped row's display label.
+    pub const LABEL: &str = "label";
+    /// A group key at one level.
+    pub const GROUP: &str = "group";
+    /// A data column's values.
+    pub const VALUE: &str = "value";
+    /// A data column's cell flags.
+    pub const FLAG: &str = "flag";
+    /// A data column's display text.
+    pub const TEXT: &str = "text";
+    /// A data column's text for copying, with every digit, for timestamps.
+    pub const COPY: &str = "copy";
 }
 
 /// Cell flags carried next to each value column.
@@ -353,9 +396,69 @@ enum Kind {
 pub struct View {
     config: ViewConfig,
     filters: Vec<CompiledFilter>,
+    formatters: Formatters,
     kind: Kind,
     config_version: u64,
     load_version: u64,
+}
+
+/// The checked formats of a view: one per table column and one per measure.
+#[derive(Clone, Debug)]
+struct Formatters {
+    columns: Vec<Formatter>,
+    measures: Vec<Formatter>,
+}
+
+impl Formatters {
+    fn new(table: &Table, config: &ViewConfig) -> Result<Self, ConfigError> {
+        let compile = |column: &str, format: &Format| {
+            Formatter::new(format).map_err(|e| ConfigError::Format {
+                column: column.to_owned(),
+                reason: e.to_string(),
+            })
+        };
+        let mut by_index: HashMap<usize, Formatter> = HashMap::new();
+        for (name, format) in &config.formats {
+            by_index.insert(column_index(table, name)?, compile(name, format)?);
+        }
+        let default = Formatter::default();
+        let columns = (0..table.schema().fields().len())
+            .map(|c| by_index.remove(&c).unwrap_or_else(|| default.clone()))
+            .collect();
+        let measures = config
+            .measures
+            .iter()
+            .map(|m| {
+                let format =
+                    measure_format(m, m.column.as_ref().and_then(|c| config.formats.get(c)));
+                compile(&m.label(), &format)
+            })
+            .collect::<Result<_, _>>()?;
+        Ok(Self { columns, measures })
+    }
+}
+
+/// The format a measure shows with: its own, else a percentage for shares, the
+/// type's default for counts and variances, and otherwise its column's format.
+fn measure_format(measure: &Measure, column: Option<&Format>) -> Format {
+    if let Some(f) = &measure.format {
+        return f.clone();
+    }
+    if measure.show_as != ShowAs::Value {
+        return Format {
+            percent: true,
+            ..Format::default()
+        };
+    }
+    match measure.aggregate {
+        Aggregate::Count | Aggregate::CountAll | Aggregate::DistinctCount | Aggregate::Variance => {
+            Format {
+                zone: column.and_then(|c| c.zone.clone()),
+                ..Format::default()
+            }
+        }
+        _ => column.cloned().unwrap_or_default(),
+    }
 }
 
 /// The most data columns a column pivot may produce.
@@ -433,6 +536,7 @@ impl View {
             .iter()
             .map(|f| CompiledFilter::compile(table, f))
             .collect::<Result<Vec<_>, _>>()?;
+        let formatters = Formatters::new(table, &config)?;
         let kind = if config.is_grouped() {
             let measures = config
                 .measures
@@ -505,6 +609,7 @@ impl View {
         let mut view = Self {
             config,
             filters,
+            formatters,
             kind,
             config_version: 1,
             load_version: table.load_version(),
@@ -662,8 +767,8 @@ impl View {
     /// Returns rows `rows` and data columns `columns` of the view.
     pub fn window(&mut self, table: &Table, rows: Range<usize>, columns: Range<usize>) -> Frame {
         let (batch, total_rows, total_columns) = match &mut self.kind {
-            Kind::Flat(flat) => flat_window(table, flat, rows, columns),
-            Kind::Grouped(g) => g.window(table, &self.config, rows, columns),
+            Kind::Flat(flat) => flat_window(table, &self.formatters, flat, rows, columns),
+            Kind::Grouped(g) => g.window(table, &self.config, &self.formatters, rows, columns),
         };
         Frame {
             batch,
@@ -704,6 +809,7 @@ impl View {
         }
         Some(ViewConfig {
             filters,
+            formats: self.config.formats.clone(),
             ..ViewConfig::default()
         })
     }
@@ -788,6 +894,7 @@ fn sort_flat(table: &Table, flat: &mut Flat) {
 
 fn flat_window(
     table: &Table,
+    formatters: &Formatters,
     flat: &Flat,
     rows: Range<usize>,
     columns: Range<usize>,
@@ -796,18 +903,140 @@ fn flat_window(
     let end = rows.end.min(flat.order.len()).max(start);
     let slots = &flat.order[start..end];
     let cols = columns.start.min(flat.columns.len())..columns.end.min(flat.columns.len());
-    let mut fields = vec![Field::new("__seq", DataType::Int64, false)];
-    let mut arrays: Vec<ArrayRef> = vec![Arc::new(Int64Array::from_iter_values(
-        slots.iter().map(|&s| table.seq(s) as i64),
-    ))];
-    for &c in &flat.columns[cols] {
+    let mut out = FrameBuilder::default();
+    out.push(
+        role_field("__seq", DataType::Int64, false, role::SEQ, &[]),
+        Arc::new(Int64Array::from_iter_values(
+            slots.iter().map(|&s| table.seq(s) as i64),
+        )),
+    );
+    for (index, &c) in flat.columns[cols].iter().enumerate() {
         let field = table.schema().field(c);
-        fields.push(field.clone());
-        arrays.push(table.column(c).to_arrow(slots));
+        let formatter = &formatters.columns[c];
+        out.data_column(
+            index,
+            field.name(),
+            field.name().clone(),
+            table.column(c).to_arrow(slots),
+            None,
+            formatter,
+        );
     }
-    let batch =
-        RecordBatch::try_new(Arc::new(Schema::new(fields)), arrays).expect("consistent window");
-    (batch, flat.order.len(), flat.columns.len())
+    (out.finish(), flat.order.len(), flat.columns.len())
+}
+
+/// A field with a role and other frame metadata.
+fn role_field(
+    name: &str,
+    data_type: DataType,
+    nullable: bool,
+    role: &str,
+    extra: &[(&str, String)],
+) -> Field {
+    let mut metadata = HashMap::from([(meta::ROLE.to_owned(), role.to_owned())]);
+    for (k, v) in extra {
+        metadata.insert((*k).to_owned(), v.clone());
+    }
+    Field::new(name, data_type, nullable).with_metadata(metadata)
+}
+
+/// Collects a frame's fields and arrays.
+#[derive(Default)]
+struct FrameBuilder {
+    fields: Vec<Field>,
+    arrays: Vec<ArrayRef>,
+}
+
+impl FrameBuilder {
+    fn push(&mut self, field: Field, array: ArrayRef) {
+        self.fields.push(field);
+        self.arrays.push(array);
+    }
+
+    /// Adds a data column: its values, its flags if it has any, its display text,
+    /// and for timestamps its full-precision text.
+    fn data_column(
+        &mut self,
+        index: usize,
+        name: &str,
+        title: String,
+        values: ArrayRef,
+        flags: Option<Vec<u8>>,
+        formatter: &Formatter,
+    ) {
+        let data_type = values.data_type().clone();
+        let title = match &data_type {
+            DataType::Timestamp(_, Some(_)) => format!("{title} ({})", formatter.zone_name()),
+            _ => title,
+        };
+        let at = [(meta::INDEX, index.to_string())];
+        let mut text: Vec<String> = formatter
+            .array(&values)
+            .iter()
+            .map(|t| t.unwrap_or_default().to_owned())
+            .collect();
+        if let Some(flags) = &flags {
+            for (t, &f) in text.iter_mut().zip(flags) {
+                match f {
+                    flag::OVERFLOW => format::OVERFLOW_TEXT.clone_into(t),
+                    flag::MIXED => format::MIXED_TEXT.clone_into(t),
+                    flag::UNDEFINED => format::UNDEFINED_TEXT.clone_into(t),
+                    _ => {}
+                }
+            }
+        }
+        let copy = matches!(data_type, DataType::Timestamp(..))
+            .then(|| formatter.timestamps_full(&values));
+        self.push(
+            role_field(
+                name,
+                data_type,
+                true,
+                role::VALUE,
+                &[(meta::INDEX, index.to_string()), (meta::TITLE, title)],
+            ),
+            values,
+        );
+        if let Some(flags) = flags {
+            self.push(
+                role_field(
+                    &format!("{name}#flag"),
+                    DataType::UInt8,
+                    false,
+                    role::FLAG,
+                    &at,
+                ),
+                Arc::new(UInt8Array::from(flags)),
+            );
+        }
+        self.push(
+            role_field(
+                &format!("{name}#text"),
+                DataType::Utf8,
+                false,
+                role::TEXT,
+                &at,
+            ),
+            Arc::new(StringArray::from(text)),
+        );
+        if let Some(copy) = copy {
+            self.push(
+                role_field(
+                    &format!("{name}#copy"),
+                    DataType::Utf8,
+                    false,
+                    role::COPY,
+                    &at,
+                ),
+                Arc::new(copy),
+            );
+        }
+    }
+
+    fn finish(self) -> RecordBatch {
+        RecordBatch::try_new(Arc::new(Schema::new(self.fields)), self.arrays)
+            .expect("consistent window")
+    }
 }
 
 fn to_f64(value: &MeasureValue, scale: i8) -> Option<f64> {
@@ -1339,6 +1568,7 @@ impl Grouped {
         &mut self,
         table: &Table,
         config: &ViewConfig,
+        formatters: &Formatters,
         rows: Range<usize>,
         columns: Range<usize>,
     ) -> (RecordBatch, usize, usize) {
@@ -1351,13 +1581,7 @@ impl Grouped {
         let data_columns: Vec<(u32, usize)> = self.data_columns(table)[cols].to_vec();
         let levels = self.levels();
 
-        let mut fields = vec![
-            Field::new("__depth", DataType::Int32, false),
-            Field::new("__kind", DataType::Utf8, false),
-            Field::new("__expanded", DataType::Boolean, true),
-            Field::new("__label", DataType::Utf8, false),
-        ];
-        let mut arrays: Vec<ArrayRef> = Vec::new();
+        let mut out = FrameBuilder::default();
         let ids_of = |v: &Visible| -> Vec<u32> {
             match v {
                 Visible::Node(id) => vec![*id],
@@ -1368,39 +1592,56 @@ impl Grouped {
             Visible::Node(id) => self.node(*id).depth as i32,
             Visible::Other { parent, .. } => self.node(*parent).depth as i32 + 1,
         };
-        arrays.push(Arc::new(Int32Array::from_iter_values(
-            shown.iter().map(depth_of),
-        )));
-        arrays.push(Arc::new(StringArray::from_iter_values(shown.iter().map(
-            |v| match v {
-                Visible::Other { .. } => "other",
-                Visible::Node(0) => "total",
-                Visible::Node(id) if self.node(*id).depth as usize == levels => "leaf",
-                Visible::Node(_) => "group",
-            },
-        ))));
-        arrays.push(Arc::new(
-            shown
-                .iter()
-                .map(|v| match v {
-                    Visible::Node(id) if *id != 0 && (self.node(*id).depth as usize) < levels => {
-                        Some(self.is_expanded(table, *id, config))
+        out.push(
+            role_field("__depth", DataType::Int32, false, role::DEPTH, &[]),
+            Arc::new(Int32Array::from_iter_values(shown.iter().map(depth_of))),
+        );
+        out.push(
+            role_field("__kind", DataType::Utf8, false, role::KIND, &[]),
+            Arc::new(StringArray::from_iter_values(shown.iter().map(
+                |v| match v {
+                    Visible::Other { .. } => "other",
+                    Visible::Node(0) => "total",
+                    Visible::Node(id) if self.node(*id).depth as usize == levels => "leaf",
+                    Visible::Node(_) => "group",
+                },
+            ))),
+        );
+        out.push(
+            role_field("__expanded", DataType::Boolean, true, role::EXPANDED, &[]),
+            Arc::new(
+                shown
+                    .iter()
+                    .map(|v| match v {
+                        Visible::Node(id)
+                            if *id != 0 && (self.node(*id).depth as usize) < levels =>
+                        {
+                            Some(self.is_expanded(table, *id, config))
+                        }
+                        _ => None,
+                    })
+                    .collect::<BooleanArray>(),
+            ),
+        );
+        out.push(
+            role_field("__label", DataType::Utf8, false, role::LABEL, &[]),
+            Arc::new(StringArray::from_iter_values(shown.iter().map(
+                |v| match v {
+                    Visible::Other { .. } => "Other".to_owned(),
+                    Visible::Node(0) => "Total".to_owned(),
+                    Visible::Node(id) => {
+                        let node = self.node(*id);
+                        let c = self.group_columns[node.depth as usize - 1];
+                        display_label(
+                            table,
+                            formatters,
+                            c,
+                            &table.column(c).key_to_scalar(node.key),
+                        )
                     }
-                    _ => None,
-                })
-                .collect::<BooleanArray>(),
-        ));
-        arrays.push(Arc::new(StringArray::from_iter_values(shown.iter().map(
-            |v| match v {
-                Visible::Other { .. } => "Other".to_owned(),
-                Visible::Node(0) => "Total".to_owned(),
-                Visible::Node(id) => {
-                    let node = self.node(*id);
-                    let column = table.column(self.group_columns[node.depth as usize - 1]);
-                    label(&column.key_to_scalar(node.key))
-                }
-            },
-        ))));
+                },
+            ))),
+        );
         for (level, &c) in self.group_columns.iter().enumerate() {
             let column = table.column(c);
             let keys: Vec<Key> = shown
@@ -1421,64 +1662,93 @@ impl Grouped {
                     }
                 })
                 .collect();
-            fields.push(Field::new(
-                table.schema().field(c).name(),
-                column.column_type().to_arrow(),
-                true,
-            ));
-            arrays.push(keys_to_arrow(column, &keys));
+            out.push(
+                role_field(
+                    table.schema().field(c).name(),
+                    column.column_type().to_arrow(),
+                    true,
+                    role::GROUP,
+                    &[(meta::LEVEL, level.to_string())],
+                ),
+                keys_to_arrow(column, &keys),
+            );
         }
-        for &(split, m) in &data_columns {
+        for (index, &(split, m)) in data_columns.iter().enumerate() {
             let measure = self.measures[m].clone();
             let values: Vec<CellValue> = shown
                 .iter()
                 .map(|v| self.shown(table, &ids_of(v), split, m))
                 .collect();
-            let name = match split {
-                ROW_TOTAL if self.split_columns.is_empty() => config.measures[m].label(),
-                ROW_TOTAL => format!("Total | {}", config.measures[m].label()),
-                s => format!(
-                    "{} | {}",
-                    self.split_scalars(table, s)
-                        .iter()
-                        .map(label)
-                        .collect::<Vec<_>>()
-                        .join(" | "),
-                    config.measures[m].label()
-                ),
+            let label = config.measures[m].label();
+            let (name, title) = match split {
+                ROW_TOTAL if self.split_columns.is_empty() => (label.clone(), label),
+                ROW_TOTAL => (format!("Total | {label}"), format!("Total | {label}")),
+                s => {
+                    let scalars = self.split_scalars(table, s);
+                    let mut name = String::new();
+                    let mut title = String::new();
+                    for (&c, value) in self.split_columns.iter().zip(&scalars) {
+                        let ty = table.column(c).column_type();
+                        match value {
+                            Scalar::Null => name.push_str("null"),
+                            v => name.push_str(&quoted(&format::canonical(ty, v))),
+                        }
+                        name.push_str(" | ");
+                        title.push_str(&display_label(table, formatters, c, value));
+                        title.push_str(" | ");
+                    }
+                    name.push_str(&label);
+                    title.push_str(&label);
+                    (name, title)
+                }
             };
-            let (array, data_type) = values_to_arrow(table, &measure, &values);
-            fields.push(Field::new(&name, data_type, true));
-            arrays.push(array);
-            fields.push(Field::new(format!("{name}#flag"), DataType::UInt8, false));
-            arrays.push(Arc::new(UInt8Array::from_iter_values(values.iter().map(
-                |v| match v {
+            let (array, _) = values_to_arrow(table, &measure, &values);
+            let flags = values
+                .iter()
+                .map(|v| match v {
                     CellValue::Overflow => flag::OVERFLOW,
                     CellValue::Mixed => flag::MIXED,
                     CellValue::Undefined => flag::UNDEFINED,
                     CellValue::Float(f) if f.is_nan() => flag::UNDEFINED,
                     _ => flag::OK,
-                },
-            ))));
+                })
+                .collect();
+            out.data_column(
+                index,
+                &name,
+                title,
+                array,
+                Some(flags),
+                &formatters.measures[m],
+            );
         }
-        let batch =
-            RecordBatch::try_new(Arc::new(Schema::new(fields)), arrays).expect("consistent window");
-        (batch, total_rows, total_columns)
+        (out.finish(), total_rows, total_columns)
     }
 }
 
-/// A plain display label for a group value.
-fn label(value: &Scalar) -> String {
+/// A group value as a row label or column-pivot header: `(blank)` for null, and
+/// otherwise the value in its column's format.
+fn display_label(table: &Table, formatters: &Formatters, column: usize, value: &Scalar) -> String {
     match value {
         Scalar::Null => "(blank)".to_owned(),
-        Scalar::Boolean(b) => b.to_string(),
-        Scalar::Int64(i) => i.to_string(),
-        Scalar::Float64(f) => f.to_string(),
-        Scalar::Decimal(d) => d.to_string(),
-        Scalar::Utf8(s) => s.clone(),
-        Scalar::Date32(d) => d.to_string(),
-        Scalar::Timestamp(t) => t.to_string(),
+        v => formatters.columns[column].scalar(table.column(column).column_type(), v),
     }
+}
+
+/// Quotes text as a JSON string does, so that column-pivot names built from values
+/// never collide with each other or with the fixed `Total` names.
+fn quoted(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 2);
+    out.push('"');
+    for c in text.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 fn to_cell(table: &Table, measure: &CompiledMeasure, value: MeasureValue) -> CellValue {

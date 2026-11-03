@@ -99,4 +99,12 @@ pub enum ConfigError {
     /// Column pivots produced more columns than the view allows.
     #[error("column pivots produce {0} columns, more than the limit of {1}")]
     TooManyColumns(usize, usize),
+    /// A display format cannot be used.
+    #[error("format of {column}: {reason}")]
+    Format {
+        /// The column or measure.
+        column: String,
+        /// What is wrong.
+        reason: String,
+    },
 }

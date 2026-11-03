@@ -7,7 +7,7 @@
 import { ChangeDetectionStrategy, Component, DestroyRef, afterNextRender, computed, inject, input, signal, viewChild } from "@angular/core";
 import type { ElementRef } from "@angular/core";
 
-import { cellText, isNegative } from "../format";
+import { isNegative } from "../format";
 import type { FrameData } from "../frame";
 import { CELL_WIDTH, TREE_WIDTH, gridSource, scrollGeometry, visibleWindow } from "./grid-source";
 
@@ -175,24 +175,18 @@ export class DomGridComponent {
     if (frame === null) {
       return [];
     }
-    const groupBy = this.source.groupBy();
     const left = this.scrollLeft();
     const right = left + this.widthPx();
-    let index = frame.firstColumn;
     const out: { readonly x: number; readonly column: FrameData["columns"][number] }[] = [];
-    for (const column of frame.columns) {
-      if (groupBy.includes(column.name)) {
-        continue;
-      }
-      const x = this.treePx() + index * CELL_WIDTH;
-      index += 1;
+    frame.columns.forEach((column, i) => {
+      const x = this.treePx() + (frame.firstColumn + i) * CELL_WIDTH;
       if (x + CELL_WIDTH > left && x < right) {
         out.push({ x, column });
       }
-    }
+    });
     return out;
   });
-  protected readonly titles = computed((): readonly Title[] => this.placed().map((p) => ({ x: p.x, text: p.column.name })));
+  protected readonly titles = computed((): readonly Title[] => this.placed().map((p) => ({ x: p.x, text: p.column.title })));
   private readonly first = computed(() => this.geometry().firstRow(this.scrollTop(), this.viewportPx()));
   protected readonly offset = computed(() => `translateY(${String(this.geometry().offset(this.scrollTop(), this.viewportPx()))}px)`);
   protected readonly rows = computed(() => this.buildRows(this.source.frame(), this.first(), this.viewportPx()));
@@ -242,7 +236,7 @@ export class DomGridComponent {
       expandable: expanded !== null,
       cells: this.placed().map(({ x, column }) => {
         const value = column.value(local);
-        return { x, text: cellText(value, column.flag(local)), numeric: column.numeric, negative: isNegative(value) };
+        return { x, text: column.text(local), numeric: column.numeric, negative: isNegative(value) };
       })
     };
   }

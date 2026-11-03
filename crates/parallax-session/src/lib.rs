@@ -657,7 +657,16 @@ impl Session {
                 weight: None,
                 unit_column: None,
                 show_as: ShowAsName::Value,
+                format: None,
             }],
+            // The values show as they do in the view.
+            formats: open
+                .layout
+                .formats
+                .get(&request.column)
+                .map(|f| (request.column.clone(), f.clone()))
+                .into_iter()
+                .collect(),
             ..Layout::default()
         };
         let resolved = layout.resolve(&state.table).map_err(|e| e.to_string())?;
@@ -678,6 +687,7 @@ impl Session {
         };
         let out = RecordBatch::try_from_iter([
             (request.column.as_str(), column(&request.column)?),
+            ("text", column("__label")?),
             ("count", column("count(*)")?),
         ])
         .map_err(|e| e.to_string())?;
