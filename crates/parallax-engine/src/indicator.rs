@@ -198,6 +198,11 @@ impl Indicator {
     /// indicators, `high`, `low`, `close` and `volume` for the others, and
     /// `sessions`, the rows where a VWAP starts again. Volume is summed per candle
     /// instead, and gives no lines here.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the inputs it reads differ in length, such as a VWAP's volume
+    /// left empty.
     #[must_use]
     pub fn compute(&self, inputs: &Series<'_>) -> Vec<Vec<f64>> {
         let p = inputs.price;
@@ -283,6 +288,70 @@ impl RunningSum {
     }
 }
 
+/// A double-double: an unevaluated sum of two doubles, carrying about 106 bits.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct Dd {
+    hi: f64,
+    lo: f64,
+}
+
+impl From<f64> for Dd {
+    fn from(hi: f64) -> Self {
+        Self { hi, lo: 0.0 }
+    }
+}
+
+impl Dd {
+    /// `a + b` exactly, as the rounded sum and its error (Knuth).
+    fn two_sum(a: f64, b: f64) -> Self {
+        let hi = a + b;
+        let back = hi - a;
+        Self {
+            hi,
+            lo: (a - (hi - back)) + (b - back),
+        }
+    }
+
+    /// `a + b` exactly, when `|a| >= |b|` (Dekker).
+    fn quick(a: f64, b: f64) -> Self {
+        let hi = a + b;
+        Self {
+            hi,
+            lo: b - (hi - a),
+        }
+    }
+
+    /// `a - b` exactly.
+    fn difference(a: f64, b: f64) -> Self {
+        Self::two_sum(a, -b)
+    }
+
+    fn add(self, other: Self) -> Self {
+        let s = Self::two_sum(self.hi, other.hi);
+        let t = Self::two_sum(self.lo, other.lo);
+        let s = Self::quick(s.hi, s.lo + t.hi);
+        Self::quick(s.hi, s.lo + t.lo)
+    }
+
+    fn mul(self, other: Self) -> Self {
+        let hi = self.hi * other.hi;
+        // The product's rounding error, exactly, by a fused multiply-add.
+        let error = self.hi.mul_add(other.hi, -hi);
+        Self::quick(hi, error + (self.hi * other.lo + self.lo * other.hi))
+    }
+
+    fn neg(self) -> Self {
+        Self {
+            hi: -self.hi,
+            lo: -self.lo,
+        }
+    }
+
+    fn value(self) -> f64 {
+        self.hi + self.lo
+    }
+}
+
 /// The simple moving average of the last `period` values, from the
 /// `period`-th value on. Each window's sum is carried with its rounding error,
 /// so the average never drifts however long the series.
@@ -330,19 +399,31 @@ fn ema_from(values: &[f64], period: usize, start: usize, out: &mut [f64]) {
 }
 
 /// The weighted moving average: the latest value weighs `period`, the one
-/// before it `period - 1`, and so on.
+/// before it `period - 1`, and so on. The window's sums slide by one row at a
+/// time and are recomputed from the window every `period` rows, so the work
+/// is linear in the rows whatever the period and rounding cannot build up.
 #[must_use]
 pub fn wma(values: &[f64], period: usize) -> Vec<f64> {
-    let period = period.max(1);
-    let divisor = (period * (period + 1) / 2) as f64;
+    let p = period.max(1);
+    let divisor = (p * (p + 1) / 2) as f64;
     let mut out = vec![f64::NAN; values.len()];
-    for i in period.saturating_sub(1)..values.len() {
-        let window = &values[i + 1 - period..=i];
-        let weighted: f64 = window
-            .iter()
-            .enumerate()
-            .map(|(w, &v)| (w + 1) as f64 * v)
-            .sum();
+    let (mut sum, mut weighted) = (0.0, 0.0);
+    for i in p.saturating_sub(1)..values.len() {
+        let first = i + 1 - p;
+        if first.is_multiple_of(p) {
+            let window = &values[first..=i];
+            sum = window.iter().sum();
+            weighted = window
+                .iter()
+                .enumerate()
+                .map(|(w, &v)| (w + 1) as f64 * v)
+                .sum();
+        } else {
+            // Every weight drops by one, so the oldest value leaves; the newest
+            // enters with the full weight.
+            weighted += p as f64 * values[i] - sum;
+            sum += values[i] - values[i - p];
+        }
         out[i] = weighted / divisor;
     }
     out
@@ -360,23 +441,45 @@ pub struct Bands {
     pub lower: Vec<f64>,
 }
 
-/// Bollinger Bands over `period` values. The deviation is computed from each
-/// window's own mean, in two passes, rather than from running sums of squares.
+/// Bollinger Bands over `period` values. The deviation comes from sums of the
+/// window's values less a reference taken from the window, kept in
+/// double-double precision with exact differences and exact squares, so that
+/// neither a small spread around a large price nor a window that has become
+/// flat loses anything to cancellation: a square root turns the smallest
+/// leftover of rounding into a visible spread. The sums slide by one row and
+/// are recomputed every `period` rows.
 #[must_use]
 pub fn bollinger(values: &[f64], period: usize, deviations: f64) -> Bands {
-    let period = period.max(1);
-    let middle = sma(values, period);
+    let p = period.max(1);
+    let n = p as f64;
+    let middle = sma(values, p);
     let mut upper = vec![f64::NAN; values.len()];
     let mut lower = vec![f64::NAN; values.len()];
-    for i in period.saturating_sub(1)..values.len() {
-        let mean = middle[i];
-        let squares: f64 = values[i + 1 - period..=i]
-            .iter()
-            .map(|&v| (v - mean) * (v - mean))
-            .sum();
-        let spread = deviations * (squares / period as f64).sqrt();
-        upper[i] = mean + spread;
-        lower[i] = mean - spread;
+    let mut reference = 0.0;
+    let (mut sum, mut squares) = (Dd::default(), Dd::default());
+    for i in p.saturating_sub(1)..values.len() {
+        let first = i + 1 - p;
+        if first.is_multiple_of(p) {
+            reference = values[first];
+            (sum, squares) = (Dd::default(), Dd::default());
+            for &v in &values[first..=i] {
+                let d = Dd::difference(v, reference);
+                sum = sum.add(d);
+                squares = squares.add(d.mul(d));
+            }
+        } else {
+            let (new, old) = (
+                Dd::difference(values[i], reference),
+                Dd::difference(values[i - p], reference),
+            );
+            sum = sum.add(new).add(old.neg());
+            squares = squares.add(new.mul(new)).add(old.mul(old).neg());
+        }
+        // n times the sum of squared deviations from the window's mean.
+        let scaled = squares.mul(Dd::from(n)).add(sum.mul(sum).neg()).value();
+        let spread = deviations * (scaled.max(0.0) / (n * n)).sqrt();
+        upper[i] = middle[i] + spread;
+        lower[i] = middle[i] - spread;
     }
     Bands {
         upper,
@@ -481,8 +584,13 @@ pub fn macd(values: &[f64], fast: usize, slow: usize, signal: usize) -> Macd {
 
 /// The average true range with Wilder's smoothing, from the `period`-th true
 /// range on. The first row has no true range, having no close before it.
+///
+/// # Panics
+///
+/// Panics if the highs, lows and closes differ in length.
 #[must_use]
 pub fn atr(high: &[f64], low: &[f64], close: &[f64], period: usize) -> Vec<f64> {
+    same_lengths(&[high, low, close]);
     let period = period.max(1);
     let n = close.len();
     let mut out = vec![f64::NAN; n];
@@ -526,6 +634,10 @@ pub struct Stochastic {
 /// The slow stochastic, with simple averages for both smoothings. A window
 /// whose highest high equals its lowest low has no %K, so neither line has a
 /// value for the windows that include it.
+///
+/// # Panics
+///
+/// Panics if the highs, lows and closes differ in length.
 #[must_use]
 pub fn stochastic(
     high: &[f64],
@@ -535,6 +647,7 @@ pub fn stochastic(
     k_smooth: usize,
     d: usize,
 ) -> Stochastic {
+    same_lengths(&[high, low, close]);
     let k = k.max(1);
     let fast = fast_k(high, low, close, k);
     let slow_k = average_defined(&fast, k_smooth.max(1));
@@ -588,10 +701,24 @@ fn fast_k(high: &[f64], low: &[f64], close: &[f64], k: usize) -> Vec<f64> {
 /// The simple average of the last `period` values, NaN where any of them is.
 fn average_defined(values: &[f64], period: usize) -> Vec<f64> {
     let mut out = vec![f64::NAN; values.len()];
-    for i in period.saturating_sub(1)..values.len() {
-        let window = &values[i + 1 - period..=i];
-        if window.iter().all(|v| !v.is_nan()) {
-            out[i] = window.iter().sum::<f64>() / period as f64;
+    let mut sum = RunningSum::default();
+    let mut missing = 0usize;
+    for (i, &value) in values.iter().enumerate() {
+        if value.is_nan() {
+            missing += 1;
+        } else {
+            sum.add(value);
+        }
+        if i >= period {
+            let old = values[i - period];
+            if old.is_nan() {
+                missing -= 1;
+            } else {
+                sum.add(-old);
+            }
+        }
+        if i + 1 >= period && missing == 0 {
+            out[i] = sum.value() / period as f64;
         }
     }
     out
@@ -601,6 +728,10 @@ fn average_defined(values: &[f64], period: usize) -> Vec<f64> {
 /// from each session's first row: `starts` lists the rows where sessions begin,
 /// in order, and the first row always begins one. Rows before any volume has
 /// traded in their session have no value.
+///
+/// # Panics
+///
+/// Panics if the highs, lows, closes and volumes differ in length.
 #[must_use]
 pub fn vwap(
     high: &[f64],
@@ -609,6 +740,7 @@ pub fn vwap(
     volume: &[f64],
     starts: &[usize],
 ) -> Vec<f64> {
+    same_lengths(&[high, low, close, volume]);
     let n = close.len();
     let mut out = vec![f64::NAN; n];
     let (mut weighted, mut traded) = (RunningSum::default(), RunningSum::default());
@@ -630,6 +762,16 @@ pub fn vwap(
         }
     }
     out
+}
+
+/// Checks that an indicator's inputs are one row each.
+fn same_lengths(inputs: &[&[f64]]) {
+    let n = inputs[0].len();
+    assert!(
+        inputs.iter().all(|input| input.len() == n),
+        "an indicator's inputs must have one value per row each, not {:?}",
+        inputs.iter().map(|input| input.len()).collect::<Vec<_>>()
+    );
 }
 
 #[cfg(test)]
@@ -662,6 +804,87 @@ mod tests {
         let price = [1.0, 1.0, 4.0, 4.0];
         let w = vwap(&price, &price, &price, &[1.0, 1.0, 1.0, 1.0], &[0, 2]);
         assert_eq!(w, vec![1.0, 1.0, 4.0, 4.0]);
+    }
+
+    #[test]
+    fn sliding_windows_agree_with_each_window_computed_alone() {
+        let values: Vec<f64> = (0..1_000)
+            .map(|i| 1e4 + ((i * 7_919) % 1_000) as f64 / 7.0)
+            .collect();
+        for period in [1, 2, 7, 64, 999, 1_000] {
+            let (w, b) = (wma(&values, period), bollinger(&values, period, 2.0));
+            for i in period - 1..values.len() {
+                let window = &values[i + 1 - period..=i];
+                let weights = (period * (period + 1) / 2) as f64;
+                let expected: f64 = window
+                    .iter()
+                    .enumerate()
+                    .map(|(k, &v)| (k + 1) as f64 * v)
+                    .sum::<f64>()
+                    / weights;
+                assert!(
+                    (w[i] - expected).abs() <= 1e-12 * expected,
+                    "WMA {period} at {i}"
+                );
+                let mean = window.iter().sum::<f64>() / period as f64;
+                let spread = 2.0
+                    * (window.iter().map(|&v| (v - mean) * (v - mean)).sum::<f64>()
+                        / period as f64)
+                        .sqrt();
+                assert!(
+                    (b.upper[i] - (mean + spread)).abs() <= 1e-9 * mean,
+                    "Bollinger {period} at {i}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn bands_close_on_the_average_once_the_window_is_flat() {
+        // Volatile values, then a level held for twice the period: once the
+        // window holds only the level, the spread is nothing, though the sums
+        // still carry the volatile values they once held.
+        let mut values: Vec<f64> = (0..37)
+            .map(|i| 46.0 + ((i * 7_919) % 97) as f64 / 13.0)
+            .collect();
+        values.extend([46.445_427_561_874_35; 40]);
+        let b = bollinger(&values, 20, 2.0);
+        for i in 56..values.len() {
+            assert_eq!(b.upper[i], b.middle[i], "row {i}");
+            assert_eq!(b.lower[i], b.middle[i], "row {i}");
+        }
+    }
+
+    #[test]
+    fn the_longest_period_over_a_million_rows_takes_one_pass() {
+        // A re-scan of each window would be 10^11 operations here.
+        let values: Vec<f64> = (0..1_000_000).map(|i| f64::from(i % 977)).collect();
+        let started = std::time::Instant::now();
+        let period = MAX_PERIOD as usize;
+        let (w, b, s) = (
+            wma(&values, period),
+            bollinger(&values, period, 2.0),
+            stochastic(&values, &values, &values, 5, period, period),
+        );
+        assert!(
+            w[period - 1].is_finite()
+                && b.upper[period - 1].is_finite()
+                && s.d.len() == values.len()
+        );
+        assert!(started.elapsed().as_secs() < 30, "{:?}", started.elapsed());
+    }
+
+    #[test]
+    #[should_panic(expected = "one value per row")]
+    fn a_vwap_without_volume_is_a_mistake() {
+        let price = [1.0, 2.0];
+        let _ = Indicator::Vwap.compute(&Series {
+            high: &price,
+            low: &price,
+            close: &price,
+            sessions: &[0],
+            ..Series::default()
+        });
     }
 
     #[test]

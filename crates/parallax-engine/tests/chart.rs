@@ -621,7 +621,7 @@ fn candles_at_the_edges_keep_their_whole_bucket() {
 
 #[test]
 fn a_bucket_takes_each_price_from_a_row_that_has_it() {
-    let days: Vec<i32> = vec![20_391, 20_392, 20_393]; // Monday to Wednesday
+    let days: Vec<i32> = vec![20_391, 20_392, 20_393]; // 2025-10-30 to 11-01, one Monday-started week
     let batch = RecordBatch::try_new(
         Arc::new(Schema::new(vec![
             Field::new("date", DataType::Date32, false),

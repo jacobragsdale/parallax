@@ -34,11 +34,22 @@ def plain(values: np.ndarray) -> list[float | None]:
     return [None if np.isnan(v) else float(v) for v in values]
 
 
-def outputs(b: dict[str, list[float]]) -> list[dict[str, object]]:
+def flat(b: dict[str, list[float]], start: int, rows: int) -> dict[str, list[float]]:
+    """The same bars with a stretch where the price does not move, as for a halted stock."""
+    out = {k: list(v) for k, v in b.items()}
+    level = out["close"][max(start - 1, 0)]
+    for k in ("open", "high", "low", "close"):
+        out[k][start : start + rows] = [level] * rows
+    return out
+
+
+def outputs(b: dict[str, list[float]], skip: frozenset[str] = frozenset()) -> list[dict[str, object]]:
     h, l, c, v = (np.array(b[k]) for k in ("high", "low", "close", "volume"))
     out: list[dict[str, object]] = []
 
     def add(function: str, params: dict[str, float], results: dict[str, np.ndarray]) -> None:
+        if function in skip:
+            return
         out.append({"function": function, "params": params, "outputs": {k: plain(r) for k, r in results.items()}})
 
     for period in (2, 5, 20, 200):
@@ -70,6 +81,12 @@ cases = []
 for name, seed, start, volatility in (("hundred", 1, 100.0, 0.02), ("ten-thousand", 2, 12_000.0, 0.015), ("sub-penny", 3, 0.000_5, 0.05)):
     b = bars(seed, start, volatility)
     cases.append({"name": name, **b, "results": outputs(b)})
+# Bars that start without movement, where an RSI has neither gains nor losses
+# to average, and forty more without movement later, where Wilder's smoothing
+# still carries the earlier ones. A stochastic over a flat window has no value
+# in parallax and reads 0 in TA-Lib, which the engine's own tests cover.
+b = flat(flat(bars(4, 50.0, 0.02), 0, 30), 100, 40)
+cases.append({"name": "flat-stretch", **b, "results": outputs(b, frozenset({"stochastic"}))})
 
 document = {"talib": talib.__version__, "cases": cases}
 path = pathlib.Path(__file__).with_name("talib.json")

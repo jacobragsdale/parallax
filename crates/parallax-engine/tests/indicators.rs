@@ -71,6 +71,17 @@ fn agree(context: &str, ours: &[f64], theirs: &[f64], scale: f64, tolerance: f64
 
 #[test]
 fn every_indicator_matches_ta_lib() {
+    let flat = cases()
+        .into_iter()
+        .find(|c| c.name == "flat-stretch")
+        .unwrap();
+    let rsi = flat
+        .results
+        .iter()
+        .find(|r| r["function"] == "rsi" && r["params"]["period"] == 14)
+        .unwrap();
+    // With no movement at all yet, TA-Lib's RSI reads 50, as ours does.
+    assert_eq!(numbers(&rsi["outputs"]["real"])[14], 50.0);
     let mut checked = 0;
     for case in cases() {
         // Prices are compared relative to the instrument's price; oscillators,
@@ -167,5 +178,7 @@ fn every_indicator_matches_ta_lib() {
             checked += 1;
         }
     }
-    assert_eq!(checked, 3 * 24, "every fixture compared");
+    // Three instruments with every indicator, and the flat stretch without the
+    // stochastic.
+    assert_eq!(checked, 3 * 24 + 22, "every fixture compared");
 }

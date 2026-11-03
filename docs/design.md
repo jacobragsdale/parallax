@@ -327,7 +327,12 @@ as a null close, rather than reading them as zero or breaking the line; a
 VWAP starts again with each New York trading day for intraday data, and runs
 from the first row for daily data. Moving sums carry their rounding error, so a
 moving average over a million rows stays within one unit in the last place of
-the exact mean, where a plain running sum drifts by a dozen. Excel can't run on the Linux build host, so
+the exact mean, where a plain running sum drifts by a dozen. Bollinger Bands
+keep their sums in double-double precision: a square root turns the smallest
+leftover of rounding into a visible spread, so a window that has gone flat must
+come out with none. Every indicator takes one pass over the rows whatever its
+period. A candle's volume that overflows its column's type says so rather than
+wrapping round. Excel can't run on the Linux build host, so
 at each milestone someone opens a verification workbook in real Excel on a VDI.
 
 ## Drawing without a GPU

@@ -10,8 +10,8 @@ use arrow_schema::{Field, Schema};
 use parallax_datagen::Dataset;
 use parallax_datagen::prices::{Prices, PricesOptions};
 use parallax_engine::chart::{
-    ChartConfig, ChartData, ChartKind, ChartRequest, ChartView, IndicatorLines, OhlcColumns, Point,
-    XAxis,
+    BucketVolume, ChartConfig, ChartData, ChartKind, ChartRequest, ChartView, IndicatorLines,
+    OhlcColumns, Point, XAxis,
 };
 use parallax_engine::indicator::{self, Indicator};
 use parallax_engine::{ConfigError, Filter, FilterOp, Scalar, Table, TableOptions};
@@ -341,7 +341,10 @@ fn vwap_starts_again_each_new_york_day_and_volume_sums_per_candle() {
     assert_eq!(candles.len(), n);
     assert_eq!(
         volumes,
-        volume.iter().map(|&v| Scalar::Int64(v)).collect::<Vec<_>>()
+        volume
+            .iter()
+            .map(|&v| BucketVolume::Total(Scalar::Int64(v)))
+            .collect::<Vec<_>>()
     );
     // Daily candles sum each day's volume exactly.
     let narrow = view.reduce(&t, &request(None, 12));
@@ -352,7 +355,10 @@ fn vwap_starts_again_each_new_york_day_and_volume_sums_per_candle() {
     let day_two: i64 = volume[6..].iter().sum();
     assert_eq!(
         volumes,
-        vec![Scalar::Int64(day_one), Scalar::Int64(day_two)]
+        vec![
+            BucketVolume::Total(Scalar::Int64(day_one)),
+            BucketVolume::Total(Scalar::Int64(day_two))
+        ]
     );
 }
 
@@ -420,4 +426,55 @@ fn charts_refuse_indicators_they_cannot_compute() {
     let reduced = view.reduce(&t, &request(None, 300));
     assert_eq!(reduced.indicators.len(), 4);
     assert!(reduced.indicators.iter().all(|l| l.key.is_some()));
+}
+
+#[test]
+fn a_volume_too_large_to_hold_says_so() {
+    // Three days of a 38-digit decimal volume: each fits, their total does not,
+    // and overflows even 128 bits, where wrapping round would land back inside
+    // 38 digits as a wrong, negative total.
+    let days = [20_395, 20_396, 20_397]; // 2025-11-03 to 05, Monday to Wednesday
+    let price = || Arc::new(Float64Array::from(vec![1.0; 3])) as ArrayRef;
+    let huge = 90_000_000_000_000_000_000_000_000_000_000_000_000_i128;
+    let volume = arrow_array::Decimal128Array::from(vec![Some(huge); 3])
+        .with_precision_and_scale(38, 0)
+        .unwrap();
+    let t = table(vec![
+        (
+            "date",
+            Arc::new(arrow_array::Date32Array::from(days.to_vec())) as ArrayRef,
+        ),
+        ("open", price()),
+        ("high", price()),
+        ("low", price()),
+        ("close", price()),
+        ("volume", Arc::new(volume) as ArrayRef),
+    ]);
+    let config = ChartConfig {
+        kind: ChartKind::Candlestick,
+        x: "date".into(),
+        y: Vec::new(),
+        series: None,
+        ohlc: Some(OhlcColumns {
+            open: "open".into(),
+            high: "high".into(),
+            low: "low".into(),
+            close: "close".into(),
+        }),
+        filters: Vec::new(),
+        axis: XAxis::Value,
+        indicators: vec![Indicator::Volume],
+        volume: Some("volume".into()),
+    };
+    let view = ChartView::new(&t, config).unwrap();
+    let volumes = |width| match view.reduce(&t, &request(None, width)).data {
+        ChartData::Candles { volumes, .. } => volumes,
+        other => panic!("{other:?}"),
+    };
+    // Daily candles each hold one day; a weekly candle holds all three.
+    assert_eq!(
+        volumes(400),
+        vec![BucketVolume::Total(Scalar::Decimal(huge)); 3]
+    );
+    assert_eq!(volumes(1), vec![BucketVolume::Overflow]);
 }

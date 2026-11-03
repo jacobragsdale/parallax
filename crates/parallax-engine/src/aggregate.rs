@@ -622,7 +622,7 @@ pub(crate) fn pow10(scale: i8) -> u128 {
 const HUGE: u128 = 1 << 100;
 
 /// The largest unscaled value of a 38-digit decimal.
-const MAX_DECIMAL_38: i128 = 99_999_999_999_999_999_999_999_999_999_999_999_999;
+pub(crate) const MAX_DECIMAL_38: i128 = 99_999_999_999_999_999_999_999_999_999_999_999_999;
 
 /// Splits an i256 into a sign and a magnitude.
 fn i256_parts(value: i256) -> (bool, BigUint) {
