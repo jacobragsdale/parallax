@@ -21,6 +21,7 @@ parallax-engine.workspace = true
 parallax-export.workspace = true
 parallax-protocol.workspace = true
 parallax-session.workspace = true
+parallax-sources.workspace = true
 prost = "0.14"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["arbitrary_precision"] }

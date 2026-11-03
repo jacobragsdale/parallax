@@ -454,6 +454,21 @@ fn value_error(column: &str, reason: impl Into<String>) -> LayoutError {
     }
 }
 
+/// Parses decimal text, such as `-1234.5` or `1.2e3`, exactly into an unscaled
+/// value at `scale`. More fractional digits than the scale holds are an error
+/// unless they are zeros, so a value is never rounded.
+///
+/// # Errors
+///
+/// Returns a message for text that is not a decimal, does not fit 128 bits, or
+/// has more decimal places than `scale`.
+pub fn parse_exact_decimal(text: &str, scale: i8) -> Result<i128, String> {
+    parse_decimal("value", text, scale).map_err(|e| match e {
+        LayoutError::Value { reason, .. } => reason,
+        other => other.to_string(),
+    })
+}
+
 /// Parses decimal text exactly into an unscaled value at `scale`. More fractional
 /// digits than the scale holds are an error unless they are zeros.
 fn parse_decimal(column: &str, text: &str, scale: i8) -> Result<i128, LayoutError> {

@@ -4,39 +4,12 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::time::{Duration, Instant};
 
-use arrow_array::RecordBatch;
-use arrow_schema::SchemaRef;
 use parallax_engine::{DuplicatePolicy, TableOptions};
 use parallax_protocol::v1::DatasetInfo;
 use parallax_session::{Catalog, ConnectionContext, SharedTable, TableState};
 use tokio::sync::broadcast;
 
-/// The current time in microseconds since the Unix epoch.
-#[must_use]
-pub fn now_micros() -> i64 {
-    jiff::Timestamp::now().as_microsecond()
-}
-
-/// Rows read from a source.
-#[derive(Debug)]
-pub struct Fetched {
-    /// The schema, known even when there are no rows.
-    pub schema: SchemaRef,
-    /// The rows.
-    pub batches: Vec<RecordBatch>,
-    /// When the source produced them, in microseconds since the Unix epoch.
-    pub as_of_micros: i64,
-}
-
-/// Where a dataset's rows come from.
-pub trait Source: Send + Sync {
-    /// Reads every row for `parameters`.
-    ///
-    /// # Errors
-    ///
-    /// Returns a message if the source cannot be read.
-    fn fetch(&self, parameters: &BTreeMap<String, String>) -> Result<Fetched, String>;
-}
+pub use parallax_sources::{Fetched, Source, now_micros};
 
 /// Maps a request's parameters and connection context to the parameters the table
 /// is cached by. Tables are shared by every connection with the same resolved

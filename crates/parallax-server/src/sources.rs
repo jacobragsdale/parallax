@@ -1,6 +1,5 @@
-//! Built-in sources: Arrow IPC files and the synthetic data generator.
-//!
-//! Database, Parquet, MongoDB and HTTP connectors arrive in later milestone 1 steps.
+//! Built-in sources: Arrow IPC files and the synthetic data generator. The
+//! connectors to other systems are in `parallax-sources`.
 
 use std::collections::BTreeMap;
 use std::fs::File;

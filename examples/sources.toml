@@ -1,0 +1,38 @@
+# Datasets from the connectors in parallax-sources. Copy the parts you need.
+#   cargo run --release -p parallax-server -- --config examples/sources.toml
+
+listen = "127.0.0.1:8792"
+
+# An existing REST GET. Dataset parameters fill {placeholders} in the URL, and
+# the rest become query parameters. The endpoint is asked for an Arrow IPC
+# stream and may answer JSON instead, which needs the columns declared.
+[[dataset]]
+name = "risk"
+parameters = ["as_of", "fund"]
+primary_key = "position_id"
+max_age_seconds = 300
+[dataset.source]
+kind = "http"
+url = "https://risk.internal/api/funds/{fund}/risk"
+records = "data.rows"
+key = "position_id"
+headers = { Authorization = "env:RISK_SERVICE_TOKEN" }
+columns = [
+  { name = "position_id", type = "integer" },
+  { name = "ticker", type = "text" },
+  { name = "market_value_usd", type = "decimal(20, 2)" },
+  { name = "beta", path = "risk.beta", type = "float" },
+  # Wall-clock text in New York; 01:30 on the day clocks go back happens twice,
+  # so the column says which one it means.
+  { name = "priced_at", type = "timestamp", zone = "America/New_York", ambiguous = "earlier" },
+]
+
+# A Parquet file on a slow share, copied once to a local cache.
+[[dataset]]
+name = "eod_positions"
+parameters = ["as_of"]
+primary_key = "position_id"
+[dataset.source]
+kind = "parquet"
+path = "/mnt/share/eod/{as_of}/positions.parquet"
+cache_dir = "/var/cache/parallax"

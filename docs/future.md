@@ -19,8 +19,9 @@ research already done.
 - **Converting JSON inside SQL Server.** `OPENJSON ... WITH` could move JSON
   conversion onto the database server. The first milestone converts JSON in
   Rust, with the same code that handles MongoDB documents.
-- **Arrays of objects in documents.** These are rejected in the first
-  milestone. Supporting them means choosing between exploding them into child
+- **Arrays in documents.** All arrays are rejected for now, because the engine
+  has no list columns. Arrays of scalars need list columns in the engine and the
+  grid; arrays of objects also need a choice between exploding them into child
   rows and using Arrow struct lists.
 
 ## Engine

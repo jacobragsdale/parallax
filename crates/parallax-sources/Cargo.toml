@@ -1,0 +1,36 @@
+[package]
+name = "parallax-sources"
+description = "Where parallax tables come from: the source interface, the shared JSON converter, and connectors"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+arrow-array.workspace = true
+arrow-buffer.workspace = true
+arrow-ipc.workspace = true
+arrow-schema.workspace = true
+jiff.workspace = true
+parallax-protocol.workspace = true
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["arbitrary_precision"] }
+thiserror.workspace = true
+parquet = { version = "60.1", default-features = false, features = ["arrow", "snap", "zstd", "lz4", "flate2-zlib-rs"], optional = true }
+ureq = { version = "3.5", optional = true }
+
+[features]
+default = ["http", "parquet"]
+# Pulls from REST GET endpoints, as Arrow IPC streams or JSON.
+http = ["dep:ureq"]
+# Reads Parquet files through a local cache.
+parquet = ["dep:parquet"]
+
+[dev-dependencies]
+arrow-select = { version = "60.1", default-features = false }
+proptest = "1.12"
+tempfile = "3.27"
+
+[lints]
+workspace = true

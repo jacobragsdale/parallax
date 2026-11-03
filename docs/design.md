@@ -398,7 +398,10 @@ and C# services keep their business logic. parallax pulls from their existing
 GET endpoints through the HTTP connector, and live sources push Arrow batches
 through an ingest API.
 
-The first connectors cover where the data already lives:
+The connectors live in the `parallax-sources` crate, behind one interface: a
+source reads every row for a set of parameters in one call. The reference
+server's TOML names them by `kind`; `examples/sources.toml` shows each. The first
+connectors cover where the data already lives:
 
 - **SQL Server** goes through `arrow-odbc` and Microsoft ODBC Driver 18, which
   fetch column batches instead of rows. SQL Server 2025's
@@ -420,17 +423,24 @@ The first connectors cover where the data already lives:
   - Numbers are parsed from text straight into the declared type, and decimals
     are parsed exactly, never through f64.
   - A missing path is null.
-  - Nested fields flatten to dotted names, and arrays of scalars become list
-    columns. Arrays of objects are rejected in the first milestone.
+  - Nested fields are reached by dotted paths. Arrays are refused for now,
+    because the engine has no list columns yet; see
+    [Deferred work](future.md).
+  - Wall-clock text without an offset follows the zoneless-timestamp rule in
+    the column's zone.
   - MongoDB uses the official `mongodb` driver.
 - **Parquet** goes through the `parquet` crate, behind a local SSD cache keyed
   by path, size and modification time, so the slow NFS share is read only once.
+  Older copies of a file are removed when a newer one is cached. Dataset
+  parameters may fill placeholders in the path, but not with path separators or
+  a leading dot, so a parameter cannot reach outside the configured directory.
 - **HTTP** pulls from the existing C# and Python REST GET endpoints, on the
   same refresh rules as any other source.
   - Dataset parameters map onto the GET's query string, so a table is still
     cached by dataset and parameters.
   - The host supplies a service credential, as it supplies the per-connection
-    value. The library still contains no auth code.
+    value: a header read from an environment variable at each fetch, or a
+    function that returns headers. The library still contains no auth code.
   - The connector asks for an Arrow IPC stream with
     `Accept: application/vnd.apache.arrow.stream`, the
     [IANA-registered type](https://www.iana.org/assignments/media-types/application/vnd.apache.arrow.stream),

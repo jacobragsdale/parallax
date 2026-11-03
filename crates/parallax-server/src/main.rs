@@ -11,6 +11,8 @@ use clap::Parser;
 use parallax_engine::DuplicatePolicy;
 use parallax_server::sources::{ArrowFile, Generator};
 use parallax_server::{Dataset, RefreshPolicy, Registry, Source, router, spawn_refresher};
+use parallax_sources::http::{Http, HttpConfig};
+use parallax_sources::parquet::{Parquet, ParquetConfig};
 use serde::Deserialize;
 use tower_http::services::ServeDir;
 
@@ -59,6 +61,8 @@ struct DatasetConfig {
 enum SourceConfig {
     ArrowFile { path: PathBuf },
     Generator(Generator),
+    Http(HttpConfig),
+    Parquet(ParquetConfig),
 }
 
 fn default_max_tables() -> usize {
@@ -83,6 +87,8 @@ async fn main() -> anyhow::Result<()> {
             source: match d.source {
                 SourceConfig::ArrowFile { path } => Box::new(ArrowFile { path }) as Box<dyn Source>,
                 SourceConfig::Generator(g) => Box::new(g),
+                SourceConfig::Http(c) => Box::new(Http::new(c)),
+                SourceConfig::Parquet(c) => Box::new(Parquet::new(c)),
             },
             name: d.name,
             parameters: d.parameters,
@@ -115,4 +121,26 @@ async fn main() -> anyhow::Result<()> {
         })
         .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Config;
+
+    #[test]
+    fn every_example_configuration_parses() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+        let mut checked = 0;
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_some_and(|e| e == "toml") {
+                let text = std::fs::read_to_string(&path).unwrap();
+                if let Err(e) = toml::from_str::<Config>(&text) {
+                    panic!("{}: {e}", path.display());
+                }
+                checked += 1;
+            }
+        }
+        assert!(checked >= 3);
+    }
 }
