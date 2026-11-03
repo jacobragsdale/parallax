@@ -162,6 +162,8 @@ pub struct Bucket {
     /// The bucket's start as an x value: days since the epoch for dates,
     /// microseconds for instants.
     pub start: i64,
+    /// The next bucket's start, which this bucket stops short of, as an x value.
+    pub end: i64,
     /// The axis position of the bucket's start.
     pub from: f64,
     /// The axis position of the next bucket's start.
@@ -722,6 +724,7 @@ impl ChartView {
                 }
                 let span = Bucket {
                     start: bucket,
+                    end: advance(bucket, interval, instants, &zone),
                     from: self.bucket_position(bucket, interval, instants, &zone, false),
                     to: self.bucket_position(bucket, interval, instants, &zone, true),
                 };

@@ -1,30 +1,47 @@
 import { ChangeDetectionStrategy, Component, input, signal } from "@angular/core";
-import { ChartComponent } from "parallax";
-import type { LayoutInput, ThemeName } from "parallax";
+import { ChartComponent, GridComponent } from "parallax";
+import type { LayoutFilter, LayoutInput, ThemeName } from "parallax";
 
 /** A chart the page shows, with what it says. */
 interface Card {
   readonly title: string;
   readonly layout: ReturnType<typeof signal<LayoutInput>>;
+  /** Whether a brush on it narrows the grid beside it. */
+  readonly linked: boolean;
 }
 
 const THREE = ["QYE", "ZREZ", "NV"];
 
-function card(title: string, layout: LayoutInput): Card {
-  return { title, layout: signal(layout) };
+const QYE: LayoutFilter = { column: "ticker", op: "eq", value: "QYE", values: [] };
+
+const ALL_DAYS = "QYE's days, all of them until a range of candles is selected";
+
+/** The grid beside the candles: QYE's days, narrowed to a brushed range. */
+function rowsLayout(brush: readonly LayoutFilter[]): LayoutInput {
+  return { dataset: "prices", filters: [QYE, ...brush], sort: [{ column: "date", descending: true }], columns: ["date", "open", "high", "low", "close", "volume"] };
+}
+
+function card(title: string, layout: LayoutInput, linked = false): Card {
+  return { title, layout: signal(layout), linked };
 }
 
 /** Every chart kind over the generated data: prices held in the browser, positions on the server. */
 @Component({
   selector: "demo-charts",
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ChartComponent],
+  imports: [ChartComponent, GridComponent],
   template: `
     @for (c of cards; track c.title) {
       <section>
         <h2>{{ c.title }}</h2>
-        <px-chart [(layout)]="c.layout" [theme]="theme()" />
+        <px-chart [(layout)]="c.layout" [theme]="theme()" (brushed)="brush(c, $event)" />
       </section>
+      @if (c.linked) {
+        <section>
+          <h2>{{ rowsTitle() }}</h2>
+          <px-grid [(layout)]="rows" [theme]="theme()" />
+        </section>
+      }
     }
   `,
   styles: `
@@ -55,7 +72,8 @@ function card(title: string, layout: LayoutInput): Card {
       font-size: 13px;
       font-weight: 600;
     }
-    px-chart {
+    px-chart,
+    px-grid {
       flex: 1;
       min-height: 0;
     }
@@ -64,17 +82,30 @@ function card(title: string, layout: LayoutInput): Card {
 export class ChartsComponent {
   public readonly theme = input<ThemeName>("light");
 
+  /** The grid of QYE's days, narrowed by a brush on the candles. */
+  protected readonly rows = signal<LayoutInput>(rowsLayout([]));
+  protected readonly rowsTitle = signal(ALL_DAYS);
+
+  /** A brushed range on a linked chart narrows the grid to the days it covers; clearing it shows them all. */
+  protected brush(c: Card, filters: readonly LayoutFilter[] | null): void {
+    if (!c.linked) {
+      return;
+    }
+    this.rows.set(rowsLayout(filters ?? []));
+    this.rowsTitle.set(filters === null ? ALL_DAYS : "QYE's days in the selected candles");
+  }
+
   protected readonly cards: readonly Card[] = [
     card("Closing prices on trading days, log scale", {
       dataset: "prices",
       filters: [{ column: "ticker", op: "in", values: THREE }],
       chart: { kind: "line", x: "date", y: ["close"], series: "ticker", axis: "trading", log_y: true }
     }),
-    card("QYE candles, bucketed to fit", {
-      dataset: "prices",
-      filters: [{ column: "ticker", op: "eq", value: "QYE" }],
-      chart: { kind: "candlestick", x: "date", axis: "trading", ohlc: { open: "open", high: "high", low: "low", close: "close" } }
-    }),
+    card(
+      "QYE candles, bucketed to fit: drag to pan, wheel to zoom, Shift-drag to select days",
+      { dataset: "prices", filters: [QYE], chart: { kind: "candlestick", x: "date", axis: "trading", ohlc: { open: "open", high: "high", low: "low", close: "close" } } },
+      true
+    ),
     card("Market value by sector and asset class", {
       dataset: "positions",
       group_by: ["sector"],

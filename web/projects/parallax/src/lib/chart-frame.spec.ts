@@ -38,7 +38,8 @@ describe("decodeChartFrame", () => {
         x: new Float64Array([1, 2, 3, 1, 4]),
         y: new Float64Array([10, Number.NaN, 12, 5, 6]),
         x_text: ["Jan 2", "Jan 3", "Jan 4", "Jan 2", "Jan 5"],
-        y_text: ["10.00", null, "12.00", "5.00", "6.00"]
+        y_text: ["10.00", null, "12.00", "5.00", "6.00"],
+        x_json: ['"2026-01-02"', '"2026-01-03"', '"2026-01-04"', '"2026-01-02"', '"2026-01-05"']
       },
       {
         series: [
@@ -62,7 +63,7 @@ describe("decodeChartFrame", () => {
   });
 
   it("refuses series out of order, unlisted series, and a density of the wrong size", () => {
-    const points = { x: new Float64Array([1, 2]), y: new Float64Array([1, 2]), x_text: ["a", "b"], y_text: ["a", "b"] };
+    const points = { x: new Float64Array([1, 2]), y: new Float64Array([1, 2]), x_text: ["a", "b"], y_text: ["a", "b"], x_json: ["1", "2"] };
     const series = [
       { label: "a", column: "y" },
       { label: "b", column: "y" }
@@ -70,7 +71,9 @@ describe("decodeChartFrame", () => {
     expect(() => decodeChartFrame(chartFrame({ series: new Uint32Array([1, 0]), ...points }, { series }))).toThrow("in order");
     expect(() => decodeChartFrame(chartFrame({ series: new Uint32Array([0, 5]), ...points }, { series }))).toThrow("does not list");
     expect(() => decodeChartFrame(chartFrame({ count: new Uint32Array([1, 2, 3]) }, { columns: 2, rows: 2 }))).toThrow("size");
-    expect(() => decodeChartFrame(chartFrame({ series: new Uint32Array([0]), x: new Float64Array([1]), y: ["not a number"], x_text: ["a"], y_text: ["a"] }, { series }))).toThrow("doubles");
+    expect(() => decodeChartFrame(chartFrame({ series: new Uint32Array([0]), x: new Float64Array([1]), y: ["not a number"], x_text: ["a"], y_text: ["a"], x_json: ["1"] }, { series }))).toThrow(
+      "doubles"
+    );
   });
 
   it("reads histograms, densities and candles", () => {
@@ -91,7 +94,7 @@ describe("decodeChartFrame", () => {
     const density = decodeChartFrame(chartFrame({ count: new Uint32Array([1, 0, 2, 5]) }, { columns: 2, rows: 2, yFrom: -1, yTo: 1 }));
     expect(density.content.kind === "density" && Array.from(density.content.counts)).toEqual([1, 0, 2, 5]);
     const prices = { open: new Float64Array([1]), high: new Float64Array([2]), low: new Float64Array([0.5]), close: new Float64Array([Number.NaN]) };
-    const texts = { open_text: ["1.00"], high_text: ["2.00"], low_text: ["0.50"], close_text: [null] };
+    const texts = { open_text: ["1.00"], high_text: ["2.00"], low_text: ["0.50"], close_text: [null], x_json: ['"2026-11-02"'], end_json: ['"2026-11-09"'] };
     const candles = decodeChartFrame(chartFrame({ from: new Float64Array([0]), to: new Float64Array([7]), x_text: ["Nov 2"], ...prices, ...texts }, { interval: "week" }));
     expect(candles.content.kind === "candles" && candles.content.candles.interval).toBe("week");
     expect(candles.content.kind === "candles" && candles.content.candles.closeText).toEqual([null]);

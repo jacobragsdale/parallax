@@ -4,7 +4,7 @@ import type { ChartContent, ChartFrameData } from "../chart-frame";
 import { parseLayout } from "../layout";
 import type { LayoutChart } from "../layout";
 import { CHART_COLORS } from "../theme";
-import { chartModel } from "./model";
+import { bucketTitle, chartModel } from "./model";
 import type { CategoryData, Mark, ModelInput } from "./model";
 
 function chart(partial: Partial<LayoutChart> & Pick<LayoutChart, "kind">): LayoutChart {
@@ -24,7 +24,7 @@ function input(c: LayoutChart, data: { readonly frame?: ChartFrameData; readonly
 }
 
 function series(label: string, y: readonly number[], right = false): Extract<ChartContent, { kind: "series" }>["series"][number] {
-  return { label, column: "close", right, x: Float64Array.from(y.map((_, i) => i)), y: Float64Array.from(y), xText: y.map(() => "x"), yText: y.map(String) };
+  return { label, column: "close", right, x: Float64Array.from(y.map((_, i) => i)), y: Float64Array.from(y), xText: y.map(() => "x"), yText: y.map(String), xJson: y.map((_, i) => String(i)) };
 }
 
 function kinds<K extends Mark["kind"]>(marks: readonly Mark[], kind: K): Extract<Mark, { kind: K }>[] {
@@ -94,7 +94,9 @@ describe("chartModel", () => {
       openText: ["10", "12", "11"],
       highText: ["13", "13", "12"],
       lowText: ["9", "10", "10"],
-      closeText: ["12", "10", null]
+      closeText: ["12", "10", null],
+      xJson: ["0", "1", "2"],
+      endJson: ["1", "2", "3"]
     };
     const model = chartModel(input(chart({ kind: "candlestick" }), { frame: frame({ kind: "candles", candles }) }));
     const [up, down, ...rest] = kinds(model.marks, "candle");
@@ -184,5 +186,16 @@ describe("chartModel", () => {
   it("says when there is nothing to draw yet", () => {
     expect(chartModel(input(chart({ kind: "line" }), {})).empty).toBe("Loading…");
     expect(chartModel(input(chart({ kind: "bar" }), { categories: { categories: [], series: [] } })).empty).toBe("No groups to show");
+  });
+});
+
+describe("bucketTitle", () => {
+  it("names the period a bucket starts, and a day by its date alone", () => {
+    expect(bucketTitle("day", "2024-06-03")).toBe("2024-06-03");
+    expect(bucketTitle("week", "2024-06-03")).toBe("Week of 2024-06-03");
+    expect(bucketTitle("month", "2024-06-01")).toBe("Month of 2024-06-01");
+    expect(bucketTitle("5m", "2024-06-03 09:30")).toBe("5 minutes from 2024-06-03 09:30");
+    expect(bucketTitle("1m", "09:30")).toBe("1 minute from 09:30");
+    expect(bucketTitle("2y", "2020-01-01")).toBe("2 years from 2020-01-01");
   });
 });

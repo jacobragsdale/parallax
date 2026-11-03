@@ -63,3 +63,90 @@ test("the legend hides a series and shows it again, keeping the others' colours"
   await expect(entries.nth(1)).toHaveAttribute("aria-pressed", "true");
   await expect.poll(() => inked(chart.locator("canvas"))).toBe(ink);
 });
+
+/** The middle of a chart's plot, in page pixels. */
+async function centre(plot: Locator): Promise<{ readonly x: number; readonly y: number; readonly width: number }> {
+  const box = await plot.boundingBox();
+  if (box === null) {
+    throw new Error("the plot is not on the page");
+  }
+  return { x: box.x + box.width / 2, y: box.y + box.height / 2, width: box.width };
+}
+
+test("hovering a line reads every ticker at the nearest day, and the candles follow the crosshair", async ({ page }) => {
+  await open(page);
+  const [line, candles] = [page.locator("px-chart").nth(0), page.locator("px-chart").nth(1)];
+  const at = await centre(line.locator(".px-chart-plot"));
+  await page.mouse.move(at.x, at.y);
+  const tip = line.locator(".px-chart-tip");
+  await expect(tip).toBeVisible();
+  await expect(tip.locator(".px-tip-title")).toHaveText(/\d/);
+  // One row per ticker, each a value and the ticker's name.
+  await expect(tip.locator(".px-tip-row")).toHaveCount(3);
+  for (const ticker of ["QYE", "ZREZ", "NV"]) {
+    await expect(tip.locator(".px-tip-row").filter({ hasText: ticker }).locator("strong")).toHaveText(/^-?[\d,.]+$/);
+  }
+  // The candles, of the same dataset, x and axis, read the bucket under the same day.
+  await expect(candles.locator(".px-chart-crosshair")).toBeVisible();
+  await expect(candles.locator(".px-chart-tip .px-tip-row")).toHaveCount(4);
+  await page.mouse.move(at.x, 5);
+  await expect(page.locator(".px-chart-tip")).toHaveCount(0);
+});
+
+test("the wheel zooms, dragging pans, and a double-click or 0 shows everything", async ({ page }) => {
+  await open(page);
+  const candles = page.locator("px-chart").nth(1);
+  const plot = candles.locator(".px-chart-plot");
+  const status = candles.locator(".px-status-rows");
+  await expect(status).not.toContainText("zoomed");
+  const at = await centre(plot);
+  await page.mouse.move(at.x, at.y);
+  for (let i = 0; i < 20; i += 1) {
+    await page.mouse.wheel(0, -100);
+  }
+  // Zoomed in far enough, each candle is a day.
+  await expect(status).toContainText("day candles");
+  await expect(status).toContainText("zoomed");
+  const title = candles.locator(".px-chart-tip .px-tip-title");
+  await page.mouse.move(at.x, at.y);
+  const before = await title.textContent();
+  await page.mouse.down();
+  await page.mouse.move(at.x - at.width / 4, at.y, { steps: 5 });
+  await page.mouse.up();
+  await page.mouse.move(at.x + 1, at.y);
+  await page.mouse.move(at.x, at.y);
+  // Dragging left brings later days under the pointer.
+  await expect(title).not.toHaveText(before ?? "");
+  await page.mouse.dblclick(at.x, at.y);
+  await expect(status).not.toContainText("zoomed");
+  await plot.focus();
+  await page.keyboard.press("+");
+  await expect(status).toContainText("zoomed");
+  await page.keyboard.press("0");
+  await expect(status).not.toContainText("zoomed");
+});
+
+test("Shift and drag on the candles lists the selected days in the grid, and Escape lists them all again", async ({ page }) => {
+  await open(page);
+  const candles = page.locator("px-chart").nth(1);
+  const grid = page.locator("section").filter({ has: page.locator("px-grid") });
+  const rows = grid.locator(".px-status-rows");
+  await expect(rows).toHaveText(/^[\d,]+ rows$/);
+  const count = async (): Promise<number> => Number((await rows.textContent())?.replace(/\D/g, "") ?? "0");
+  const all = await count();
+  const at = await centre(candles.locator(".px-chart-plot"));
+  await page.keyboard.down("Shift");
+  await page.mouse.move(at.x - at.width / 8, at.y);
+  await page.mouse.down();
+  await page.mouse.move(at.x + at.width / 8, at.y, { steps: 5 });
+  await page.mouse.up();
+  await page.keyboard.up("Shift");
+  await expect(candles.locator(".px-chart-brush")).toBeVisible();
+  await expect(grid.locator("h2")).toHaveText("QYE's days in the selected candles");
+  // A quarter of the plot holds about a quarter of the days.
+  await expect.poll(count).toBeLessThan(all / 2);
+  expect(await count()).toBeGreaterThan(all / 8);
+  await candles.locator(".px-chart-plot").press("Escape");
+  await expect(candles.locator(".px-chart-brush")).toHaveCount(0);
+  await expect.poll(count).toBe(all);
+});

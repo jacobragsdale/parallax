@@ -796,11 +796,13 @@ export const SetChartWindowSchema: GenMessage<SetChartWindow> = /*@__PURE__*/
  * depend on the chart kind; each names its role in its "parallax.role" metadata:
  *
  * - line and area: series, x, y (NaN at a break), x_text and y_text (null at a
- *   break), one row per kept point, series by series;
+ *   break), and x_json, the x value as exact JSON for filters, one row per kept
+ *   point, series by series;
  * - scatter: count, one row per density cell, row by row from the bottom;
  * - histogram: series, from, to, count, from_text and to_text, one row per bin;
- * - candlestick and OHLC: from, to, open, high, low, close and their texts, and
- *   x_text for the bucket's start, one row per bucket.
+ * - candlestick and OHLC: from, to, open, high, low, close and their texts,
+ *   x_text for the bucket's start, and x_json and end_json, the bucket's start
+ *   and the next bucket's start as exact JSON, one row per bucket.
  *
  * @generated from message parallax.v1.ChartFrame
  */

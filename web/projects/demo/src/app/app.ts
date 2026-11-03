@@ -52,12 +52,12 @@ const PRESETS: Readonly<Record<PresetName, Preset>> = {
   charts: {
     title: "Charts",
     about:
-      "Every chart kind, reduced by the engine to the pixels it fills: lines on trading days, candles bucketed to fit, stacked bars, a histogram, a density of a thousand points and a heatmap that diverges around zero.",
+      "Every chart kind, reduced by the engine to the pixels it fills: lines on trading days, candles bucketed to fit, stacked bars, a histogram, a density of a thousand points and a heatmap that diverges around zero. Hover for values; the price charts share a crosshair. Drag to pan, scroll to zoom, double-click to show everything, and Shift-drag on the candles to list those days.",
     layout: { dataset: "prices" }
   },
   prices: {
     title: "Daily prices",
-    about: "Daily prices for 50 tickers with fat-tailed returns, held in the browser. Charts and technical analysis come in milestones 2 and 3.",
+    about: "Daily prices for 50 tickers with fat-tailed returns, held in the browser.",
     layout: { dataset: "prices", sort: [{ column: "date", descending: true }, { column: "ticker" }] }
   }
 };

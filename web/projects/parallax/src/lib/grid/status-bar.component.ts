@@ -74,6 +74,11 @@ const STATUS_STYLES = `
     border-radius: 8px;
     color: #fff;
   }
+  px-status-bar .px-badge-neutral {
+    padding: 0 5px;
+    border: 1px solid var(--px-grid-line);
+    color: inherit;
+  }
   px-status-bar .px-badge-warning {
     background: var(--px-warning);
   }
@@ -213,7 +218,7 @@ export class StatusBarComponent {
   private readonly where = computed((): Omit<Badge, "kind"> | null => {
     const placement = this.placement();
     if (placement?.location === "browser") {
-      return { text: "in browser", classes: "px-badge px-status-where", role: null, title: "This view runs in your browser, on a copy of the server's table, with the same engine." };
+      return { text: "in browser", classes: "px-badge px-badge-neutral px-status-where", role: null, title: "This view runs in your browser, on a copy of the server's table, with the same engine." };
     }
     if (placement !== null && placement.fallback !== null) {
       return { text: "on server", classes: "px-badge px-badge-warning px-status-where", role: null, title: placement.fallback };

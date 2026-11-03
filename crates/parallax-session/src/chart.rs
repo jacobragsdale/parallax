@@ -57,6 +57,13 @@ impl<'a> Texts<'a> {
         self.formatter.scalar(&self.ty, value)
     }
 
+    /// A row's value as exact JSON, for filters that select it, or `None` at a
+    /// break.
+    fn json(&self, slot: Option<usize>) -> Option<String> {
+        let value = self.table.column(self.index?).scalar(slot?);
+        Some(parallax_engine::format::scalar_json(&self.ty, &value))
+    }
+
     /// The text of a double, such as a bin edge between the column's values.
     fn double(&self, value: f64) -> String {
         self.formatter
@@ -135,8 +142,14 @@ pub(crate) fn chart_frame(table: &Table, state: &ChartState) -> Result<ChartFram
     };
     match data {
         ChartData::Series(series) => {
-            let (mut ids, mut xs, mut ys, mut x_texts, mut y_texts) =
-                (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+            let (mut ids, mut xs, mut ys, mut x_texts, mut y_texts, mut x_json) = (
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            );
             let y_texts_by_column: Vec<Texts<'_>> = config.y.iter().map(|c| texts_of(c)).collect();
             for (i, (s, points)) in series.iter().enumerate() {
                 let column = &config.y[s.y];
@@ -152,6 +165,7 @@ pub(crate) fn chart_frame(table: &Table, state: &ChartState) -> Result<ChartFram
                     ys.push(p.y);
                     x_texts.push(x_text.cell(p.slot));
                     y_texts.push(y_text.cell(p.slot));
+                    x_json.push(x_text.json(p.slot));
                 }
             }
             frame.batch = batch(vec![
@@ -163,6 +177,7 @@ pub(crate) fn chart_frame(table: &Table, state: &ChartState) -> Result<ChartFram
                 floats("y", ys),
                 texts("x_text", x_texts),
                 texts("y_text", y_texts),
+                texts("x_json", x_json),
             ])?;
         }
         ChartData::Density {
@@ -234,12 +249,16 @@ pub(crate) fn chart_frame(table: &Table, state: &ChartState) -> Result<ChartFram
                     .and_then(|(s, i)| parallax_engine::chart::number(table.column(i), s))
                     .unwrap_or(f64::NAN)
             };
-            let start_text = |start: i64| {
-                let value = match x_text.ty {
-                    ColumnType::Date32 => Scalar::Date32(i32::try_from(start).unwrap_or_default()),
-                    _ => Scalar::Timestamp(start),
-                };
-                x_text.value(&value)
+            let x_scalar = |at: i64| match x_text.ty {
+                ColumnType::Date32 => Scalar::Date32(i32::try_from(at).unwrap_or_default()),
+                _ => Scalar::Timestamp(at),
+            };
+            let start_text = |start: i64| x_text.value(&x_scalar(start));
+            let json = |at: i64| {
+                Some(parallax_engine::format::scalar_json(
+                    &x_text.ty,
+                    &x_scalar(at),
+                ))
             };
             let mut columns: Vec<(Field, ArrayRef)> = vec![
                 floats("from", candles.iter().map(|(b, _)| b.from).collect()),
@@ -250,6 +269,14 @@ pub(crate) fn chart_frame(table: &Table, state: &ChartState) -> Result<ChartFram
                         .iter()
                         .map(|(b, _)| Some(start_text(b.start)))
                         .collect(),
+                ),
+                texts(
+                    "x_json",
+                    candles.iter().map(|(b, _)| json(b.start)).collect(),
+                ),
+                texts(
+                    "end_json",
+                    candles.iter().map(|(b, _)| json(b.end)).collect(),
                 ),
             ];
             for (role, column, pick) in [

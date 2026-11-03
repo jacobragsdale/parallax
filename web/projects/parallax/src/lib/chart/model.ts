@@ -319,6 +319,22 @@ function densityModel(input: ModelInput, frame: ChartFrameData, content: Content
   };
 }
 
+const PERIODS: Readonly<Record<string, string>> = { week: "Week", month: "Month", quarter: "Quarter", year: "Year" };
+
+/** A bucket's title: a day's date, or the period it starts, such as "Month of 2024-06-01" or "5 minutes from 09:30". */
+export function bucketTitle(interval: string, start: string): string {
+  const period = PERIODS[interval];
+  if (period !== undefined) {
+    return `${period} of ${start}`;
+  }
+  const many = /^(\d+)([my])$/.exec(interval);
+  if (many === null) {
+    return start;
+  }
+  const [count, unit] = [many[1] ?? "", many[2] === "m" ? "minute" : "year"];
+  return `${count} ${unit}${count === "1" ? "" : "s"} from ${start}`;
+}
+
 /** The candle or OHLC bar for bucket `i`, or null if a price is missing. */
 function candleMark(input: ModelInput, c: Content<"candles">["candles"], i: number, x: Scale, y: Scale, bars: boolean): Mark | null {
   const [open, high, low, close] = [c.open[i] ?? Number.NaN, c.high[i] ?? Number.NaN, c.low[i] ?? Number.NaN, c.close[i] ?? Number.NaN];
@@ -328,7 +344,7 @@ function candleMark(input: ModelInput, c: Content<"candles">["candles"], i: numb
   const [from, to] = [x.map(c.from[i] ?? 0), x.map(c.to[i] ?? 0)];
   const up = close >= open;
   const hit: Hit = {
-    title: c.xText[i] ?? "",
+    title: bucketTitle(c.interval, c.xText[i] ?? ""),
     rows: [
       { label: "Open", value: c.openText[i] ?? "" },
       { label: "High", value: c.highText[i] ?? "" },

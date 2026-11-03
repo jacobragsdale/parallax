@@ -201,3 +201,211 @@ fn a_chart_refuses_a_viewport_and_refreshes_without_errors() {
         "{pushed:?}"
     );
 }
+
+/// A brushed range's filters, built from the exact JSON a chart frame sends,
+/// select the rows the chart drew there: the browser never has to format or
+/// parse a date to link a chart to a grid.
+mod brushes {
+    use std::collections::HashMap;
+    use std::sync::{Arc, RwLock};
+
+    use arrow_array::cast::AsArray;
+    use arrow_array::types::Date32Type;
+    use arrow_array::{Array, RecordBatch};
+    use parallax_datagen::Dataset;
+    use parallax_datagen::prices::{Prices, PricesOptions};
+    use parallax_engine::TableOptions;
+    use parallax_protocol::ipc::decode_batches;
+    use parallax_protocol::v1::{
+        ChartFrame, OpenView, SetChartWindow, SetViewport, client_message, server_message::Body,
+    };
+    use parallax_session::{MemoryCatalog, Session, TableState};
+
+    use super::send;
+
+    fn session() -> (Session, RecordBatch) {
+        let prices = Prices::new(PricesOptions {
+            tickers: 2,
+            securities: 200,
+            ..PricesOptions::default()
+        })
+        .unwrap();
+        let batch = prices.batch(0..prices.num_rows());
+        let state = TableState::from_batches(
+            &batch.schema(),
+            std::slice::from_ref(&batch),
+            TableOptions::default(),
+            1,
+            1,
+        )
+        .unwrap();
+        let catalog = Arc::new(MemoryCatalog::new());
+        catalog.insert("prices", Arc::new(RwLock::new(state)));
+        (Session::new(catalog), batch)
+    }
+
+    fn open(session: &mut Session, view_id: u32, layout: &str) {
+        let replies = send(
+            session,
+            u64::from(view_id) * 10,
+            client_message::Body::OpenView(OpenView {
+                view_id,
+                dataset: "prices".into(),
+                parameters: HashMap::new(),
+                layout_json: layout.into(),
+            }),
+        );
+        assert!(
+            replies.iter().all(|r| !matches!(r, Body::Error(_))),
+            "{replies:?}"
+        );
+    }
+
+    fn chart(session: &mut Session, layout: &str) -> RecordBatch {
+        open(session, 1, layout);
+        let replies = send(
+            session,
+            11,
+            client_message::Body::SetChartWindow(SetChartWindow {
+                view_id: 1,
+                width: 300,
+                height: 200,
+                ..SetChartWindow::default()
+            }),
+        );
+        let [Body::ChartFrame(ChartFrame { batch, .. })] = replies.as_slice() else {
+            panic!("{replies:?}")
+        };
+        decode_batches(batch).unwrap().remove(0)
+    }
+
+    /// How many rows a grid over `layout` holds.
+    fn rows(session: &mut Session, view_id: u32, layout: &str) -> u64 {
+        open(session, view_id, layout);
+        let replies = send(
+            session,
+            u64::from(view_id) * 10 + 1,
+            client_message::Body::SetViewport(SetViewport {
+                view_id,
+                first_row: 0,
+                row_count: 1,
+                first_column: 0,
+                column_count: 1,
+            }),
+        );
+        let [Body::Frame(frame)] = replies.as_slice() else {
+            panic!("{replies:?}")
+        };
+        frame.total_rows
+    }
+
+    fn texts(batch: &RecordBatch, name: &str) -> Vec<String> {
+        let column = batch.column_by_name(name).unwrap().as_string::<i32>();
+        (0..column.len())
+            .map(|i| column.value(i).to_owned())
+            .collect()
+    }
+
+    /// A day since the epoch as `"YYYY-MM-DD"` JSON, worked out here rather
+    /// than by the engine's formatter.
+    fn day_json(days: i32) -> String {
+        let z = i64::from(days) + 719_468;
+        let era = z.div_euclid(146_097);
+        let doe = z - era * 146_097;
+        let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let day = doy - (153 * mp + 2) / 5 + 1;
+        let month = if mp < 10 { mp + 3 } else { mp - 9 };
+        let year = yoe + era * 400 + i64::from(month <= 2);
+        format!("\"{year:04}-{month:02}-{day:02}\"")
+    }
+
+    /// The rows of `ticker` whose date's JSON passes `keep`, counted from the
+    /// generated data itself.
+    fn expected(data: &RecordBatch, ticker: &str, keep: impl Fn(&str) -> bool) -> u64 {
+        let tickers = data.column_by_name("ticker").unwrap().as_string::<i32>();
+        let dates = data
+            .column_by_name("date")
+            .unwrap()
+            .as_primitive::<Date32Type>();
+        (0..data.num_rows())
+            .filter(|&i| tickers.value(i) == ticker && keep(&day_json(dates.value(i))))
+            .count() as u64
+    }
+
+    fn grid(ticker: &str, filters: &str) -> String {
+        format!(r#"{{"filters":[{{"column":"ticker","op":"eq","value":"{ticker}"}},{filters}]}}"#)
+    }
+
+    #[test]
+    fn candle_buckets_select_their_days() {
+        let (mut session, data) = session();
+        let ticker = data
+            .column_by_name("ticker")
+            .unwrap()
+            .as_string::<i32>()
+            .value(0)
+            .to_owned();
+        let candles = chart(
+            &mut session,
+            &format!(
+                r#"{{"filters":[{{"column":"ticker","op":"eq","value":"{ticker}"}}],"chart":{{"kind":"candlestick","x":"date","axis":"trading","ohlc":{{"open":"open","high":"high","low":"low","close":"close"}}}}}}"#
+            ),
+        );
+        let (starts, ends) = (texts(&candles, "x_json"), texts(&candles, "end_json"));
+        assert!(starts.len() > 20, "{} buckets", starts.len());
+        // Buckets tile the axis: each ends where the next starts.
+        assert_eq!(starts[1..], ends[..ends.len() - 1]);
+        // Buckets of a week or more, so a brush over a few holds many days.
+        let (low, high) = (&starts[3], &ends[8]);
+        let want = expected(&data, &ticker, |d| d >= low.as_str() && d < high.as_str());
+        assert!(want > 20, "{want} days");
+        let filters = format!(
+            r#"{{"column":"date","op":"ge","value":{low}}},{{"column":"date","op":"lt","value":{high}}}"#
+        );
+        assert_eq!(rows(&mut session, 2, &grid(&ticker, &filters)), want);
+        // Every bucket together selects every day.
+        let all = format!(
+            r#"{{"column":"date","op":"ge","value":{}}},{{"column":"date","op":"lt","value":{}}}"#,
+            starts[0],
+            ends[ends.len() - 1]
+        );
+        assert_eq!(
+            rows(&mut session, 3, &grid(&ticker, &all)),
+            expected(&data, &ticker, |_| true)
+        );
+    }
+
+    #[test]
+    fn line_points_select_the_days_between_them() {
+        let (mut session, data) = session();
+        let ticker = data
+            .column_by_name("ticker")
+            .unwrap()
+            .as_string::<i32>()
+            .value(0)
+            .to_owned();
+        let line = chart(
+            &mut session,
+            &format!(
+                r#"{{"filters":[{{"column":"ticker","op":"eq","value":"{ticker}"}}],"chart":{{"kind":"line","x":"date","y":["close"],"axis":"trading"}}}}"#
+            ),
+        );
+        let points = texts(&line, "x_json");
+        // The line is reduced to what 300 pixels show, so its points skip days.
+        let days = expected(&data, &ticker, |_| true);
+        assert!(
+            (points.len() as u64) < days,
+            "{} points of {days} days",
+            points.len()
+        );
+        let (low, high) = (&points[10], &points[100]);
+        let filters = format!(
+            r#"{{"column":"date","op":"ge","value":{low}}},{{"column":"date","op":"le","value":{high}}}"#
+        );
+        let want = expected(&data, &ticker, |d| d >= low.as_str() && d <= high.as_str());
+        assert!(want > 90, "{want} days");
+        assert_eq!(rows(&mut session, 2, &grid(&ticker, &filters)), want);
+    }
+}
