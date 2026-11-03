@@ -89,7 +89,7 @@ export interface ChartFrameData {
   readonly content: ChartContent;
   /** The indicators' lines, each for one series. */
   readonly indicators: readonly IndicatorLineData[];
-  /** Where each x value the layout's drawings are anchored to sits on the axis, by the value as JSON; NaN where the axis cannot place it. */
+  /** Where each x value the layout's drawings are anchored to sits on the axis, by the value's canonical JSON; NaN where the axis cannot place it. */
   readonly anchors: ReadonlyMap<string, number>;
   /** When the chart window this frame answers was asked for, by `performance.now()`. */
   readonly requestedAtMs?: number;
@@ -277,6 +277,15 @@ function decodeIndicators(frame: ChartFrame): readonly IndicatorLineData[] {
   });
 }
 
+/** A JSON value's text as JavaScript writes it, so that `2.0` and `2` are one key; null for text that is not JSON. */
+export function canonicalJson(text: string): string | null {
+  try {
+    return JSON.stringify(JSON.parse(text));
+  } catch {
+    return null;
+  }
+}
+
 function isRange(from: number, to: number): boolean {
   return Number.isFinite(from) && Number.isFinite(to) && to >= from;
 }
@@ -306,6 +315,11 @@ export function decodeChartFrame(frame: ChartFrame): ChartFrameData {
     ticks: frame.ticks.map((t) => ({ x: t.x, label: t.label })),
     content: decodeContent(frame, new Columns(decoded)),
     indicators: decodeIndicators(frame),
-    anchors: new Map(frame.anchors.map((a) => [a.xJson, a.position]))
+    anchors: new Map(
+      frame.anchors.flatMap((a): [string, number][] => {
+        const key = canonicalJson(a.xJson);
+        return key === null ? [] : [[key, a.position]];
+      })
+    )
   };
 }

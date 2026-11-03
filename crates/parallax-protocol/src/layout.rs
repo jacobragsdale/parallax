@@ -120,6 +120,15 @@ pub enum ChartKindName {
 }
 
 impl ChartKindName {
+    /// Whether this kind takes drawings: kinds drawn along an x axis over a price.
+    #[must_use]
+    pub fn takes_drawings(self) -> bool {
+        matches!(
+            self,
+            Self::Line | Self::Area | Self::Candlestick | Self::Ohlc
+        )
+    }
+
     /// The engine's reduction for this kind, or `None` for kinds drawn from the
     /// layout's grouped view.
     #[must_use]
@@ -353,7 +362,7 @@ pub enum LayoutDrawing {
         /// Where it is.
         at: LayoutAnchor,
         /// What it says.
-        #[schemars(length(max = 500))]
+        #[schemars(length(max = MAX_NOTE))]
         text: String,
     },
 }
@@ -1179,45 +1188,39 @@ impl Layout {
     }
 }
 
-/// A chart's drawings' distinct anchors, read as values of its x column.
+/// A chart's drawings' distinct anchors, read as values of its x column and keyed
+/// by their exact JSON, as the frame's points carry theirs. Anchors that do not fit
+/// the column, as after the chart's x column changes, are left out: their drawings
+/// are not drawn, and the chart is not refused for them. Kinds that take no
+/// drawings keep theirs in the layout without placing them.
 fn drawing_anchors(
     table: &Table,
     chart: &LayoutChart,
 ) -> Result<Vec<(String, Scalar)>, LayoutError> {
-    if chart.kind.reduced().is_none() {
-        return Err(value_error(
-            &chart.x,
-            "drawings go on line, area, candlestick and OHLC charts",
-        ));
+    for drawing in &chart.drawings {
+        if let LayoutDrawing::Note { text, .. } = drawing {
+            let length = text.chars().count();
+            if length > MAX_NOTE {
+                return Err(value_error(
+                    &chart.x,
+                    format!("a drawing's note holds at most {MAX_NOTE} characters, not {length}"),
+                ));
+            }
+        }
     }
-    if let Some(LayoutDrawing::Note { text, .. }) = chart
-        .drawings
-        .iter()
-        .find(|d| matches!(d, LayoutDrawing::Note { text, .. } if text.chars().count() > MAX_NOTE))
-    {
-        return Err(value_error(
-            &chart.x,
-            format!(
-                "a drawing's note holds at most {MAX_NOTE} characters, not {}",
-                text.chars().count()
-            ),
-        ));
+    if !chart.kind.takes_drawings() {
+        return Ok(Vec::new());
     }
     let ty = column_type(table, &chart.x)?;
-    let mut anchors: Vec<(String, Scalar)> = Vec::new();
+    let mut anchors = BTreeMap::new();
     for anchor in chart.drawings.iter().flat_map(LayoutDrawing::anchors) {
-        let json = anchor.x.to_string();
-        if anchors.iter().any(|(j, _)| *j == json) {
-            continue;
-        }
-        match scalar(&chart.x, &ty, &anchor.x)? {
-            Scalar::Null => {
-                return Err(value_error(&chart.x, "a drawing's anchor needs an x value"));
-            }
-            value => anchors.push((json, value)),
+        if let Ok(value) = scalar(&chart.x, &ty, &anchor.x)
+            && value != Scalar::Null
+        {
+            anchors.insert(parallax_engine::format::scalar_json(&ty, &value), value);
         }
     }
-    Ok(anchors)
+    Ok(anchors.into_iter().collect())
 }
 
 /// Converts one engine value of `column` to JSON. Decimals become strings so that no

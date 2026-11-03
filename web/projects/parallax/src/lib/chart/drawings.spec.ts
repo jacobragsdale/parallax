@@ -65,6 +65,16 @@ function model(c: LayoutChart, f: ChartFrameData): ChartModel {
 const measure = (t: string): number => t.length * 6;
 
 describe("drawings placed on the chart", () => {
+  it("finds a number anchor however its JSON writes it", () => {
+    const numbers: ChartFrameData = {
+      ...frame(new Map([["2", 40]])),
+      content: { kind: "series", series: [{ label: "y", column: "y", right: false, x: Float64Array.from([7]), y: Float64Array.from([1]), xText: ["7"], yText: ["1"], xJson: ["7.0"] }] }
+    };
+    // The engine writes 2.0 as "2.0"; the anchor holds the number 2 either way.
+    expect(anchorPosition(numbers, 2)).toBe(40);
+    expect(anchorPosition(numbers, 7)).toBe(7);
+  });
+
   it("places an anchor where the engine says, or at the frame's point it was snapped to", () => {
     // The engine placed an anchor on day 20, past this frame's points.
     const f = frame(
@@ -158,7 +168,12 @@ describe("drawings placed on the chart", () => {
 });
 
 describe("the drawing editor", () => {
-  function editor(start: readonly LayoutDrawing[] = []): { readonly edit: DrawingEditor; readonly saved: LayoutDrawing[][]; readonly m: ChartModel } {
+  function editor(start: readonly LayoutDrawing[] = []): {
+    readonly edit: DrawingEditor;
+    readonly saved: LayoutDrawing[][];
+    readonly m: ChartModel;
+    readonly drawings: ReturnType<typeof signal<readonly LayoutDrawing[]>>;
+  } {
     const f = frame();
     const m = model(chart(), f);
     const drawings = signal<readonly LayoutDrawing[]>(start);
@@ -171,9 +186,10 @@ describe("the drawing editor", () => {
         saved.push([...d]);
         drawings.set(d);
       },
-      measure
+      measure,
+      hidden: signal([])
     });
-    return { edit, saved, m };
+    return { edit, saved, m, drawings };
   }
   const point = (m: ChartModel, day: number, price: number): { x: number; y: number } => ({ x: m.x?.map(day) ?? 0, y: m.yAxes[0]?.scale.map(price) ?? 0 });
 
@@ -228,12 +244,36 @@ describe("the drawing editor", () => {
     edit.pick("note");
     edit.down(point(m, 2, 102));
     expect(edit.note()?.anchor.x).toBe("2026-01-03");
+    // The tool is down while the text is typed: a press elsewhere does not move the note.
+    expect(edit.tool()).toBeNull();
+    edit.down(point(m, 7, 107));
+    expect(edit.note()?.anchor.x).toBe("2026-01-03");
     edit.noteDone(null);
     expect(saved).toEqual([]);
     edit.pick("note");
     edit.down(point(m, 2, 102));
     edit.noteDone("Breakout");
     expect(saved).toEqual([[{ kind: "note", at: { x: "2026-01-03", y: 102 }, text: "Breakout" }]]);
+  });
+
+  it("forgets a selection the layout no longer holds, and a drag the browser cancelled", () => {
+    const first: LayoutDrawing = { kind: "horizontal", y: 101 };
+    const second: LayoutDrawing = { kind: "horizontal", y: 105 };
+    const { edit, saved, m, drawings } = editor([first, second]);
+    edit.down(point(m, 3, 105));
+    expect(edit.selected()).toBe(1);
+    // The host reorders the drawings: the place now holds another drawing, which Delete must not remove.
+    drawings.set([second, first]);
+    expect(edit.selected()).toBeNull();
+    expect(edit.remove()).toBe(false);
+    expect(saved).toEqual([]);
+    // A drag cancelled by the browser makes nothing, even when a later press lets go.
+    edit.pick("trend");
+    edit.down(point(m, 1, 101));
+    edit.move(point(m, 5, 105));
+    edit.abandon();
+    expect(edit.up()).toBe(false);
+    expect(saved).toEqual([]);
   });
 
   it("puts the tool down and drops the selection on Escape", () => {

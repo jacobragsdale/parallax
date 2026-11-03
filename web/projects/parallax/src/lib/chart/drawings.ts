@@ -10,6 +10,7 @@
  * Everything here is worked out without the DOM, so that tests can check it.
  */
 
+import { canonicalJson } from "../chart-frame";
 import type { ChartFrameData } from "../chart-frame";
 import type { LayoutAnchor, LayoutDrawing } from "../layout";
 import type { ChartModel, Rect } from "./model";
@@ -64,13 +65,15 @@ export function anchorPosition(frame: ChartFrameData, x: LayoutAnchor["x"]): num
     return Number.isFinite(placed) ? placed : null;
   }
   const content = frame.content;
+  // The frame writes numbers as the engine does, `2.0` where JavaScript writes `2`: compare them as values.
+  const same = (text: string | null): boolean => text !== null && (text === json || canonicalJson(text) === json);
   if (content.kind === "candles") {
-    const i = content.candles.xJson.indexOf(json);
+    const i = content.candles.xJson.findIndex(same);
     return i < 0 ? null : (content.candles.from[i] ?? null);
   }
   if (content.kind === "series") {
     for (const s of content.series) {
-      const i = s.xJson.indexOf(json);
+      const i = s.xJson.findIndex(same);
       if (i >= 0) {
         return s.x[i] ?? null;
       }
@@ -220,8 +223,8 @@ function scalarOf(json: string): LayoutAnchor["x"] | null {
   return typeof value === "string" || typeof value === "number" || typeof value === "boolean" ? value : null;
 }
 
-/** The frame's point or candle nearest axis position `at`: its position and exact x value. */
-function nearestData(frame: ChartFrameData, at: number): { readonly position: number; readonly json: string } | null {
+/** The frame's point or candle nearest axis position `at`, among series not hidden: its position and exact x value. */
+function nearestData(frame: ChartFrameData, at: number, hidden: readonly string[]): { readonly position: number; readonly json: string } | null {
   const content = frame.content;
   const candidates: { readonly position: number; readonly json: string }[] = [];
   if (content.kind === "candles") {
@@ -233,7 +236,7 @@ function nearestData(frame: ChartFrameData, at: number): { readonly position: nu
       }
     });
   } else if (content.kind === "series") {
-    for (const s of content.series) {
+    for (const s of content.series.filter((series) => !hidden.includes(series.label))) {
       s.x.forEach((position, i) => {
         const json = s.xJson[i];
         if (json !== null && json !== undefined && s.yText[i] !== null) {
@@ -255,12 +258,12 @@ function nearestData(frame: ChartFrameData, at: number): { readonly position: nu
  * An anchor at the pointer: at the x of the frame's nearest point or candle, exactly as the frame carries it, and at
  * the pointer's price, rounded to what a pixel tells apart. Null where there is no data to anchor to.
  */
-export function snap(frame: ChartFrameData, model: ChartModel, p: Point): Snap | null {
+export function snap(frame: ChartFrameData, model: ChartModel, p: Point, hidden: readonly string[] = []): Snap | null {
   const [x, y] = [model.x, priceScale(model)];
   if (x === null || y === null) {
     return null;
   }
-  const near = nearestData(frame, x.invert(p.x));
+  const near = nearestData(frame, x.invert(p.x), hidden);
   const value = near === null ? null : scalarOf(near.json);
   if (near === null || value === null) {
     return null;

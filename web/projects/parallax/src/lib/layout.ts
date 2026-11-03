@@ -98,6 +98,9 @@ const indicatorSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("volume") })
 ]);
 
+/** Chart kinds drawn along an x axis over a price: they take drawings and share crosshairs. */
+export const DRAWABLE_KINDS: readonly (typeof CHART_KINDS)[number][] = ["line", "area", "candlestick", "ohlc"];
+
 /** The kinds of drawing a chart holds. */
 export const DRAWING_KINDS = ["trend", "horizontal", "fibonacci", "rectangle", "note"] as const;
 

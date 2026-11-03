@@ -736,7 +736,7 @@ mod drawings {
     }
 
     #[test]
-    fn drawings_that_do_not_fit_the_chart_are_refused() {
+    fn drawings_that_do_not_fit_the_axis_are_left_out_not_refused() {
         let (mut session, _) = session();
         let open = |session: &mut Session, layout_json: String| {
             send(
@@ -750,23 +750,35 @@ mod drawings {
                 }),
             )
         };
-        let refused = |replies: &[Body], words: &str| {
-            replies
-                .iter()
-                .any(|r| matches!(r, Body::Error(e) if e.message.contains(words)))
+        let window = |session: &mut Session| {
+            only_frame(&send(
+                session,
+                2,
+                client_message::Body::SetChartWindow(SetChartWindow {
+                    view_id: 1,
+                    width: 400,
+                    height: 300,
+                    ..SetChartWindow::default()
+                }),
+            ))
         };
-        let replies = open(
-            &mut session,
-            layout(r#"[{"kind": "note", "at": {"x": "not a date", "y": 1}, "text": "x"}]"#),
-        );
-        assert!(refused(&replies, "date"), "{replies:?}");
+        // Anchors that are not dates, as after the x column changed, or have no
+        // x, are not placed; the chart still opens, and the good anchor is placed.
         let replies = open(
             &mut session,
             layout(
-                r#"[{"kind": "trend", "from": {"x": null, "y": 1}, "to": {"x": "2016-01-05", "y": 2}}]"#,
+                r#"[{"kind": "note", "at": {"x": "not a date", "y": 1}, "text": "x"},
+                    {"kind": "trend", "from": {"x": null, "y": 1}, "to": {"x": "2016-01-05", "y": 2}}]"#,
             ),
         );
-        assert!(refused(&replies, "needs an x value"), "{replies:?}");
+        assert!(
+            !replies.iter().any(|r| matches!(r, Body::Error(_))),
+            "{replies:?}"
+        );
+        let frame = window(&mut session);
+        let placed: Vec<&str> = frame.anchors.iter().map(|a| a.x_json.as_str()).collect();
+        assert_eq!(placed, vec![r#""2016-01-05""#]);
+        // A note longer than a note can be is a mistake in the layout itself.
         let long = "x".repeat(501);
         let replies = open(
             &mut session,
@@ -774,11 +786,20 @@ mod drawings {
                 r#"[{{"kind": "note", "at": {{"x": "2016-01-05", "y": 1}}, "text": "{long}"}}]"#
             )),
         );
-        assert!(refused(&replies, "at most 500"), "{replies:?}");
+        assert!(
+            replies
+                .iter()
+                .any(|r| matches!(r, Body::Error(e) if e.message.contains("at most 500"))),
+            "{replies:?}"
+        );
+        // A bar chart keeps its drawings in the layout without placing them.
         let replies = open(
             &mut session,
             r#"{"group_by": ["ticker"], "chart": {"kind": "bar", "drawings": [{"kind": "horizontal", "y": 1}]}}"#.into(),
         );
-        assert!(refused(&replies, "drawings go on"), "{replies:?}");
+        assert!(
+            !replies.iter().any(|r| matches!(r, Body::Error(_))),
+            "{replies:?}"
+        );
     }
 }

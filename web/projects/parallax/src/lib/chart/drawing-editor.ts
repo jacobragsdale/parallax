@@ -25,6 +25,8 @@ export interface DrawingHost {
   readonly save: (drawings: readonly LayoutDrawing[]) => void;
   /** Measures a label's width in the chart font. */
   readonly measure: (text: string) => number;
+  /** Series hidden from the plot, by their legend labels, which anchors never snap to. */
+  readonly hidden: Signal<readonly string[]>;
 }
 
 /** A drawing being made: its tool and its two anchors so far. */
@@ -34,11 +36,23 @@ interface Sketch {
   readonly to: Snap;
 }
 
-/** A drawing's anchor being dragged: the drawing, the anchor and where it is now. */
+/** A drawing's anchor being dragged: the drawing, as it was when grabbed, the anchor and where it is now. */
 interface Move {
   readonly index: number;
+  readonly key: string;
   readonly anchor: number;
   readonly to: Snap | null;
+}
+
+/** A drawing chosen by its place in the layout and what it was there, so that a layout changed since cannot redirect it. */
+interface Choice {
+  readonly index: number;
+  readonly key: string;
+}
+
+/** What a drawing is, to tell whether the drawing at a place is still the one chosen. */
+function keyOf(drawing: LayoutDrawing): string {
+  return JSON.stringify(drawing);
 }
 
 /** The fewest pixels between a drawing's anchors: a press without a drag makes nothing. */
@@ -47,8 +61,12 @@ const SMALLEST = 4;
 export class DrawingEditor {
   /** The tool in hand, or null. */
   public readonly tool = signal<DrawingTool | null>(null);
-  /** The selected drawing, by its place in the layout, or null. */
-  public readonly selected = signal<number | null>(null);
+  private readonly choice = signal<Choice | null>(null);
+  /** The selected drawing, by its place in the layout, or null; none once the layout no longer holds it there. */
+  public readonly selected = computed((): number | null => {
+    const choice = this.choice();
+    return choice !== null && this.still(choice) ? choice.index : null;
+  });
   /** Where a note being placed is anchored, while its text is typed. */
   public readonly note = signal<Snap | null>(null);
   private readonly sketch = signal<Sketch | null>(null);
@@ -78,6 +96,17 @@ export class DrawingEditor {
 
   constructor(private readonly host: DrawingHost) {}
 
+  /** Whether the layout still holds the chosen drawing at its place. */
+  private still(choice: Choice): boolean {
+    const drawing = this.host.drawings()[choice.index];
+    return drawing !== undefined && keyOf(drawing) === choice.key;
+  }
+
+  private select(index: number | null): void {
+    const drawing = index === null ? undefined : this.host.drawings()[index];
+    this.choice.set(index === null || drawing === undefined ? null : { index, key: keyOf(drawing) });
+  }
+
   /** An anchor at `at`, held within the price's plot: drawings go over the price, not its panes. */
   private snapAt(at: Point): Snap | null {
     const [model, frame] = [this.host.model(), this.host.frame()];
@@ -85,7 +114,7 @@ export class DrawingEditor {
       return null;
     }
     const { plot } = model;
-    return snap(frame, model, { x: at.x, y: Math.min(plot.y + plot.h, Math.max(plot.y, at.y)) });
+    return snap(frame, model, { x: at.x, y: Math.min(plot.y + plot.h, Math.max(plot.y, at.y)) }, this.host.hidden());
   }
 
   /** Whether `at` is on the price's plot, where drawings are made. */
@@ -97,7 +126,7 @@ export class DrawingEditor {
   /** Picks up a tool, or puts it down with null. */
   public pick(tool: DrawingTool | null): void {
     this.tool.set(tool);
-    this.selected.set(null);
+    this.select(null);
   }
 
   /** A press on the plot: true if it made, picked or grabbed a drawing, and so is not a pan or a brush. */
@@ -110,12 +139,13 @@ export class DrawingEditor {
     const shapes = this.shapes();
     const selected = shapes.find((s) => s.index === this.selected());
     const handle = selected === undefined ? null : grab(selected, at);
-    if (selected !== undefined && handle !== null) {
-      this.moving.set({ index: selected.index, anchor: handle, to: null });
+    const grabbed = selected === undefined ? undefined : this.host.drawings()[selected.index];
+    if (selected !== undefined && handle !== null && grabbed !== undefined) {
+      this.moving.set({ index: selected.index, key: keyOf(grabbed), anchor: handle, to: null });
       return true;
     }
     const hit = drawingAt(shapes, at);
-    this.selected.set(hit);
+    this.select(hit);
     return hit !== null;
   }
 
@@ -127,6 +157,8 @@ export class DrawingEditor {
     if (tool === "horizontal") {
       this.add(drawingFrom(tool, anchor, anchor));
     } else if (tool === "note") {
+      // The tool is put down while the text is typed, so a press elsewhere only leaves the box.
+      this.tool.set(null);
       this.note.set(anchor);
     } else {
       this.sketch.set({ tool, from: anchor, to: anchor });
@@ -163,8 +195,11 @@ export class DrawingEditor {
     }
     const to = move?.to ?? null;
     const target = move === null ? undefined : this.host.drawings()[move.index];
-    if (move !== null && to !== null && target !== undefined) {
-      this.host.save(this.host.drawings().map((d, i) => (i === move.index ? moved(target, move.anchor, to) : d)));
+    // Saved only if the layout still holds the drawing grabbed, where it was.
+    if (move !== null && to !== null && target !== undefined && keyOf(target) === move.key) {
+      const changed = moved(target, move.anchor, to);
+      this.host.save(this.host.drawings().map((d, i) => (i === move.index ? changed : d)));
+      this.select(move.index);
     }
     return move !== null;
   }
@@ -172,7 +207,7 @@ export class DrawingEditor {
   private add(drawing: LayoutDrawing): void {
     this.host.save([...this.host.drawings(), drawing]);
     this.tool.set(null);
-    this.selected.set(this.host.drawings().length - 1);
+    this.select(this.host.drawings().length - 1);
   }
 
   /** A note's text typed, or null if it was dropped. */
@@ -184,24 +219,30 @@ export class DrawingEditor {
     }
   }
 
-  /** Removes the selected drawing: true if there was one. */
+  /** Removes the selected drawing, dropping any drag in progress: true if there was one. */
   public remove(): boolean {
     const selected = this.selected();
+    this.abandon();
     if (selected === null) {
       return false;
     }
-    this.selected.set(null);
+    this.select(null);
     this.host.save(this.host.drawings().filter((_, i) => i !== selected));
     return true;
+  }
+
+  /** Drops a drawing being made or moved, as when the browser cancels the pointer. */
+  public abandon(): void {
+    this.sketch.set(null);
+    this.moving.set(null);
   }
 
   /** Escape: puts down the tool, drops a drawing in progress and the selection. True if there was any. */
   public cancel(): boolean {
     const busy = this.tool() !== null || this.sketch() !== null || this.moving() !== null || this.selected() !== null;
     this.tool.set(null);
-    this.sketch.set(null);
-    this.moving.set(null);
-    this.selected.set(null);
+    this.abandon();
+    this.select(null);
     return busy;
   }
 }

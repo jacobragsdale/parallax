@@ -28,7 +28,7 @@ import {
 import type { ElementRef } from "@angular/core";
 
 import { StatusBarComponent } from "../grid/status-bar.component";
-import { checkLayout } from "../layout";
+import { DRAWABLE_KINDS, checkLayout } from "../layout";
 import type { Layout, LayoutFilter, LayoutInput } from "../layout";
 import { CHART_COLORS, THEMES, installThemeStyles, readChartColors, readTheme } from "../theme";
 import type { ChartColors, Theme, ThemeName } from "../theme";
@@ -368,8 +368,14 @@ export class ChartComponent {
   /** What the chart draws, and whether it is zoomed. */
   protected readonly summary = computed(() => {
     const drawn = this.drawn();
-    const range = this.current()?.chart?.range ?? null;
-    return range === null || drawn === "loading…" ? drawn : `${drawn}, zoomed in`;
+    if (drawn === "loading…") {
+      return drawn;
+    }
+    const zoomed = (this.current()?.chart?.range ?? null) === null ? "" : ", zoomed in";
+    // Drawings whose anchors this axis cannot place, as after the x column changed, are said, not silently dropped.
+    const unplaced = this.drawable() ? this.editor.shown().length - this.editor.shapes().length : 0;
+    const note = unplaced === 0 ? "" : `, ${String(unplaced)} ${unplaced === 1 ? "drawing" : "drawings"} not placed`;
+    return `${drawn}${zoomed}${note}`;
   });
 
   private readonly drawn = computed(() => {
@@ -398,7 +404,10 @@ export class ChartComponent {
   private readonly syncing = inject(ChartSync);
 
   /** Charts the engine reduces along an x axis take drawings. */
-  protected readonly drawable = computed(() => ["line", "area", "candlestick", "ohlc"].includes(this.current()?.chart?.kind ?? ""));
+  protected readonly drawable = computed(() => {
+    const kind = this.current()?.chart?.kind;
+    return kind !== undefined && DRAWABLE_KINDS.includes(kind);
+  });
 
   /** Makes and edits drawings, which it saves in the layout. */
   protected readonly editor = new DrawingEditor({
@@ -412,7 +421,8 @@ export class ChartComponent {
         this.layout.set({ ...layout, chart: { ...chart, drawings: [...drawings] } });
       }
     },
-    measure: (text) => this.measure(text, this.tokens().font)
+    measure: (text) => this.measure(text, this.tokens().font),
+    hidden: computed(() => this.current()?.chart?.hidden ?? [])
   });
 
   protected removeDrawing(): void {
@@ -442,7 +452,7 @@ export class ChartComponent {
     }
     const layout = this.current();
     const chart = layout?.chart;
-    if (layout === null || chart === undefined || chart === null || chart.x === "" || !["line", "area", "candlestick", "ohlc"].includes(chart.kind)) {
+    if (layout === null || chart === undefined || chart === null || chart.x === "" || !DRAWABLE_KINDS.includes(chart.kind)) {
       return null;
     }
     return JSON.stringify([layout.dataset, chart.x, chart.axis]);
@@ -679,6 +689,7 @@ export class ChartComponent {
 
   /** A drag the browser took over or the system interrupted ends without a pointerup; a brush it was making is dropped. */
   protected onPointerCancel(event: PointerEvent): void {
+    this.editor.abandon();
     if (this.endDrag(event)?.brush === true) {
       this.clearBrush();
     }
