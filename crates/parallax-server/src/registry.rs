@@ -63,6 +63,9 @@ pub struct Dataset {
     /// The most parameter combinations cached at once; more are refused, so that
     /// clients cannot fill memory by varying parameters.
     pub max_tables: usize,
+    /// Clients may copy the table into the browser and run its views there. The
+    /// server still holds the table, for exports and for clients that don't copy.
+    pub browser: bool,
 }
 
 /// A cached table. The slot's own lock serializes first loads, so concurrent
@@ -113,6 +116,12 @@ impl Registry {
     #[must_use]
     pub fn has_dataset(&self, name: &str) -> bool {
         self.datasets.contains_key(name)
+    }
+
+    /// Returns `true` if clients may copy dataset `name` into the browser.
+    #[must_use]
+    pub fn is_browser(&self, name: &str) -> bool {
+        self.datasets.get(name).is_some_and(|d| d.browser)
     }
 
     fn load(
@@ -257,6 +266,7 @@ impl Catalog for Registry {
             .map(|d| DatasetInfo {
                 name: d.name.clone(),
                 parameters: d.parameters.clone(),
+                browser: d.browser,
             })
             .collect()
     }

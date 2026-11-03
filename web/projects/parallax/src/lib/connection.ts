@@ -21,10 +21,13 @@ import type { MessageInitShape } from "@bufbuild/protobuf";
 import { decodeDistinct, decodeFrame, FrameError } from "./frame";
 import type { DistinctValue, FrameData } from "./frame";
 import { ClientMessageSchema, ServerMessageSchema } from "./proto/parallax_pb";
-import type { DistinctValuesResult, Frame, TableStatus, ViewOpened, Welcome } from "./proto/parallax_pb";
+import type { DatasetInfo, DistinctValuesResult, Frame, TableStatus, ViewOpened, Welcome } from "./proto/parallax_pb";
 
 /** The body of a client message, as plain values. */
 export type ClientBody = NonNullable<MessageInitShape<typeof ClientMessageSchema>["body"]>;
+
+/** Where a connection's engine runs. */
+export type EngineLocation = "server" | "browser";
 
 /** Moves encoded messages between the client and an engine. */
 export interface Transport {
@@ -252,9 +255,20 @@ export class Connection {
   private nextView = 1;
   private readonly views = new Map<number, ViewHandle>();
   private welcome: Welcome | null = null;
+  private readonly welcomed: Promise<Welcome>;
+  private settleWelcome: { readonly resolve: (welcome: Welcome) => void; readonly reject: (error: Error) => void } | null = null;
   private readonly errors: ((message: string) => void)[] = [];
 
-  constructor(private readonly transport: Transport) {
+  /** `location` says where the engine behind `transport` runs. */
+  constructor(
+    private readonly transport: Transport,
+    public readonly location: EngineLocation = "server"
+  ) {
+    this.welcomed = new Promise((resolve, reject) => {
+      this.settleWelcome = { resolve, reject };
+    });
+    // A connection that closes before its welcome rejects; nobody may be waiting.
+    this.welcomed.catch(() => undefined);
     this.send({ case: "hello", value: { protocolVersion: 1 } });
   }
 
@@ -295,6 +309,12 @@ export class Connection {
     return this.welcome?.datasets.map((d) => d.name) ?? [];
   }
 
+  /** Waits for the engine's welcome and returns what it says about `name`, or undefined if it has no such dataset. */
+  public async dataset(name: string): Promise<DatasetInfo | undefined> {
+    const welcome = await this.welcomed;
+    return welcome.datasets.find((d) => d.name === name);
+  }
+
   /** Reports errors not tied to a view. */
   public onError(listener: (message: string) => void): void {
     this.errors.push(listener);
@@ -325,6 +345,8 @@ export class Connection {
 
   /** Marks every view disconnected: pending fetches fail and each view reports `reason`. */
   public disconnect(reason: string): void {
+    this.settleWelcome?.reject(new Error(reason));
+    this.settleWelcome = null;
     for (const view of [...this.views.values()]) {
       view.receiveDisconnect(reason);
     }
@@ -363,6 +385,8 @@ export class Connection {
     switch (body.case) {
       case "welcome":
         this.welcome = body.value;
+        this.settleWelcome?.resolve(body.value);
+        this.settleWelcome = null;
         return;
       case "viewOpened":
         this.views.get(body.value.viewId)?.receiveOpened(body.value);

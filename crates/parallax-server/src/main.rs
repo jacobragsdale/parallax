@@ -53,6 +53,9 @@ struct DatasetConfig {
     /// The most parameter combinations cached at once.
     #[serde(default = "default_max_tables")]
     max_tables: usize,
+    /// Clients may copy the table into the browser and run its views there.
+    #[serde(default)]
+    browser: bool,
     source: SourceConfig,
 }
 
@@ -115,13 +118,19 @@ async fn main() -> anyhow::Result<()> {
             },
             resolve: None,
             max_tables: d.max_tables,
+            browser: d.browser,
         })
         .collect();
     let registry = Arc::new(Registry::new(datasets));
     spawn_refresher(Arc::clone(&registry), Duration::from_secs(1));
     let mut app = router(registry);
     if let Some(dir) = config.static_dir {
-        app = app.fallback_service(ServeDir::new(dir));
+        // The application bundle and the browser engine compress about 4:1.
+        app = app.fallback_service(
+            axum::Router::new()
+                .fallback_service(ServeDir::new(dir))
+                .layer(tower_http::compression::CompressionLayer::new()),
+        );
     }
     let listener = tokio::net::TcpListener::bind(config.listen).await?;
     tracing::info!(address = %config.listen, "listening");

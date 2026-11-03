@@ -6,6 +6,7 @@
 //! the server without the UI noticing. The worker never reads a clock; callers pass
 //! times in.
 
+use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
 use parallax_engine::TableOptions;
@@ -69,6 +70,33 @@ impl Worker {
         )?;
         let rows = state.table.num_rows() as u64;
         self.catalog.insert(name, Arc::new(RwLock::new(state)));
+        Ok(rows)
+    }
+
+    /// Loads a copy of a server table, as `GET /copy/{name}` sends it, for one set
+    /// of parameters given as a JSON object of strings. Views of the copy show what
+    /// views of the server's table show, status included. A second copy for the
+    /// same name and parameters replaces the first for views opened afterwards.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the parameters are not an object of strings, or the bytes
+    /// are not a copy.
+    #[wasm_bindgen(js_name = loadCopy)]
+    pub fn load_copy(
+        &mut self,
+        name: &str,
+        parameters_json: &str,
+        copy: &[u8],
+    ) -> Result<u64, JsError> {
+        let parameters: BTreeMap<String, String> =
+            serde_json::from_str(parameters_json).map_err(|e| {
+                JsError::new(&format!("the parameters must be an object of strings: {e}"))
+            })?;
+        let state = TableState::read_copy(copy).map_err(|e| JsError::new(&e))?;
+        let rows = state.table.num_rows() as u64;
+        self.catalog
+            .insert_with_parameters(name, parameters, Arc::new(RwLock::new(state)));
         Ok(rows)
     }
 

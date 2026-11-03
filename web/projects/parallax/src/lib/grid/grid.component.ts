@@ -308,6 +308,7 @@ const GRID_STYLES = `
       [viewRows]="source.frame()?.totalRows ?? null"
       [sourceAsOf]="source.frame()?.sourceAsOfMicros ?? null"
       [status]="source.status()"
+      [placement]="source.placement()"
       [message]="message()"
       (exported)="export($event)"
     />

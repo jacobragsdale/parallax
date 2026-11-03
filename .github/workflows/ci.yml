@@ -124,6 +124,17 @@ jobs:
       - run: pnpm install --frozen-lockfile
       # The generated protocol code must match proto/parallax.proto.
       - run: pnpm generate && git diff --exit-code -- projects/parallax/src/lib/proto
+      # The browser engine: the worker's types and the package's wasm folder come from it.
+      - run: rustup toolchain install
+        working-directory: .
+      - uses: Swatinem/rust-cache@v2
+      - name: Install wasm-bindgen
+        working-directory: .
+        run: |
+          version=$(cargo metadata --format-version 1 --locked | jq -r '.packages[] | select(.name == "wasm-bindgen") | .version')
+          curl -sSL "https://github.com/wasm-bindgen/wasm-bindgen/releases/download/${version}/wasm-bindgen-${version}-x86_64-unknown-linux-musl.tar.gz" | tar xz
+          sudo install -m 755 "wasm-bindgen-${version}-x86_64-unknown-linux-musl/wasm-bindgen" /usr/local/bin/
+      - run: pnpm build:wasm
       - run: pnpm lint
       - run: pnpm format:check
       - run: pnpm test

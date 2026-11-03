@@ -6,7 +6,10 @@
     "@angular/core": "^22.2.0"
   },
   "dependencies": {
-    "tslib": "^2.3.0"
+    "@bufbuild/protobuf": "^2.16.0",
+    "apache-arrow": "^21.2.0",
+    "tslib": "^2.3.0",
+    "zod": "^4.6.7"
   },
   "sideEffects": false,
   "description": "Angular grid, pivot and chart components for parallax",

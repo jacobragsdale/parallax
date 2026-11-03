@@ -21,3 +21,14 @@ primary_key = "trade_id"
 kind = "generator"
 dataset = "trades"
 rows = 1000000
+
+# The same generated positions, copied into the browser: views run in the page's
+# WebAssembly worker and must show exactly what the server's views show.
+[[dataset]]
+name = "positions_browser"
+primary_key = "position_id"
+browser = true
+[dataset.source]
+kind = "generator"
+dataset = "positions"
+rows = 200000

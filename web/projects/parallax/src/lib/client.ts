@@ -3,6 +3,7 @@
 import { Injectable, InjectionToken, inject, makeEnvironmentProviders } from "@angular/core";
 import type { EnvironmentProviders } from "@angular/core";
 
+import { BrowserEngine } from "./browser-engine";
 import { Connection } from "./connection";
 
 /** Where the engine runs. */
@@ -11,6 +12,19 @@ export interface ParallaxConfig {
   readonly url: string;
   /** Where exports are posted. By default, `/export` on the same server as `url`. */
   readonly exportUrl?: string;
+  /**
+   * Where the application serves `worker.js` from the package's `wasm` folder, such as `/parallax/worker.js`.
+   * With it, datasets the server marks for the browser are copied into a worker and their views run there;
+   * without it, every view runs on the server.
+   */
+  readonly worker?: string;
+}
+
+/** The connection a view of one dataset should use. */
+export interface Placement {
+  readonly connection: Connection;
+  /** Why a dataset marked for the browser runs on the server instead, or null. */
+  readonly fallback: string | null;
 }
 
 const CONFIG = new InjectionToken<ParallaxConfig>("parallax config");
@@ -23,6 +37,14 @@ export function exportUrlFor(socketUrl: string): string {
   url.pathname = `${base}/export`;
   url.search = "";
   url.hash = "";
+  return url.toString();
+}
+
+/** The copy endpoint beside a server's WebSocket endpoint: `wss://host/app/ws` gives `https://host/app/copy/{dataset}?{parameters}`. */
+export function copyUrlFor(socketUrl: string, dataset: string, parameters: Readonly<Record<string, string>>): string {
+  const url = new URL(exportUrlFor(socketUrl));
+  url.pathname = url.pathname.replace(/\/export$/, `/copy/${encodeURIComponent(dataset)}`);
+  url.search = new URLSearchParams(Object.entries(parameters)).toString();
   return url.toString();
 }
 
@@ -44,15 +66,60 @@ function absolute(url: string): string {
 export class ParallaxClient {
   private readonly config = inject(CONFIG);
   private connecting: Promise<Connection> | null = null;
+  private browser: BrowserEngine | null = null;
 
   /** The URL exports are posted to. */
   public exportUrl(): string {
     return this.config.exportUrl ?? exportUrlFor(absolute(this.config.url));
   }
 
-  /** Returns the shared connection. */
+  /** Returns the shared connection to the server. */
   public connection(): Promise<Connection> {
     this.connecting ??= Connection.websocket(absolute(this.config.url));
     return this.connecting;
+  }
+
+  /**
+   * Returns the connection for views of `dataset`: the browser's engine if the server marks the dataset for the
+   * browser, a worker is configured and the copy loads; otherwise the server. A copy that fails to load leaves
+   * the view on the server, which holds the same table, and says why.
+   */
+  public async connectionFor(dataset: string, parameters: Readonly<Record<string, string>>): Promise<Placement> {
+    const worker = this.config.worker;
+    const browser = (): BrowserEngine | null => {
+      if (worker === undefined) {
+        return null;
+      }
+      this.browser ??= BrowserEngine.start(worker);
+      return this.browser;
+    };
+    return placeView(await this.connection(), browser, dataset, parameters, copyUrlFor(absolute(this.config.url), dataset, parameters));
+  }
+}
+
+/** What placing a view needs from the browser's engine. */
+export interface CopyingEngine {
+  readonly connection: Connection;
+  readonly copy: (dataset: string, parameters: Readonly<Record<string, string>>, url: string) => Promise<void>;
+}
+
+/**
+ * Chooses the connection for views of `dataset`. A dataset the server marks for the browser is copied into the
+ * engine `browser` returns, if any; a copy that fails leaves the view on the server, which holds the same table.
+ */
+export async function placeView(server: Connection, browser: () => CopyingEngine | null, dataset: string, parameters: Readonly<Record<string, string>>, copyUrl: string): Promise<Placement> {
+  if ((await server.dataset(dataset))?.browser !== true) {
+    return { connection: server, fallback: null };
+  }
+  const engine = browser();
+  if (engine === null) {
+    return { connection: server, fallback: null };
+  }
+  try {
+    await engine.copy(dataset, parameters, copyUrl);
+    return { connection: engine.connection, fallback: null };
+  } catch (failure: unknown) {
+    const reason = failure instanceof Error ? failure.message : String(failure);
+    return { connection: server, fallback: `The copy for this browser did not load, so the view runs on the server: ${reason}` };
   }
 }

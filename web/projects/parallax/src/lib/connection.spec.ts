@@ -1,6 +1,8 @@
+import { create, toBinary } from "@bufbuild/protobuf";
 import { describe, expect, it } from "vitest";
 
 import { Connection } from "./connection";
+import { ServerMessageSchema } from "./proto/parallax_pb";
 
 function connection(): { readonly connection: Connection; readonly sent: Uint8Array[] } {
   const sent: Uint8Array[] = [];
@@ -38,5 +40,19 @@ describe("Connection", () => {
     const fetch = view.fetch({ firstRow: 0, rowCount: 10, firstColumn: 0, columnCount: 2 });
     view.close();
     await expect(fetch).rejects.toThrow("closed");
+  });
+});
+
+describe("Connection.dataset", () => {
+  it("waits for the welcome, and fails if the connection closes first", async () => {
+    const { connection: c } = connection();
+    const asked = c.dataset("positions");
+    c.receive(toBinary(ServerMessageSchema, create(ServerMessageSchema, { body: { case: "welcome", value: { protocolVersion: 1, datasets: [{ name: "positions", browser: true }] } } })));
+    await expect(asked).resolves.toMatchObject({ name: "positions", browser: true });
+    await expect(c.dataset("trades")).resolves.toBeUndefined();
+    const { connection: closed } = connection();
+    const waiting = closed.dataset("positions");
+    closed.disconnect("gone");
+    await expect(waiting).rejects.toThrow("gone");
   });
 });

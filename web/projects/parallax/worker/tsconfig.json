@@ -1,0 +1,16 @@
+/* Compiles the browser engine's worker next to the wasm-bindgen output in ../wasm, which `pnpm build:wasm` writes. */
+{
+  "extends": "../../../tsconfig.json",
+  "compilerOptions": {
+    "outDir": "../wasm",
+    "rootDirs": [".", "../wasm"],
+    "lib": ["ES2022", "ESNext.Disposable", "WebWorker"],
+    "types": [],
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "importHelpers": false,
+    "declaration": false,
+    "sourceMap": false
+  },
+  "include": ["worker.ts"]
+}

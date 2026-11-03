@@ -4,13 +4,14 @@
   "scripts": {
     "ng": "ng",
     "generate": "buf generate",
+    "build:wasm": "cargo build --release --locked -p parallax-wasm --target wasm32-unknown-unknown && wasm-bindgen --target web --out-dir projects/parallax/wasm --out-name parallax_wasm ../target/wasm32-unknown-unknown/release/parallax_wasm.wasm && tsc -p projects/parallax/worker/tsconfig.json",
     "build": "ng build parallax && ng build demo",
     "build:demo": "ng build demo",
     "lint": "eslint . --max-warnings 0",
     "format": "prettier . --write",
     "format:check": "prettier . --check",
     "test": "ng test parallax --watch=false",
-    "e2e": "playwright test -c e2e/playwright.config.ts grid.spec",
+    "e2e": "playwright test -c e2e/playwright.config.ts grid.spec browser.spec",
     "performance": "playwright test -c e2e/playwright.config.ts grid-performance"
   },
   "private": true,

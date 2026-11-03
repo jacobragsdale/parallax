@@ -16,6 +16,10 @@ pub enum LoadError {
     /// The primary key names a column the schema does not have.
     #[error("primary key column {0} is not in the schema")]
     UnknownKeyColumn(String),
+    /// A table that has had more than its first load cannot take another table's
+    /// load version.
+    #[error("only a copy holding just its first load can take the original's load version")]
+    NotAFreshCopy,
     /// A column the table has is missing from the load.
     #[error("column {column} is missing from the load")]
     MissingColumn {

@@ -27,6 +27,7 @@ fn positions_dataset(rows: u64) -> Dataset {
         refresh: RefreshPolicy::default(),
         resolve: None,
         max_tables: 4,
+        browser: false,
     }
 }
 
@@ -430,6 +431,7 @@ fn opening_a_table_does_not_wait_for_its_reload() {
         refresh: RefreshPolicy::default(),
         resolve: None,
         max_tables: 4,
+        browser: false,
     }]));
     let context = parallax_session::no_context();
     let first = registry.open("slow", &BTreeMap::new(), &context).unwrap();
@@ -445,4 +447,88 @@ fn opening_a_table_does_not_wait_for_its_reload() {
     );
     assert!(Arc::ptr_eq(&first, &again));
     assert_eq!(reload.join().unwrap(), Some(1));
+}
+
+async fn get_copy(
+    browser: bool,
+    path: &str,
+    encoding: Option<&str>,
+) -> (axum::http::StatusCode, axum::http::HeaderMap, Vec<u8>) {
+    use tower::ServiceExt;
+    let mut dataset = positions_dataset(2_000);
+    dataset.browser = browser;
+    let registry = Arc::new(Registry::new(vec![dataset]));
+    let mut request = axum::http::Request::get(path);
+    if let Some(encoding) = encoding {
+        request = request.header("accept-encoding", encoding);
+    }
+    let response = router(registry)
+        .oneshot(request.body(axum::body::Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let status = response.status();
+    let headers = response.headers().clone();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (status, headers, bytes.to_vec())
+}
+
+#[tokio::test]
+async fn the_copy_endpoint_sends_the_table_for_its_parameters() {
+    let (status, headers, body) = get_copy(true, "/copy/positions?seed=4", None).await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(headers["content-type"], parallax_server::copy::ARROW_STREAM);
+    let copy = parallax_session::TableState::read_copy(&body).unwrap();
+    assert_eq!(copy.table.num_rows(), 2_000);
+    // The rows are the server's table for the same parameters, and not another's.
+    let rows = |bytes: &[u8]| {
+        let (_, batches) = parallax_protocol::ipc::decode_stream(bytes).unwrap();
+        batches
+            .iter()
+            .map(|b| b.columns().to_vec())
+            .collect::<Vec<_>>()
+    };
+    let server_rows = |seed: &str| {
+        let registry = Registry::new(vec![positions_dataset(2_000)]);
+        let context: ConnectionContext = Arc::new(());
+        let parameters = BTreeMap::from([("seed".to_owned(), seed.to_owned())]);
+        let table = registry.open("positions", &parameters, &context).unwrap();
+        let mut bytes = Vec::new();
+        table.read().unwrap().write_copy(&mut bytes).unwrap();
+        rows(&bytes)
+    };
+    assert!(rows(&body) == server_rows("4"));
+    assert!(rows(&body) != server_rows("5"));
+    // A browser that offers zstd gets zstd; one that offers only gzip gets gzip.
+    let (_, headers, zstd) = get_copy(true, "/copy/positions", Some("gzip, zstd")).await;
+    assert_eq!(headers["content-encoding"], "zstd");
+    assert!(
+        zstd.len() < body.len() / 2,
+        "{} of {}",
+        zstd.len(),
+        body.len()
+    );
+    let (_, headers, _) = get_copy(true, "/copy/positions", Some("gzip")).await;
+    assert_eq!(headers["content-encoding"], "gzip");
+}
+
+#[tokio::test]
+async fn the_copy_endpoint_refuses_what_it_should_not_send() {
+    let (status, _, body) = get_copy(false, "/copy/positions", None).await;
+    assert_eq!(status, axum::http::StatusCode::FORBIDDEN);
+    assert!(
+        String::from_utf8(body)
+            .unwrap()
+            .contains("not copied to browsers")
+    );
+    let (status, _, _) = get_copy(true, "/copy/trades", None).await;
+    assert_eq!(status, axum::http::StatusCode::NOT_FOUND);
+    let (status, _, body) = get_copy(true, "/copy/positions?colour=red", None).await;
+    assert_eq!(status, axum::http::StatusCode::NOT_FOUND);
+    assert!(
+        String::from_utf8(body)
+            .unwrap()
+            .contains("no parameter colour")
+    );
 }

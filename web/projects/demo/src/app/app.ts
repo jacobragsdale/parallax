@@ -12,11 +12,19 @@ const PRESETS = {
     measures: [{ column: "market_value_usd", aggregate: "sum" }, { column: "daily_pnl_usd", aggregate: "sum" }, { aggregate: "count_all" }],
     expand_depth: 3
   },
+  /** The same pivot over a copy of the positions held in the browser. */
+  browser: {
+    dataset: "positions_browser",
+    group_by: ["fund", "strategy", "sector", "ticker"],
+    split_by: ["asset_class"],
+    measures: [{ column: "market_value_usd", aggregate: "sum" }, { column: "daily_pnl_usd", aggregate: "sum" }, { aggregate: "count_all" }],
+    expand_depth: 3
+  },
   trades: { dataset: "trades" },
   sorted: { dataset: "trades", sort: [{ column: "gross_amount_local", descending: true }] }
 } as const satisfies Record<string, LayoutInput>;
 
-const searchSchema = z.strictObject({ preset: z.enum(["pivot", "trades", "sorted"]).default("pivot"), theme: z.enum(["light", "dark"]).default("light"), layout: z.string().optional() });
+const searchSchema = z.strictObject({ preset: z.enum(["pivot", "browser", "trades", "sorted"]).default("pivot"), theme: z.enum(["light", "dark"]).default("light"), layout: z.string().optional() });
 
 type Search = z.infer<typeof searchSchema>;
 

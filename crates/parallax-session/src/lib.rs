@@ -32,8 +32,11 @@ use parallax_protocol::v1::{
 };
 use prost::Message;
 
+mod copy;
 #[cfg(feature = "testing")]
 pub mod testing;
+
+pub use copy::COPY_METADATA;
 
 /// How many recent change sets a table keeps for views that are behind.
 const HISTORY: usize = 16;
@@ -195,11 +198,14 @@ pub trait Catalog: Send + Sync {
     ) -> Result<SharedTable, String>;
 }
 
-/// A catalog of tables held in memory, keyed by dataset name. Parameters are
-/// ignored. The WebAssembly worker and the tests use it.
+/// A table's key in a [`MemoryCatalog`]: the dataset and its parameters.
+type MemoryKey = (String, BTreeMap<String, String>);
+
+/// A catalog of tables held in memory, keyed by dataset name and parameters. The
+/// WebAssembly worker and the tests use it.
 #[derive(Default)]
 pub struct MemoryCatalog {
-    tables: RwLock<BTreeMap<String, SharedTable>>,
+    tables: RwLock<BTreeMap<MemoryKey, SharedTable>>,
 }
 
 impl MemoryCatalog {
@@ -209,34 +215,64 @@ impl MemoryCatalog {
         Self::default()
     }
 
-    /// Adds or replaces a dataset.
+    /// Adds or replaces a dataset without parameters.
     pub fn insert(&self, name: &str, table: SharedTable) {
+        self.insert_with_parameters(name, BTreeMap::new(), table);
+    }
+
+    /// Adds or replaces a dataset's table for one set of parameters.
+    pub fn insert_with_parameters(
+        &self,
+        name: &str,
+        parameters: BTreeMap<String, String>,
+        table: SharedTable,
+    ) {
         self.tables
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(name.to_owned(), table);
+            .insert((name.to_owned(), parameters), table);
     }
 
-    /// Returns a dataset's table.
+    /// Returns a dataset's table without parameters.
     #[must_use]
     pub fn get(&self, name: &str) -> Option<SharedTable> {
+        self.get_with_parameters(name, &BTreeMap::new())
+    }
+
+    /// Returns a dataset's table for one set of parameters.
+    #[must_use]
+    pub fn get_with_parameters(
+        &self,
+        name: &str,
+        parameters: &BTreeMap<String, String>,
+    ) -> Option<SharedTable> {
         self.tables
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(name)
+            .get(&(name.to_owned(), parameters.clone()))
             .cloned()
     }
 }
 
 impl Catalog for MemoryCatalog {
     fn datasets(&self) -> Vec<DatasetInfo> {
-        self.tables
+        let tables = self
+            .tables
             .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .keys()
-            .map(|name| DatasetInfo {
-                name: name.clone(),
-                parameters: Vec::new(),
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut datasets: BTreeMap<&str, std::collections::BTreeSet<&str>> = BTreeMap::new();
+        for (name, parameters) in tables.keys() {
+            datasets
+                .entry(name)
+                .or_default()
+                .extend(parameters.keys().map(String::as_str));
+        }
+        datasets
+            .into_iter()
+            .map(|(name, parameters)| DatasetInfo {
+                name: name.to_owned(),
+                parameters: parameters.into_iter().map(str::to_owned).collect(),
+                browser: false,
             })
             .collect()
     }
@@ -244,11 +280,17 @@ impl Catalog for MemoryCatalog {
     fn open(
         &self,
         dataset: &str,
-        _: &BTreeMap<String, String>,
+        parameters: &BTreeMap<String, String>,
         _: &ConnectionContext,
     ) -> Result<SharedTable, String> {
-        self.get(dataset)
-            .ok_or_else(|| format!("unknown dataset {dataset}"))
+        self.get_with_parameters(dataset, parameters)
+            .ok_or_else(|| {
+                if parameters.is_empty() {
+                    format!("unknown dataset {dataset}")
+                } else {
+                    format!("{dataset} is not loaded for these parameters")
+                }
+            })
     }
 }
 

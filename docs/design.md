@@ -53,6 +53,20 @@ can choose where it lives without the UI noticing. Small datasets are copied to
 the browser, where pivots respond without a network round trip. Large datasets
 stay on the server, and the browser receives only the visible window.
 
+A dataset marked `browser` in its definition is still loaded and cached on the
+server, which keeps serving exports and clients without a worker. The first view
+of such a dataset in a page fetches a copy of the server's table for its
+parameters from `GET /copy/{dataset}`, loads it into the worker and runs every
+later view of that table there. The copy is an Arrow IPC stream of the rows in
+insertion order, with the table's status (load number, load and source times,
+NaNs turned blank, a failed refresh) in its schema metadata, so views of the copy
+show the same rows, order and status as views on the server. A test runs a set
+of layouts against a reloaded table and its copy and requires identical frames,
+and an end-to-end test compares a pivot's copied cells across the two. A copy
+that fails to load leaves the view on the server, and the status bar says why.
+A copy is fetched once per page: a reload on the server reaches it when the page
+reloads, and its status bar shows the copy's age meanwhile.
+
 The browser build is single-threaded and stays under the 4 GB limit of 32-bit
 WebAssembly. Going further would cost a lot:
 
@@ -346,8 +360,9 @@ it, tagged by view ID.
   the visible window, subscribe. The `.proto` files are the single source of
   truth and generate both the Rust and the TypeScript code.
 - Data travels as Arrow IPC. Frames for the visible window are small and go
-  uncompressed. Bulk loads into the browser are zstd-compressed and decoded in
-  the worker.
+  uncompressed. A copy of a table for the browser goes over HTTP, compressed
+  with zstd, or gzip for a browser that doesn't offer zstd, and the worker's
+  `fetch` decodes it natively, off the main thread.
 - Every data frame carries the view ID, configuration version, window bounds,
   table load version and source timestamp.
 - A client can fetch a window once without moving the view's viewport, which
@@ -534,9 +549,14 @@ standalone components.
 
 - `<px-grid>`, `<px-pivot>` and `<px-chart>` each take a single `layout` and
   emit `layoutChange`, so `[(layout)]` keeps the host's copy current.
-- `provideParallax({ url })` configures the connection.
+- `provideParallax({ url, worker })` configures the connection, and where the
+  application serves the browser engine's worker script. Without `worker`,
+  every view runs on the server.
 - A `ParallaxClient` service offers the same operations to code.
-- The npm package ships the WebAssembly files.
+- The npm package ships the WebAssembly engine and its worker script in its
+  `wasm` folder, which the application serves as static files. The worker
+  starts only when a page first opens a dataset marked for the browser, so pages
+  that don't use one never download the engine.
 
 A layout is a JSON document that describes a whole view: dataset and
 parameters, grouping, pivots, filters, sorts, formats, column widths, chart

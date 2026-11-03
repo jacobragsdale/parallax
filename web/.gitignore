@@ -2,6 +2,8 @@
 
 # Compiled output
 /dist
+# The browser engine, built by `pnpm build:wasm`
+/projects/parallax/wasm
 /tmp
 /out-tsc
 /bazel-out

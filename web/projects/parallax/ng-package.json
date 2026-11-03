@@ -1,1 +1,7 @@
-{ "$schema": "../../node_modules/ng-packagr/ng-package.schema.json", "dest": "../../dist/parallax", "lib": { "entryFile": "src/public-api.ts" } }
+{
+  "$schema": "../../node_modules/ng-packagr/ng-package.schema.json",
+  "dest": "../../dist/parallax",
+  "lib": { "entryFile": "src/public-api.ts" },
+  "allowedNonPeerDependencies": ["@bufbuild/protobuf", "apache-arrow", "zod"],
+  "assets": [{ "input": "wasm", "glob": "**/*", "output": "wasm" }]
+}

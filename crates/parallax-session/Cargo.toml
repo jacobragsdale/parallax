@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 arrow-array.workspace = true
+arrow-ipc.workspace = true
 arrow-schema.workspace = true
 parallax-engine.workspace = true
 parallax-protocol.workspace = true
@@ -22,6 +23,7 @@ parallax-datagen = { workspace = true, optional = true }
 testing = ["dep:parallax-datagen"]
 
 [dev-dependencies]
+arrow-select = { version = "60.1", default-features = false }
 parallax-datagen.workspace = true
 parallax-session = { workspace = true, features = ["testing"] }
 

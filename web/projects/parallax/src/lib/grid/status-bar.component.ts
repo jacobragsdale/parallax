@@ -7,6 +7,7 @@
 import { ChangeDetectionStrategy, Component, DestroyRef, computed, inject, input, output, signal } from "@angular/core";
 
 import type { TableStatus } from "../proto/parallax_pb";
+import type { ViewPlacement } from "./grid-source";
 
 /** The zone the status bar shows times in. */
 const ZONE = "America/New_York";
@@ -39,6 +40,15 @@ export function ageText(ms: number): string {
 
 const GROUPED = new Intl.NumberFormat("en-US");
 
+/** A short note beside the status, with its explanation on hover. */
+interface Badge {
+  readonly kind: string;
+  readonly text: string;
+  readonly classes: string;
+  readonly role: string | null;
+  readonly title: string;
+}
+
 @Component({
   selector: "px-status-bar",
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -48,11 +58,8 @@ const GROUPED = new Intl.NumberFormat("en-US");
     @if (asOf(); as a) {
       <span class="px-status-age" [title]="a.title">as of {{ a.time }} · {{ a.age }}</span>
     }
-    @if (nans(); as n) {
-      <span class="px-badge px-badge-warning" [title]="n.title">{{ n.text }}</span>
-    }
-    @if (failed(); as f) {
-      <span class="px-badge px-badge-danger" role="status" [title]="f.title">{{ f.text }}</span>
+    @for (b of badges(); track b.kind) {
+      <span [class]="b.classes" [attr.role]="b.role" [title]="b.title">{{ b.text }}</span>
     }
     <span class="px-status-message" role="status">{{ message() }}</span>
     <button type="button" class="px-status-export" (click)="exported.emit('xlsx')">Export to Excel</button>
@@ -79,6 +86,8 @@ export class StatusBarComponent {
   public readonly sourceAsOf = input<bigint | null>(null);
   /** The table's status from the engine. */
   public readonly status = input<TableStatus | null>(null);
+  /** Where the view runs. */
+  public readonly placement = input<ViewPlacement | null>(null);
   /** A short note, such as the result of a copy. */
   public readonly message = input<string>("");
   /** Fires when the user asks for an export, with its format. */
@@ -102,7 +111,7 @@ export class StatusBarComponent {
     return { time: statusTime(micros), age: ageText(this.now() - Number(micros / 1000n)), title: `Source read at ${statusTime(micros)} New York time` };
   });
 
-  protected readonly nans = computed(() => {
+  private readonly nans = computed(() => {
     const columns = this.status()?.nansToNull ?? [];
     const total = columns.reduce((sum, c) => sum + c.count, 0n);
     if (total === 0n) {
@@ -112,13 +121,37 @@ export class StatusBarComponent {
     return { text: `${GROUPED.format(total)} NaN shown blank`, title: `NaN values became blanks when the data loaded. ${detail}` };
   });
 
-  protected readonly failed = computed(() => {
+  private readonly failed = computed(() => {
     const status = this.status();
     if (status === null || status.refreshError === "") {
       return null;
     }
     const at = status.refreshFailedAtMicros === 0n ? "" : ` at ${statusTime(status.refreshFailedAtMicros)}`;
     return { text: `refresh failed${at}`, title: `${status.refreshError}. The grid still shows the last good load.` };
+  });
+
+  /** A badge when the view runs in the browser, or runs on the server because its copy did not load. */
+  private readonly where = computed((): Omit<Badge, "kind"> | null => {
+    const placement = this.placement();
+    if (placement?.location === "browser") {
+      return { text: "in browser", classes: "px-badge px-status-where", role: null, title: "This view runs in your browser, on a copy of the server's table, with the same engine." };
+    }
+    if (placement !== null && placement.fallback !== null) {
+      return { text: "on server", classes: "px-badge px-badge-warning px-status-where", role: null, title: placement.fallback };
+    }
+    return null;
+  });
+
+  /** The badges after the age: blanked NaNs, a failed refresh, and where the view runs. */
+  protected readonly badges = computed((): readonly Badge[] => {
+    const nans = this.nans();
+    const failed = this.failed();
+    const where = this.where();
+    return [
+      ...(nans === null ? [] : [{ kind: "nans", text: nans.text, classes: "px-badge px-badge-warning", role: null, title: nans.title }]),
+      ...(failed === null ? [] : [{ kind: "failed", text: failed.text, classes: "px-badge px-badge-danger", role: "status", title: failed.title }]),
+      ...(where === null ? [] : [{ kind: "where", ...where }])
+    ];
   });
 
   protected readonly details = computed(() => {
@@ -137,6 +170,10 @@ export class StatusBarComponent {
     ];
     if (status !== null && status.refreshError !== "") {
       items.push({ term: "Last refresh", value: status.refreshError });
+    }
+    const placement = this.placement();
+    if (placement !== null) {
+      items.push({ term: "Runs", value: placement.location === "browser" ? "in this browser, on a copy of the server's table" : (placement.fallback ?? "on the server") });
     }
     return items;
   });

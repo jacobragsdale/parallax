@@ -30,7 +30,10 @@
           "options": {
             "browser": "projects/demo/src/main.ts",
             "tsConfig": "projects/demo/tsconfig.app.json",
-            "assets": [{ "glob": "**/*", "input": "projects/demo/public" }],
+            "assets": [
+              { "glob": "**/*", "input": "projects/demo/public" },
+              { "glob": "**/*", "input": "projects/parallax/wasm", "output": "parallax" }
+            ],
             "styles": ["projects/demo/src/styles.css"]
           },
           "configurations": {

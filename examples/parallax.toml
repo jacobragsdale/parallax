@@ -23,6 +23,9 @@ rows = 500000
 
 [[dataset]]
 name = "prices"
+# Small enough to copy into the browser: a page with a worker runs its views
+# there, with no round trip to the server.
+browser = true
 [dataset.source]
 kind = "generator"
 dataset = "prices"

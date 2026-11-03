@@ -55,6 +55,9 @@ message Welcome {
 message DatasetInfo {
   string name = 1;
   repeated string parameters = 2;
+  // The client may copy the dataset into the browser and run its views there,
+  // fetching the copy from the server's /copy/{name} endpoint.
+  bool browser = 3;
 }
 
 message OpenView {

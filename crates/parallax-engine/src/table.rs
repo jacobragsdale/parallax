@@ -169,6 +169,23 @@ impl Table {
         self.load_version
     }
 
+    /// Sets the load version of a copy of another table, so that the copy goes on
+    /// numbering loads as the original does. Views opened earlier would see their
+    /// table move to an unrelated version, so this is refused once any load has
+    /// a successor: only a table holding just its first load accepts it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the table has had more than one load, or `version` is
+    /// zero, which only an empty table has.
+    pub fn continue_load_version(&mut self, version: u64) -> Result<(), LoadError> {
+        if self.load_version != 1 || version == 0 {
+            return Err(LoadError::NotAFreshCopy);
+        }
+        self.load_version = version;
+        Ok(())
+    }
+
     /// Returns the index of the named column.
     #[must_use]
     pub fn column_index(&self, name: &str) -> Option<usize> {

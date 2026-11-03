@@ -12,7 +12,7 @@ const tsconfigRootDir = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig(
   {
-    ignores: [".angular/**", "coverage/**", "dist/**", "projects/parallax/src/lib/proto/**", "test-results/**", "playwright-report/**"] // Skip generated Angular, coverage, build output and protobuf code.
+    ignores: [".angular/**", "coverage/**", "dist/**", "projects/parallax/src/lib/proto/**", "projects/parallax/wasm/**", "test-results/**", "playwright-report/**"] // Skip generated Angular, coverage, build output, protobuf and wasm-bindgen code.
   },
   {
     linterOptions: {

@@ -13,7 +13,7 @@ import type { Signal } from "@angular/core";
 import { DataType, Table, tableFromIPC } from "apache-arrow";
 
 import { ParallaxClient } from "../client";
-import type { DistinctValues, Viewport, ViewHandle } from "../connection";
+import type { DistinctValues, EngineLocation, Viewport, ViewHandle } from "../connection";
 import { pathValue } from "../format";
 import { isNumericType } from "../frame";
 import type { FrameData } from "../frame";
@@ -55,11 +55,18 @@ export interface ExpandedEntry {
   readonly expanded: boolean;
 }
 
+/** Where a view runs, and why it runs on the server if it could have run in the browser. */
+export interface ViewPlacement {
+  readonly location: EngineLocation;
+  readonly fallback: string | null;
+}
+
 /** The grid's view of a source: what to draw and how to ask for more. */
 export interface GridSource {
   readonly frame: Signal<FrameData | null>;
   readonly error: Signal<string | null>;
   readonly status: Signal<TableStatus | null>;
+  readonly placement: Signal<ViewPlacement | null>;
   readonly fields: Signal<readonly SourceField[]>;
   /** Makes rows and data columns visible, fetching only what is not already held or asked for. */
   readonly show: (visible: Viewport) => void;
@@ -125,6 +132,7 @@ export function gridSource(layout: Signal<Layout | null>): GridSource {
   const frame = signal<FrameData | null>(null);
   const error = signal<string | null>(null);
   const status = signal<TableStatus | null>(null);
+  const placement = signal<ViewPlacement | null>(null);
   const fields = signal<readonly SourceField[]>([]);
   let current: Current | null = null;
   let generation = 0;
@@ -155,15 +163,17 @@ export function gridSource(layout: Signal<Layout | null>): GridSource {
     current = null;
     frame.set(null);
     status.set(null);
+    placement.set(null);
     fields.set([]);
     generation += 1;
     const mine = generation;
-    client.connection().then(
-      (connection) => {
+    client.connectionFor(next.dataset, next.parameters).then(
+      ({ connection, fallback }) => {
         // The layout changed or the grid went away while connecting.
         if (destroyed || mine !== generation) {
           return;
         }
+        placement.set({ location: connection.location, fallback });
         const view = connection.open(
           next.dataset,
           JSON.stringify(next),
@@ -242,6 +252,7 @@ export function gridSource(layout: Signal<Layout | null>): GridSource {
     frame,
     error,
     status,
+    placement,
     fields,
     show: (wanted) => {
       visible = wanted;

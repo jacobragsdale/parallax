@@ -31,6 +31,11 @@ research already done.
 - **Running views as SQL in another engine.** View configurations would be
   translated to SQL for DuckDB or ClickHouse, as Perspective's virtual servers
   do.
+- **Refreshing copies in the browser.** A copy is fetched once per page, so a
+  reload on the server reaches a browser-held view only when the page reloads.
+  Pushing reloads to copies, as a diff, waits until pages stay open long enough
+  for it to matter. Copies are also never evicted from the worker during a page's
+  life.
 - **Browser threads and 64-bit WebAssembly memory.** Rust's
   `wasm64-unknown-unknown` target is Tier 3. Threads need nightly Rust,
   `-Z build-std` and cross-origin isolation headers. Revisit if a
