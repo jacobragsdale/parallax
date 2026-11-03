@@ -525,10 +525,87 @@ async fn the_copy_endpoint_refuses_what_it_should_not_send() {
     let (status, _, _) = get_copy(true, "/copy/trades", None).await;
     assert_eq!(status, axum::http::StatusCode::NOT_FOUND);
     let (status, _, body) = get_copy(true, "/copy/positions?colour=red", None).await;
-    assert_eq!(status, axum::http::StatusCode::NOT_FOUND);
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
     assert!(
         String::from_utf8(body)
             .unwrap()
             .contains("no parameter colour")
     );
+}
+
+async fn fetch_copy(app: axum::Router, path: &str) -> Vec<u8> {
+    use tower::ServiceExt;
+    let response = app
+        .oneshot(
+            axum::http::Request::get(path)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap()
+        .to_vec()
+}
+
+#[tokio::test]
+async fn a_copy_follows_its_tables_reloads_and_failures() {
+    let mut dataset = positions_dataset(2_000);
+    dataset.browser = true;
+    let registry = Arc::new(Registry::new(vec![dataset]));
+    let app = router(Arc::clone(&registry));
+    let first = fetch_copy(app.clone(), "/copy/positions").await;
+    assert_eq!(fetch_copy(app.clone(), "/copy/positions").await, first);
+    let reloader = Arc::clone(&registry);
+    tokio::task::spawn_blocking(move || reloader.invalidate("positions"))
+        .await
+        .unwrap();
+    let reloaded =
+        parallax_session::TableState::read_copy(&fetch_copy(app.clone(), "/copy/positions").await)
+            .unwrap();
+    assert_eq!(reloaded.table.load_version(), 2);
+    let context: ConnectionContext = Arc::new(());
+    registry
+        .open("positions", &BTreeMap::new(), &context)
+        .unwrap()
+        .write()
+        .unwrap()
+        .record_failure("the source timed out".into(), 5);
+    let failed =
+        parallax_session::TableState::read_copy(&fetch_copy(app, "/copy/positions").await).unwrap();
+    assert_eq!(failed.copy_version(), (2, Some(5)));
+}
+
+#[tokio::test]
+async fn callers_whose_context_picks_another_table_never_share_a_copy() {
+    let mut dataset = positions_dataset(500);
+    dataset.browser = true;
+    // The host puts the caller into the parameters, as a per-user filter would.
+    dataset.resolve = Some(Arc::new(|parameters, context| {
+        let user = context
+            .downcast_ref::<String>()
+            .cloned()
+            .unwrap_or_default();
+        let mut resolved = parameters.clone();
+        resolved.insert("seed".into(), if user == "ann" { "1" } else { "2" }.into());
+        Ok(resolved)
+    }));
+    let registry = Arc::new(Registry::new(vec![dataset]));
+    let as_user = |user: &str| {
+        let context: ConnectionContext = Arc::new(user.to_owned());
+        router(Arc::clone(&registry)).layer(axum::Extension(context))
+    };
+    let rows = |bytes: Vec<u8>| {
+        let (_, batches) = parallax_protocol::ipc::decode_stream(&bytes).unwrap();
+        batches
+            .iter()
+            .map(|b| b.columns().to_vec())
+            .collect::<Vec<_>>()
+    };
+    let ann = rows(fetch_copy(as_user("ann"), "/copy/positions").await);
+    let bob = rows(fetch_copy(as_user("bob"), "/copy/positions").await);
+    assert!(ann != bob);
+    assert!(rows(fetch_copy(as_user("ann"), "/copy/positions").await) == ann);
 }

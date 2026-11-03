@@ -3,15 +3,18 @@
 import { Injectable, InjectionToken, inject, makeEnvironmentProviders } from "@angular/core";
 import type { EnvironmentProviders } from "@angular/core";
 
-import { BrowserEngine } from "./browser-engine";
+import { BrowserEngine, COPY_TIMEOUT_MS } from "./browser-engine";
 import { Connection } from "./connection";
 
 /** Where the engine runs. */
 export interface ParallaxConfig {
   /** The server's WebSocket URL, such as `wss://host/ws`. A path such as `/ws` is resolved against the page. */
   readonly url: string;
-  /** Where exports are posted. By default, `/export` on the same server as `url`. */
-  readonly exportUrl?: string;
+  /**
+   * The server's HTTP base, such as `https://host/app`, where exports are posted to `/export` and browser copies
+   * are fetched from `/copy`. By default, beside `url`: `wss://host/app/ws` gives `https://host/app`.
+   */
+  readonly httpUrl?: string;
   /**
    * Where the application serves `worker.js` from the package's `wasm` folder, such as `/parallax/worker.js`.
    * With it, datasets the server marks for the browser are copied into a worker and their views run there;
@@ -29,21 +32,31 @@ export interface Placement {
 
 const CONFIG = new InjectionToken<ParallaxConfig>("parallax config");
 
-/** The export endpoint beside a server's WebSocket endpoint: `wss://host/app/ws` gives `https://host/app/export`. */
-export function exportUrlFor(socketUrl: string): string {
+/** The HTTP base beside a server's WebSocket endpoint: `wss://host/app/ws` gives `https://host/app`. */
+export function httpBaseFor(socketUrl: string): string {
   const url = new URL(socketUrl);
   url.protocol = url.protocol === "wss:" ? "https:" : "http:";
-  const base = url.pathname.replace(/\/ws\/?$/, "").replace(/\/+$/, "");
-  url.pathname = `${base}/export`;
+  url.pathname = url.pathname.replace(/\/ws\/?$/, "");
   url.search = "";
   url.hash = "";
-  return url.toString();
+  return url.toString().replace(/\/+$/, "");
 }
 
-/** The copy endpoint beside a server's WebSocket endpoint: `wss://host/app/ws` gives `https://host/app/copy/{dataset}?{parameters}`. */
-export function copyUrlFor(socketUrl: string, dataset: string, parameters: Readonly<Record<string, string>>): string {
-  const url = new URL(exportUrlFor(socketUrl));
-  url.pathname = url.pathname.replace(/\/export$/, `/copy/${encodeURIComponent(dataset)}`);
+/** An endpoint under an HTTP base, whether or not the base ends with a slash. */
+function endpoint(base: string, path: string): URL {
+  const url = new URL(base);
+  url.pathname = `${url.pathname.replace(/\/+$/, "")}/${path}`;
+  return url;
+}
+
+/** The export endpoint under the server's HTTP base. */
+export function exportUrlFor(base: string): string {
+  return endpoint(base, "export").toString();
+}
+
+/** The copy endpoint for a dataset and its parameters under the server's HTTP base. */
+export function copyUrlFor(base: string, dataset: string, parameters: Readonly<Record<string, string>>): string {
+  const url = endpoint(base, `copy/${encodeURIComponent(dataset)}`);
   url.search = new URLSearchParams(Object.entries(parameters)).toString();
   return url.toString();
 }
@@ -68,9 +81,14 @@ export class ParallaxClient {
   private connecting: Promise<Connection> | null = null;
   private browser: BrowserEngine | null = null;
 
+  /** The server's HTTP base. */
+  private httpBase(): string {
+    return this.config.httpUrl ?? httpBaseFor(absolute(this.config.url));
+  }
+
   /** The URL exports are posted to. */
   public exportUrl(): string {
-    return this.config.exportUrl ?? exportUrlFor(absolute(this.config.url));
+    return exportUrlFor(this.httpBase());
   }
 
   /** Returns the shared connection to the server. */
@@ -93,14 +111,14 @@ export class ParallaxClient {
       this.browser ??= BrowserEngine.start(worker);
       return this.browser;
     };
-    return placeView(await this.connection(), browser, dataset, parameters, copyUrlFor(absolute(this.config.url), dataset, parameters));
+    return placeView(await this.connection(), browser, dataset, parameters, copyUrlFor(this.httpBase(), dataset, parameters));
   }
 }
 
 /** What placing a view needs from the browser's engine. */
 export interface CopyingEngine {
   readonly connection: Connection;
-  readonly copy: (dataset: string, parameters: Readonly<Record<string, string>>, url: string) => Promise<void>;
+  readonly copy: (dataset: string, parameters: Readonly<Record<string, string>>, url: string, timeoutMs: number) => Promise<void>;
 }
 
 /**
@@ -116,7 +134,7 @@ export async function placeView(server: Connection, browser: () => CopyingEngine
     return { connection: server, fallback: null };
   }
   try {
-    await engine.copy(dataset, parameters, copyUrl);
+    await engine.copy(dataset, parameters, copyUrl, COPY_TIMEOUT_MS);
     return { connection: engine.connection, fallback: null };
   } catch (failure: unknown) {
     const reason = failure instanceof Error ? failure.message : String(failure);

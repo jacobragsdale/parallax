@@ -60,10 +60,15 @@ parameters from `GET /copy/{dataset}`, loads it into the worker and runs every
 later view of that table there. The copy is an Arrow IPC stream of the rows in
 insertion order, with the table's status (load number, load and source times,
 NaNs turned blank, a failed refresh) in its schema metadata, so views of the copy
-show the same rows, order and status as views on the server. A test runs a set
+show the same rows, order and status as views on the server. The server writes
+a table's copy once per load and streams that file to every page that asks, so
+many pages opening at once neither re-encode the table nor hold up its reload.
+The cache follows the table itself, so callers whose connection context
+resolves to different tables never share a copy. A test runs a set
 of layouts against a reloaded table and its copy and requires identical frames,
 and an end-to-end test compares a pivot's copied cells across the two. A copy
-that fails to load leaves the view on the server, and the status bar says why.
+that fails to load, or takes longer than two minutes, leaves the view on the
+server, and the status bar says why.
 A copy is fetched once per page: a reload on the server reaches it when the page
 reloads, and its status bar shows the copy's age meanwhile.
 

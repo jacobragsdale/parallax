@@ -15,7 +15,7 @@ arrow-schema.workspace = true
 jiff.workspace = true
 parallax-protocol.workspace = true
 serde = { version = "1.0", features = ["derive"] }
-serde_json = { version = "1.0", features = ["arbitrary_precision"] }
+serde_json.workspace = true
 thiserror.workspace = true
 tokio = { version = "1.54", features = ["rt-multi-thread"], optional = true }
 arrow-odbc = { version = "26.0", features = ["wide"], optional = true }
@@ -36,7 +36,7 @@ odbc = ["dep:arrow-odbc"]
 mongodb = ["dep:mongodb", "dep:tokio"]
 
 [dev-dependencies]
-arrow-select = { version = "60.1", default-features = false }
+arrow-select.workspace = true
 proptest = "1.12"
 tempfile = "3.27"
 

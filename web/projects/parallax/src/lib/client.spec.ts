@@ -1,30 +1,32 @@
 import { create, toBinary } from "@bufbuild/protobuf";
 import { describe, expect, it } from "vitest";
 
-import { copyUrlFor, exportUrlFor, placeView } from "./client";
+import { copyUrlFor, exportUrlFor, httpBaseFor, placeView } from "./client";
 import type { CopyingEngine } from "./client";
 import { Connection } from "./connection";
 import { ServerMessageSchema } from "./proto/parallax_pb";
 
-describe("exportUrlFor", () => {
+describe("httpBaseFor", () => {
   it.each([
-    ["ws://host:8791/ws", "http://host:8791/export"],
-    ["wss://host/ws", "https://host/export"],
-    ["wss://host", "https://host/export"],
-    ["wss://host/ws/", "https://host/export"],
-    ["wss://host/app/ws", "https://host/app/export"],
-    ["wss://host/app/", "https://host/app/export"]
-  ])("puts the export endpoint beside %s", (socket, expected) => {
-    expect(exportUrlFor(socket)).toBe(expected);
+    ["ws://host:8791/ws", "http://host:8791"],
+    ["wss://host/ws", "https://host"],
+    ["wss://host", "https://host"],
+    ["wss://host/ws/", "https://host"],
+    ["wss://host/app/ws", "https://host/app"],
+    ["wss://host/app/", "https://host/app"]
+  ])("puts the HTTP base beside %s", (socket, expected) => {
+    expect(httpBaseFor(socket)).toBe(expected);
   });
 });
 
-describe("copyUrlFor", () => {
-  it.each([
-    ["ws://host:8791/ws", "positions", {}, "http://host:8791/copy/positions"],
-    ["wss://host/app/ws", "eod prices", { as_of: "2026-11-02", fund: "A&B" }, "https://host/app/copy/eod%20prices?as_of=2026-11-02&fund=A%26B"]
-  ])("puts the copy endpoint beside %s", (socket, dataset, parameters, expected) => {
-    expect(copyUrlFor(socket, dataset, parameters)).toBe(expected);
+describe("endpoints", () => {
+  it.each(["https://api.host/px", "https://api.host/px/"])("sit under the base %s", (base) => {
+    expect(exportUrlFor(base)).toBe("https://api.host/px/export");
+    expect(copyUrlFor(base, "positions", {})).toBe("https://api.host/px/copy/positions");
+  });
+
+  it("encode the dataset and its parameters", () => {
+    expect(copyUrlFor("https://host/app", "eod prices", { as_of: "2026-11-02", fund: "A&B" })).toBe("https://host/app/copy/eod%20prices?as_of=2026-11-02&fund=A%26B");
   });
 });
 

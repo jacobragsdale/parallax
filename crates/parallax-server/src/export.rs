@@ -147,13 +147,24 @@ pub(crate) async fn export(
             token,
         );
     }
+    if !registry.has_dataset(&layout.dataset) {
+        return refusal(
+            StatusCode::NOT_FOUND,
+            format!("unknown dataset {}", layout.dataset),
+            token,
+        );
+    }
+    if let Some(refused) = registry.unknown_parameter(&layout.dataset, &layout.parameters) {
+        return refusal(StatusCode::BAD_REQUEST, refused, token);
+    }
     let name = file_name(&layout.dataset, extension);
     let work =
         tokio::task::spawn_blocking(move || -> Result<std::fs::File, (StatusCode, String)> {
             let catalog: Arc<dyn Catalog> = registry;
+            // A refused or failed load, or the limit on cached tables.
             let table = catalog
                 .open(&layout.dataset, &layout.parameters, &context)
-                .map_err(|e| (StatusCode::NOT_FOUND, e))?;
+                .map_err(|e| (StatusCode::SERVICE_UNAVAILABLE, e))?;
             let as_of_micros = read_table(&table)
                 .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?
                 .source_as_of_micros();

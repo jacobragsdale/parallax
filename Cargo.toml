@@ -21,10 +21,13 @@ arrow-array = { version = "60.1", default-features = false }
 arrow-buffer = { version = "60.1", default-features = false }
 arrow-ipc = { version = "60.1", default-features = false }
 arrow-schema = { version = "60.1", default-features = false }
+arrow-select = { version = "60.1", default-features = false }
 clap = { version = "4.6", features = ["derive"] }
 jiff = { version = "0.2.39", default-features = false, features = ["std", "tzdb-bundle-always"] }
 libm = "0.2.16"
 rayon = "1.12"
+# Exact decimals in JSON need arbitrary precision in every crate that reads them.
+serde_json = { version = "1.0", features = ["arbitrary_precision"] }
 thiserror = "2.0"
 
 [workspace.lints.rust]

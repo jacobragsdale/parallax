@@ -14,9 +14,13 @@ import { Connection } from "./connection";
 /** What the page needs from a worker; a `Worker` provides it. */
 export interface WorkerPort {
   readonly postMessage: (message: unknown) => void;
-  readonly addEventListener: (type: "message", listener: (event: MessageEvent<unknown>) => void) => void;
+  /** Called for `message`, `messageerror` and `error`. */
+  readonly addEventListener: (type: string, listener: (event: Event) => void) => void;
   readonly terminate: () => void;
 }
+
+/** How long a copy may take to arrive and load before the view runs on the server instead. */
+export const COPY_TIMEOUT_MS = 120_000;
 
 /** Messages the worker sends; see `worker/worker.ts`. */
 const outboundSchema = z.discriminatedUnion("kind", [
@@ -58,7 +62,15 @@ export class BrowserEngine {
       "browser"
     );
     worker.addEventListener("message", (event) => {
-      this.receive(event.data);
+      this.receive(event instanceof MessageEvent ? event.data : null);
+    });
+    worker.addEventListener("messageerror", () => {
+      this.fail("the parallax worker sent a message the page could not read");
+    });
+    // A script that is missing, blocked or broken never posts anything.
+    worker.addEventListener("error", (event) => {
+      const detail = event instanceof ErrorEvent && event.message !== "" ? `: ${event.message}` : "";
+      this.fail(`the parallax worker did not start; check that its worker URL serves worker.js from the package's wasm folder${detail}`);
     });
   }
 
@@ -69,10 +81,10 @@ export class BrowserEngine {
 
   /**
    * Loads the copy of `dataset` for `parameters` from `url`, once: later calls for
-   * the same table share the first load. A failed load is forgotten, so a later
-   * call tries again.
+   * the same table share the first load. A load that fails, or takes longer than
+   * `timeoutMs`, is forgotten, so a later call tries again.
    */
-  public copy(dataset: string, parameters: Readonly<Record<string, string>>, url: string): Promise<void> {
+  public copy(dataset: string, parameters: Readonly<Record<string, string>>, url: string, timeoutMs: number = COPY_TIMEOUT_MS): Promise<void> {
     if (this.failure !== null) {
       return Promise.reject(new Error(this.failure));
     }
@@ -87,9 +99,19 @@ export class BrowserEngine {
       this.pending.set(id, { resolve, reject });
     });
     this.copies.set(key, loaded);
-    loaded.catch(() => {
-      this.copies.delete(key);
-    });
+    const timer = setTimeout(() => {
+      this.worker.postMessage({ kind: "cancel", id });
+      this.settle(id, new Error(`the copy took longer than ${String(timeoutMs / 1000)} s`));
+    }, timeoutMs);
+    loaded.then(
+      () => {
+        clearTimeout(timer);
+      },
+      () => {
+        clearTimeout(timer);
+        this.copies.delete(key);
+      }
+    );
     this.worker.postMessage({ kind: "copy", id, dataset, parameters: { ...parameters }, url });
     return loaded;
   }
@@ -127,12 +149,20 @@ export class BrowserEngine {
     }
   }
 
-  /** Stops using the worker: every pending and later copy fails, and every view reports `reason`. */
+  /**
+   * Stops using the worker: every pending and later copy fails, every view reports `reason`, and the worker
+   * ends, releasing the copies it held.
+   */
   private fail(reason: string): void {
+    if (this.failure !== null) {
+      return;
+    }
     this.failure = reason;
     for (const id of [...this.pending.keys()]) {
       this.settle(id, new Error(reason));
     }
+    this.copies.clear();
     this.connection.disconnect(reason);
+    this.worker.terminate();
   }
 }

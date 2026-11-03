@@ -77,7 +77,8 @@ first opens a browser dataset.
 The status bar under every grid has **Export to Excel** and **CSV**. The grid
 posts its layout to the server's `/export`, and the browser saves the file;
 `GridComponent.export("xlsx")` does the same from code. If the server is not
-at `/export` next to `url`, set `exportUrl` in `provideParallax`.
+at `/export` next to `url`, set `httpUrl` in `provideParallax` to its HTTP
+base, such as `https://api.host/px`; browser copies come from `/copy` there too.
 
 ## Share a view
 

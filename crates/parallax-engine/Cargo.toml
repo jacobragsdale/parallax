@@ -21,7 +21,7 @@ rayon.workspace = true
 
 [dev-dependencies]
 duckdb = { version = "=1.20000.1", features = ["download-lib", "appender-arrow"] }
-arrow-select = { version = "60.1", default-features = false }
+arrow-select.workspace = true
 num-bigint = "0.4.8"
 parallax-datagen.workspace = true
 proptest = "1.12"

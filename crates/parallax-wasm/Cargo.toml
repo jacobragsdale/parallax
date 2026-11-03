@@ -17,7 +17,7 @@ parallax-engine.workspace = true
 parallax-protocol.workspace = true
 parallax-session.workspace = true
 prost = "0.14"
-serde_json = "1.0"
+serde_json.workspace = true
 wasm-bindgen = "=0.2.130"
 
 [dev-dependencies]

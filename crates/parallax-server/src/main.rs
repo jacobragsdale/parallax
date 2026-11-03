@@ -129,7 +129,7 @@ async fn main() -> anyhow::Result<()> {
         app = app.fallback_service(
             axum::Router::new()
                 .fallback_service(ServeDir::new(dir))
-                .layer(tower_http::compression::CompressionLayer::new()),
+                .layer(parallax_server::compression()),
         );
     }
     let listener = tokio::net::TcpListener::bind(config.listen).await?;

@@ -128,6 +128,16 @@ impl TableState {
         }
     }
 
+    /// Changes whenever a copy of the table would: with every load, and with every
+    /// failed refresh, whose error the copy carries.
+    #[must_use]
+    pub fn copy_version(&self) -> (u64, Option<i64>) {
+        (
+            self.table.load_version(),
+            self.refresh_error.as_ref().map(|(_, at)| *at),
+        )
+    }
+
     /// Records a refresh that failed before reaching the table, such as an
     /// unreachable source.
     pub fn record_failure(&mut self, message: String, now_micros: i64) {
@@ -285,10 +295,16 @@ impl Catalog for MemoryCatalog {
     ) -> Result<SharedTable, String> {
         self.get_with_parameters(dataset, parameters)
             .ok_or_else(|| {
-                if parameters.is_empty() {
-                    format!("unknown dataset {dataset}")
-                } else {
+                let known = self
+                    .tables
+                    .read()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .keys()
+                    .any(|(name, _)| name == dataset);
+                if known {
                     format!("{dataset} is not loaded for these parameters")
+                } else {
+                    format!("unknown dataset {dataset}")
                 }
             })
     }

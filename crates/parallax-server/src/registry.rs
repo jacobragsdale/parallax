@@ -87,6 +87,7 @@ pub struct Registry {
     datasets: BTreeMap<String, Dataset>,
     cache: Mutex<HashMap<CacheKey, Arc<Mutex<Slot>>>>,
     changes: broadcast::Sender<()>,
+    copies: crate::copy::CopyCache,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -103,7 +104,13 @@ impl Registry {
             datasets: datasets.into_iter().map(|d| (d.name.clone(), d)).collect(),
             cache: Mutex::new(HashMap::new()),
             changes,
+            copies: crate::copy::CopyCache::default(),
         }
+    }
+
+    /// The copies written for browsers.
+    pub(crate) fn copies(&self) -> &crate::copy::CopyCache {
+        &self.copies
     }
 
     /// Notifies on every reload, so connections can refresh their views.
@@ -116,6 +123,20 @@ impl Registry {
     #[must_use]
     pub fn has_dataset(&self, name: &str) -> bool {
         self.datasets.contains_key(name)
+    }
+
+    /// Returns the refusal for a parameter dataset `name` does not take, if any.
+    #[must_use]
+    pub fn unknown_parameter(
+        &self,
+        name: &str,
+        parameters: &BTreeMap<String, String>,
+    ) -> Option<String> {
+        let dataset = self.datasets.get(name)?;
+        parameters
+            .keys()
+            .find(|key| !dataset.parameters.contains(key))
+            .map(|key| format!("{name} has no parameter {key}"))
     }
 
     /// Returns `true` if clients may copy dataset `name` into the browser.
@@ -281,10 +302,8 @@ impl Catalog for Registry {
             .datasets
             .get(name)
             .ok_or_else(|| format!("unknown dataset {name}"))?;
-        for key in parameters.keys() {
-            if !dataset.parameters.contains(key) {
-                return Err(format!("{name} has no parameter {key}"));
-            }
+        if let Some(refusal) = self.unknown_parameter(name, parameters) {
+            return Err(refusal);
         }
         let resolved = match &dataset.resolve {
             Some(resolve) => resolve(parameters, context)?,

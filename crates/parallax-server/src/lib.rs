@@ -43,12 +43,17 @@ pub fn router(registry: Arc<Registry>) -> Router {
         .route("/ws", get(upgrade))
         .route("/invalidate/{dataset}", post(invalidate))
         .route("/export", post(export::export))
-        .route(
-            "/copy/{dataset}",
-            get(copy::copy).layer(tower_http::compression::CompressionLayer::new()),
-        )
+        .route("/copy/{dataset}", get(copy::copy).layer(compression()))
         .route("/health", get(|| async { "ok" }))
         .with_state(registry)
+}
+
+/// The response compression the server uses: zstd or gzip, whichever the client
+/// offers. `router` applies it to copies; a host can apply it to its own static
+/// files, as the reference binary does.
+#[must_use]
+pub fn compression() -> tower_http::compression::CompressionLayer {
+    tower_http::compression::CompressionLayer::new()
 }
 
 /// Reloads tables whose dataset asks for a scheduled refresh, every `tick`.

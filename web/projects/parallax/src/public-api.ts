@@ -2,9 +2,9 @@
  * Public API Surface of @jacobragsdale/parallax
  */
 
-export { copyUrlFor, exportUrlFor, placeView, provideParallax, ParallaxClient } from "./lib/client";
+export { copyUrlFor, exportUrlFor, httpBaseFor, placeView, provideParallax, ParallaxClient } from "./lib/client";
 export type { CopyingEngine, ParallaxConfig, Placement } from "./lib/client";
-export { BrowserEngine } from "./lib/browser-engine";
+export { BrowserEngine, COPY_TIMEOUT_MS } from "./lib/browser-engine";
 export type { WorkerPort } from "./lib/browser-engine";
 export { Connection, ViewHandle } from "./lib/connection";
 export type { DistinctValues, EngineLocation, Transport, Viewport, ViewListener } from "./lib/connection";

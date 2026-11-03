@@ -26,7 +26,13 @@ interface ProtocolMessage {
   readonly bytes: Uint8Array;
 }
 
-type Inbound = CopyRequest | ProtocolMessage;
+/** The page gave up waiting for a copy. */
+interface CancelCopy {
+  readonly kind: "cancel";
+  readonly id: number;
+}
+
+type Inbound = CopyRequest | ProtocolMessage | CancelCopy;
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -48,6 +54,9 @@ function parse(data: unknown): Inbound | null {
   if (kind === "copy" && typeof id === "number" && typeof dataset === "string" && isTextRecord(parameters) && typeof url === "string") {
     return { kind, id, dataset, parameters, url };
   }
+  if (kind === "cancel" && typeof id === "number") {
+    return { kind, id };
+  }
   return null;
 }
 
@@ -59,9 +68,12 @@ function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** Copies being fetched, by request id, so that the page can cancel them. */
+const fetching = new Map<number, AbortController>();
+
 /** Fetches a copy and loads it, returning its row count. */
-async function load(request: CopyRequest): Promise<number> {
-  const response = await fetch(request.url, { credentials: "include" });
+async function load(request: CopyRequest, signal: AbortSignal): Promise<number> {
+  const response = await fetch(request.url, { credentials: "include", signal });
   if (!response.ok) {
     const reason = (await response.text()).trim();
     throw new Error(`the server answered ${response.status.toString()}${reason === "" ? "" : `: ${reason}`}`);
@@ -71,15 +83,21 @@ async function load(request: CopyRequest): Promise<number> {
     throw new Error(`the server sent ${type === "" ? "no content type" : type}, not an Arrow stream`);
   }
   const bytes = new Uint8Array(await response.arrayBuffer());
+  // A copy the page gave up on is not loaded, so that it holds no memory.
+  signal.throwIfAborted();
   return Number((await engine).loadCopy(request.dataset, JSON.stringify(request.parameters), bytes));
 }
 
 function copy(request: CopyRequest): void {
-  load(request).then(
+  const controller = new AbortController();
+  fetching.set(request.id, controller);
+  load(request, controller.signal).then(
     (rows) => {
+      fetching.delete(request.id);
       postMessage({ kind: "copied", id: request.id, rows });
     },
     (error: unknown) => {
+      fetching.delete(request.id);
       postMessage({ kind: "failed", id: request.id, message: describe(error) });
     }
   );
@@ -103,6 +121,10 @@ addEventListener("message", (event: MessageEvent<unknown>) => {
   }
   if (message.kind === "copy") {
     copy(message);
+    return;
+  }
+  if (message.kind === "cancel") {
+    fetching.get(message.id)?.abort();
     return;
   }
   engine.then(
