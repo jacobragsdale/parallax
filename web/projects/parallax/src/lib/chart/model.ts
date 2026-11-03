@@ -11,7 +11,7 @@
  */
 
 import type { ChartContent, ChartFrameData } from "../chart-frame";
-import type { LayoutChart } from "../layout";
+import type { Layout, LayoutChart } from "../layout";
 import type { ChartColors } from "../theme";
 import { linearScale, logDomain, logScale, niceDomain, valueTicks } from "./scale";
 import type { Scale, ValueTick } from "./scale";
@@ -574,4 +574,36 @@ export function chartModel(input: ModelInput): ChartModel {
     case "candles":
       return candleModel(input, frame, content);
   }
+}
+
+const KIND_NAMES: Readonly<Record<LayoutChart["kind"], string>> = {
+  line: "Line chart",
+  area: "Area chart",
+  bar: "Bar chart",
+  scatter: "Density of points",
+  heatmap: "Heatmap",
+  histogram: "Histogram",
+  candlestick: "Candlestick chart",
+  ohlc: "OHLC chart"
+};
+
+function kindName(chart: LayoutChart): string {
+  if (chart.kind !== "bar") {
+    return KIND_NAMES[chart.kind];
+  }
+  const shape = [chart.stacked ? "stacked" : "", chart.horizontal ? "horizontal" : ""].filter((w) => w !== "").join(" ");
+  return shape === "" ? "Bar chart" : `${shape.charAt(0).toUpperCase()}${shape.slice(1)} bar chart`;
+}
+
+/** A chart's accessible name: its kind and shape, what it plots, what it splits it by, and the dataset. */
+export function describeChart(layout: Layout): string {
+  const chart = layout.chart;
+  if (chart === null) {
+    return "Chart";
+  }
+  const grouped = chart.kind === "bar" || chart.kind === "heatmap";
+  const columns = [...chart.y, ...chart.y_right].join(", ");
+  const of = grouped ? layout.group_by.join(", ") : columns === "" ? chart.x : columns;
+  const by = grouped ? layout.split_by.join(", ") : (chart.series ?? "");
+  return `${kindName(chart)} of ${of}${by === "" ? "" : ` by ${by}`} from ${layout.dataset}`;
 }

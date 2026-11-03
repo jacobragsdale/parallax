@@ -13,7 +13,8 @@
     "test": "ng test parallax --watch=false",
     "e2e": "playwright test -c e2e/playwright.config.ts grid.spec browser.spec demo.spec charts.spec",
     "performance": "playwright test -c e2e/playwright.config.ts grid-performance",
-    "screenshots": "bash e2e/screenshots.sh"
+    "e2e:image": "bash e2e/in-image.sh grid.spec browser.spec demo.spec charts.spec screenshots.spec",
+    "screenshots": "bash e2e/in-image.sh screenshots.spec"
   },
   "private": true,
   "packageManager": "pnpm@12.11.2",

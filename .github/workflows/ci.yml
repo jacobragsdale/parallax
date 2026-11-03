@@ -174,10 +174,11 @@ jobs:
       # The reference server serves the demo next to generated data; see examples/experiment.toml.
       - run: cargo build --release --locked -p parallax-server
         working-directory: .
-      - run: pnpm exec playwright install --with-deps chromium
-      - run: pnpm e2e
-      # In the Playwright image matching @playwright/test, so that fonts match the committed screenshots.
-      - run: pnpm screenshots
+      # Every spec, the screenshots included, runs in the Playwright image matching @playwright/test, so that the
+      # browser and fonts match the committed screenshots. The demo and the server are built above.
+      - run: pnpm e2e:image
+        env:
+          PARALLAX_PREBUILT: "1"
       - uses: actions/upload-artifact@v7
         if: failure()
         with:

@@ -4,6 +4,8 @@ import type { LayoutFilter, LayoutInput, ThemeName } from "parallax";
 
 /** A chart the page shows, with what it says. */
 interface Card {
+  /** A name that stays when the title is reworded, such as for the chart's screenshot. */
+  readonly id: string;
   readonly title: string;
   readonly layout: ReturnType<typeof signal<LayoutInput>>;
   /** Whether a brush on it narrows the grid beside it. */
@@ -21,8 +23,8 @@ function rowsLayout(brush: readonly LayoutFilter[]): LayoutInput {
   return { dataset: "prices", filters: [QYE, ...brush], sort: [{ column: "date", descending: true }], columns: ["date", "open", "high", "low", "close", "volume"] };
 }
 
-function card(title: string, layout: LayoutInput, linked = false): Card {
-  return { title, layout: signal(layout), linked };
+function card(id: string, title: string, layout: LayoutInput, linked = false): Card {
+  return { id, title, layout: signal(layout), linked };
 }
 
 /** Every chart kind over the generated data: prices held in the browser, positions on the server. */
@@ -31,8 +33,8 @@ function card(title: string, layout: LayoutInput, linked = false): Card {
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [ChartComponent, GridComponent],
   template: `
-    @for (c of cards; track c.title) {
-      <section>
+    @for (c of cards; track c.id) {
+      <section [attr.data-card]="c.id">
         <h2>{{ c.title }}</h2>
         <px-chart [(layout)]="c.layout" [theme]="theme()" (brushed)="brush(c, $event)" />
       </section>
@@ -96,17 +98,18 @@ export class ChartsComponent {
   }
 
   protected readonly cards: readonly Card[] = [
-    card("Closing prices on trading days, log scale", {
+    card("closes-log", "Closing prices on trading days, log scale", {
       dataset: "prices",
       filters: [{ column: "ticker", op: "in", values: THREE }],
       chart: { kind: "line", x: "date", y: ["close"], series: "ticker", axis: "trading", log_y: true }
     }),
     card(
+      "candles",
       "QYE candles, bucketed to fit: drag to pan, wheel to zoom, Shift-drag to select days",
       { dataset: "prices", filters: [QYE], chart: { kind: "candlestick", x: "date", axis: "trading", ohlc: { open: "open", high: "high", low: "low", close: "close" } } },
       true
     ),
-    card("NV close since 2025, with its volume on a second axis", {
+    card("close-and-volume", "NV close since 2025, with its volume on a second axis", {
       dataset: "prices",
       filters: [
         { column: "ticker", op: "eq", value: "NV" },
@@ -114,7 +117,7 @@ export class ChartsComponent {
       ],
       chart: { kind: "line", x: "date", y: ["close"], y_right: ["volume"], axis: "trading" }
     }),
-    card("NV OHLC bars since 2024", {
+    card("ohlc", "NV OHLC bars since 2024", {
       dataset: "prices",
       filters: [
         { column: "ticker", op: "eq", value: "NV" },
@@ -122,7 +125,7 @@ export class ChartsComponent {
       ],
       chart: { kind: "ohlc", x: "date", axis: "trading", ohlc: { open: "open", high: "high", low: "low", close: "close" } }
     }),
-    card("QYE close since 2025, as an area", {
+    card("area", "QYE close since 2025, as an area", {
       dataset: "prices",
       filters: [
         { column: "ticker", op: "eq", value: "QYE" },
@@ -130,7 +133,7 @@ export class ChartsComponent {
       ],
       chart: { kind: "area", x: "date", y: ["close"], axis: "trading" }
     }),
-    card("Market value by sector and asset class", {
+    card("stacked-bars", "Market value by sector and asset class", {
       dataset: "positions",
       group_by: ["sector"],
       split_by: ["asset_class"],
@@ -138,7 +141,7 @@ export class ChartsComponent {
       formats: { market_value_usd: { abbreviate: "millions" } },
       chart: { kind: "bar", stacked: true }
     }),
-    card("Market value by sector, long and short side by side", {
+    card("horizontal-bars", "Market value by sector, long and short side by side", {
       dataset: "positions",
       group_by: ["sector"],
       split_by: ["long_short"],
@@ -146,9 +149,9 @@ export class ChartsComponent {
       formats: { market_value_usd: { abbreviate: "millions" } },
       chart: { kind: "bar", horizontal: true }
     }),
-    card("Beta of long and short positions", { dataset: "positions", formats: { beta: { decimals: 2 } }, chart: { kind: "histogram", x: "beta", series: "long_short" } }),
-    card("Daily P&L against market value", { dataset: "positions", chart: { kind: "scatter", x: "market_value_usd", y: ["daily_pnl_usd"] } }),
-    card("Daily P&L by sector and asset class", {
+    card("histogram", "Beta of long and short positions", { dataset: "positions", formats: { beta: { decimals: 2 } }, chart: { kind: "histogram", x: "beta", series: "long_short" } }),
+    card("density", "Daily P&L against market value", { dataset: "positions", chart: { kind: "scatter", x: "market_value_usd", y: ["daily_pnl_usd"] } }),
+    card("heatmap", "Daily P&L by sector and asset class", {
       dataset: "positions",
       group_by: ["sector"],
       split_by: ["asset_class"],

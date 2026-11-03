@@ -38,7 +38,7 @@ import { chartSource } from "./chart-source";
 import type { PlotSize } from "./chart-source";
 import { brushFilters, markAt, panRange, readSeries, zoomRange } from "./interaction";
 import type { Range, Reading } from "./interaction";
-import { chartModel } from "./model";
+import { chartModel, describeChart } from "./model";
 import type { ChartModel } from "./model";
 import { paintChart } from "./paint";
 import { ChartSync } from "./sync";
@@ -193,16 +193,6 @@ const KEYS: Readonly<Partial<Record<string, "in" | "out" | "left" | "right" | "a
 };
 
 /** Words for what a chart shows, for its accessible name. */
-const KIND_NAMES: Readonly<Record<NonNullable<Layout["chart"]>["kind"], string>> = {
-  line: "Line chart",
-  area: "Area chart",
-  bar: "Bar chart",
-  scatter: "Density of points",
-  heatmap: "Heatmap",
-  histogram: "Histogram",
-  candlestick: "Candlestick chart",
-  ohlc: "OHLC chart"
-};
 
 @Component({
   selector: "px-chart",
@@ -315,13 +305,7 @@ export class ChartComponent {
 
   protected readonly description = computed(() => {
     const layout = this.current();
-    const chart = layout?.chart;
-    if (chart === undefined || chart === null) {
-      return "Chart";
-    }
-    const columns = [...chart.y, ...chart.y_right].join(", ");
-    const of = chart.kind === "bar" || chart.kind === "heatmap" ? layout?.group_by.join(", ") : columns === "" ? chart.x : columns;
-    return `${KIND_NAMES[chart.kind]} of ${of ?? ""}${chart.series === null ? "" : ` by ${chart.series}`} from ${layout?.dataset ?? ""}`;
+    return layout === null ? "Chart" : describeChart(layout);
   });
 
   /** What the chart draws, and whether it is zoomed. */

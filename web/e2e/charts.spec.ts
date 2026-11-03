@@ -42,11 +42,11 @@ test("every chart kind draws its data, with an accessible name and no errors", a
     "Line chart of close, volume",
     "OHLC chart of date",
     "Area chart of close",
-    "Bar chart of sector",
-    "Bar chart of sector",
+    "Stacked bar chart of sector by asset_class",
+    "Horizontal bar chart of sector by long_short",
     "Histogram of beta by long_short",
     "Density of points of daily_pnl_usd",
-    "Heatmap of sector"
+    "Heatmap of sector by asset_class"
   ];
   expect(names.map((n, i) => n.startsWith(kinds[i] ?? "?"))).toEqual(kinds.map(() => true));
   for (const canvas of await page.locator("px-chart canvas").all()) {

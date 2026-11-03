@@ -4,7 +4,7 @@ import type { ChartContent, ChartFrameData } from "../chart-frame";
 import { parseLayout } from "../layout";
 import type { LayoutChart } from "../layout";
 import { CHART_COLORS } from "../theme";
-import { bucketTitle, chartModel } from "./model";
+import { bucketTitle, chartModel, describeChart } from "./model";
 import type { CategoryData, Mark, ModelInput } from "./model";
 
 function chart(partial: Partial<LayoutChart> & Pick<LayoutChart, "kind">): LayoutChart {
@@ -197,5 +197,20 @@ describe("bucketTitle", () => {
     expect(bucketTitle("5m", "2024-06-03 09:30")).toBe("5 minutes from 2024-06-03 09:30");
     expect(bucketTitle("1m", "09:30")).toBe("1 minute from 09:30");
     expect(bucketTitle("2y", "2020-01-01")).toBe("2 years from 2020-01-01");
+  });
+});
+
+describe("describeChart", () => {
+  it("names the kind and shape, what is plotted and split by, and the dataset", () => {
+    const bars = { dataset: "positions", group_by: ["sector"], split_by: ["asset_class"], measures: [{ column: "market_value_usd", aggregate: "sum" }] };
+    expect(describeChart(parseLayout({ ...bars, chart: { kind: "bar", stacked: true } }))).toBe("Stacked bar chart of sector by asset_class from positions");
+    expect(describeChart(parseLayout({ ...bars, chart: { kind: "bar", horizontal: true } }))).toBe("Horizontal bar chart of sector by asset_class from positions");
+    expect(describeChart(parseLayout({ ...bars, chart: { kind: "bar", stacked: true, horizontal: true } }))).toBe("Stacked horizontal bar chart of sector by asset_class from positions");
+    expect(describeChart(parseLayout({ ...bars, split_by: [], chart: { kind: "bar" } }))).toBe("Bar chart of sector from positions");
+    expect(describeChart(parseLayout({ ...bars, chart: { kind: "heatmap" } }))).toBe("Heatmap of sector by asset_class from positions");
+    expect(describeChart(parseLayout({ dataset: "prices", chart: { kind: "line", x: "date", y: ["close"], y_right: ["volume"], series: "ticker" } }))).toBe(
+      "Line chart of close, volume by ticker from prices"
+    );
+    expect(describeChart(parseLayout({ dataset: "prices", chart: { kind: "candlestick", x: "date" } }))).toBe("Candlestick chart of date from prices");
   });
 });
