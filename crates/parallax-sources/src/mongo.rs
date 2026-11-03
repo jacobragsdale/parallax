@@ -18,7 +18,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::json::{JsonField, non_finite, to_batch};
-use crate::{Fetched, Source, expand_environment, fill, now_micros};
+use crate::{Fetched, Source, expand_environment, fill_json, now_micros};
 
 /// How to read a dataset from MongoDB.
 #[derive(Clone, Debug, Deserialize)]
@@ -41,17 +41,41 @@ pub struct MongoConfig {
     pub key: Option<String>,
 }
 
-/// A dataset read from a MongoDB collection.
+/// A dataset read from a MongoDB collection. The driver's client holds a
+/// connection pool, so it is made once and reused while the connection string
+/// stays the same.
 #[derive(Clone, Debug)]
 pub struct Mongo {
     config: MongoConfig,
+    client: std::sync::Arc<std::sync::Mutex<Option<(String, mongodb::sync::Client)>>>,
 }
 
 impl Mongo {
     /// A connector for `config`.
     #[must_use]
     pub fn new(config: MongoConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            client: std::sync::Arc::default(),
+        }
+    }
+
+    /// The client for the current connection string.
+    fn client(&self) -> Result<mongodb::sync::Client, String> {
+        let uri = expand_environment(&self.config.uri, crate::percent_encode)?;
+        let mut cached = self
+            .client
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((known, client)) = cached.as_ref()
+            && *known == uri
+        {
+            return Ok(client.clone());
+        }
+        let client =
+            mongodb::sync::Client::with_uri_str(&uri).map_err(|e| format!("connecting: {e}"))?;
+        *cached = Some((uri, client.clone()));
+        Ok(client)
     }
 
     /// The filter for `parameters`, with each value filled in as a JSON string.
@@ -59,7 +83,7 @@ impl Mongo {
         let Some(template) = &self.config.filter else {
             return Ok(Document::new());
         };
-        let filled = fill(template, parameters, |v| {
+        let filled = fill_json(template, parameters, |v| {
             let quoted = serde_json::to_string(v).map_err(|e| e.to_string())?;
             // The template already has the quotes around the placeholder.
             Ok(quoted[1..quoted.len() - 1].to_owned())
@@ -82,16 +106,32 @@ fn to_json(value: Bson) -> Value {
         Bson::Double(v) => non_finite(v),
         Bson::Int32(v) => v.into(),
         Bson::Int64(v) => v.into(),
-        // Every digit survives: with exact numbers on, the text is the number.
         Bson::Decimal128(d) => {
-            serde_json::from_str::<Value>(&d.to_string()).unwrap_or_else(|_| non_finite(f64::NAN))
+            let text = d.to_string();
+            match text.as_str() {
+                "Infinity" => non_finite(f64::INFINITY),
+                "-Infinity" => non_finite(f64::NEG_INFINITY),
+                "NaN" | "-NaN" => non_finite(f64::NAN),
+                // Every digit survives: with exact numbers on, the text is the number.
+                _ => serde_json::from_str::<Value>(&text).unwrap_or(Value::String(text)),
+            }
         }
         Bson::String(s) => Value::String(s),
         Bson::Boolean(b) => Value::Bool(b),
         Bson::Null | Bson::Undefined => Value::Null,
-        Bson::DateTime(dt) => dt
-            .try_to_rfc3339_string()
-            .map_or(Value::Null, Value::String),
+        // A date beyond what RFC 3339 can write becomes an object, which a
+        // timestamp column refuses by name rather than loading as null.
+        Bson::DateTime(dt) => dt.try_to_rfc3339_string().map_or_else(
+            |_| {
+                let mut unrepresentable = serde_json::Map::new();
+                unrepresentable.insert(
+                    "date beyond year 9999, in milliseconds".to_owned(),
+                    dt.timestamp_millis().into(),
+                );
+                Value::Object(unrepresentable)
+            },
+            Value::String,
+        ),
         Bson::ObjectId(id) => Value::String(id.to_hex()),
         Bson::Document(d) => Value::Object(d.into_iter().map(|(k, v)| (k, to_json(v))).collect()),
         Bson::Array(items) => Value::Array(items.into_iter().map(to_json).collect()),
@@ -109,8 +149,7 @@ fn to_json(value: Bson) -> Value {
 impl Source for Mongo {
     fn fetch(&self, parameters: &BTreeMap<String, String>) -> Result<Fetched, String> {
         let filter = self.filter(parameters)?;
-        let client = mongodb::sync::Client::with_uri_str(expand_environment(&self.config.uri)?)
-            .map_err(|e| format!("connecting: {e}"))?;
+        let client = self.client()?;
         let collection = client
             .database(&self.config.database)
             .collection::<Document>(&self.config.collection);

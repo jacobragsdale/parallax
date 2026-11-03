@@ -91,6 +91,11 @@ pub struct OdbcConfig {
     /// JSON text columns and the fields read from them.
     #[serde(default)]
     pub json: Vec<JsonColumn>,
+    /// Oracle columns that really are binary doubles. Oracle's driver reports a
+    /// `NUMBER` without a precision as a double, which would round it, so on
+    /// Oracle every double column must be declared in `types` or listed here.
+    #[serde(default)]
+    pub doubles: Vec<String>,
 }
 
 /// A dataset read through ODBC.
@@ -175,7 +180,12 @@ impl Odbc {
                 let texts = array
                     .as_string_opt::<i32>()
                     .ok_or_else(|| format!("{name} was not fetched as text"))?;
-                let typed = typed_from_text(&JsonField::new(name, *declared), texts.iter())?;
+                let mut field = JsonField::new(name, *declared);
+                if let Some(rule) = self.config.zones.get(name) {
+                    field.zone = Some(rule.zone.clone());
+                    field.ambiguous = rule.ambiguous;
+                }
+                let typed = typed_from_text(&field, texts.iter())?;
                 fields.push(Field::new(name, typed.data_type().clone(), true));
                 arrays.push(typed);
             } else if matches!(array.data_type(), DataType::Timestamp(_, None))
@@ -204,6 +214,49 @@ impl Odbc {
         RecordBatch::try_new(Arc::new(Schema::new(fields)), arrays).map_err(|e| e.to_string())
     }
 
+    /// Refuses configuration that names columns the query does not return, which
+    /// would otherwise fall back to defaults silently, and on Oracle, double
+    /// columns that are neither declared nor listed as doubles.
+    fn check(&self, inferred: &Schema, oracle: bool) -> Result<(), String> {
+        let names: Vec<&str> = inferred
+            .fields()
+            .iter()
+            .map(|f| f.name().as_str())
+            .collect();
+        let configured = self
+            .config
+            .types
+            .keys()
+            .map(|n| ("types", n))
+            .chain(self.config.zones.keys().map(|n| ("zones", n)))
+            .chain(self.config.wall_clock.iter().map(|n| ("wall_clock", n)))
+            .chain(self.config.json.iter().map(|j| ("json", &j.column)))
+            .chain(self.config.doubles.iter().map(|n| ("doubles", n)));
+        for (setting, name) in configured {
+            if !names.contains(&name.as_str()) {
+                return Err(format!(
+                    "{setting} names {name}, which the query does not return; its columns are {}",
+                    names.join(", ")
+                ));
+            }
+        }
+        if oracle {
+            for field in inferred.fields() {
+                let double = matches!(field.data_type(), DataType::Float32 | DataType::Float64);
+                if double
+                    && !self.config.types.contains_key(field.name())
+                    && !self.config.doubles.contains(field.name())
+                {
+                    return Err(format!(
+                        "{} comes from Oracle as a double, which rounds a NUMBER without a precision; declare it in types, such as decimal(38, 10), or list it in doubles if it is BINARY_DOUBLE",
+                        field.name()
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// The schema to fetch with: declared columns as text, the rest as inferred.
     fn fetch_schema(&self, inferred: &Schema) -> SchemaRef {
         Arc::new(Schema::new(
@@ -226,7 +279,7 @@ impl Odbc {
 
 impl Source for Odbc {
     fn fetch(&self, parameters: &BTreeMap<String, String>) -> Result<Fetched, String> {
-        let connection_string = expand_environment(&self.config.connection)?;
+        let connection_string = expand_environment(&self.config.connection, crate::odbc_value)?;
         let connection = environment()?
             .connect_with_connection_string(&connection_string, ConnectionOptions::default())
             .map_err(|e| format!("connecting: {e}"))?;
@@ -246,9 +299,15 @@ impl Source for Odbc {
         let mut cursor = connection
             .execute(&self.config.query, values.as_slice(), None)
             .map_err(|e| format!("running the query: {e}"))?
-            .ok_or_else(|| "the query returned no rows".to_owned())?;
+            .ok_or_else(|| {
+                "the statement returned no result set; the query must be a SELECT".to_owned()
+            })?;
         let inferred = arrow_odbc::arrow_schema_from(&mut cursor, None, false)
             .map_err(|e| format!("reading the result's columns: {e}"))?;
+        let oracle = connection
+            .database_management_system_name()
+            .is_ok_and(|n| n.to_ascii_lowercase().contains("oracle"));
+        self.check(&inferred, oracle)?;
         let reader = OdbcReaderBuilder::new()
             .with_schema(self.fetch_schema(&inferred))
             .with_max_bytes_per_batch(MAX_BATCH_BYTES)

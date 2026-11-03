@@ -427,7 +427,13 @@ connectors cover where the data already lives:
   column fetched as text to stay exact, a zoneless time's zone and choice in the
   repeated hour, a time kept as wall-clock, and a JSON column's fields are all
   declared per dataset. Digits below the microsecond refuse the load rather than
-  being cut. The ODBC and MongoDB connectors are features of `parallax-sources`
+  being cut. Every column a setting names must be in the query's result, so a
+  misspelt name fails instead of falling back to defaults. On Oracle, a column
+  the driver reports as a double must be declared or listed as a real
+  `BINARY_DOUBLE`, because the driver reports a `NUMBER` without a precision as
+  a double. An environment value is quoted for its setting: braced in an ODBC
+  string, percent-encoded in a MongoDB URI; `env:NAME` takes a whole setting from
+  the environment. The ODBC and MongoDB connectors are features of `parallax-sources`
   and the server, because they need unixODBC and the database drivers
   installed. CI runs them against SQL Server, Oracle Database and MongoDB in
   service containers.

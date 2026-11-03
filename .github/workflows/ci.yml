@@ -60,7 +60,7 @@ jobs:
           curl -sSL https://packages.microsoft.com/keys/microsoft.asc | sudo tee /etc/apt/trusted.gpg.d/microsoft.asc > /dev/null
           curl -sSL "https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/prod.list" | sudo tee /etc/apt/sources.list.d/mssql-release.list > /dev/null
           sudo apt-get update
-          sudo ACCEPT_EULA=Y apt-get install -y msodbcsql18 unixodbc-dev libaio1t64
+          sudo ACCEPT_EULA=Y apt-get install -y msodbcsql18 mssql-tools18 unixodbc-dev libaio1t64
       - name: Install Oracle Instant Client ODBC
         run: |
           sudo mkdir -p /opt/oracle && cd /opt/oracle
@@ -75,10 +75,11 @@ jobs:
       - name: Wait for SQL Server
         run: |
           for i in $(seq 1 60); do
-            /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P Parallax-Test-1 -Q "SELECT 1" > /dev/null 2>&1 && exit 0
+            /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P Parallax-Test-1 -Q "SELECT 1" && exit 0
             sleep 2
           done
           exit 1
+      - run: cargo clippy -p parallax-sources -p parallax-server --features parallax-server/odbc,parallax-server/mongodb --all-targets --locked
       - run: cargo test -p parallax-sources --features odbc,mongodb --test databases --locked -- --nocapture
         env:
           PARALLAX_TEST_MSSQL: "Driver={ODBC Driver 18 for SQL Server};Server=localhost,1433;UID=sa;PWD=Parallax-Test-1;TrustServerCertificate=yes;"

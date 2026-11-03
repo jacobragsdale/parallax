@@ -37,6 +37,10 @@ mod mongo {
         f
     }
 
+    fn connector_uri() -> String {
+        std::env::var("PARALLAX_TEST_MONGODB").unwrap()
+    }
+
     #[test]
     fn documents_load_exactly() {
         let Some(uri) = server("PARALLAX_TEST_MONGODB") else {
@@ -113,6 +117,49 @@ mod mongo {
                 .is_nan()
         );
         assert!(batch.column(6).is_null(other), "a missing field is null");
+        // Infinite decimals keep their sign in a float column; dates past year
+        // 9999 refuse the load rather than turning into null.
+        let edge = client
+            .database("parallax_test")
+            .collection::<mongodb::bson::Document>("edges");
+        edge.drop().run().unwrap();
+        edge.insert_one(doc! { "x": "Infinity".parse::<Decimal128>().unwrap(), "y": "-Infinity".parse::<Decimal128>().unwrap() }).run().unwrap();
+        let floats = Mongo::new(MongoConfig {
+            uri: connector_uri(),
+            database: "parallax_test".into(),
+            collection: "edges".into(),
+            filter: None,
+            columns: vec![field("x", "x", "float"), field("y", "y", "float")],
+            key: None,
+        });
+        let b = &floats.fetch(&BTreeMap::new()).unwrap().batches[0];
+        assert_eq!(
+            b.column(0).as_primitive::<Float64Type>().value(0),
+            f64::INFINITY
+        );
+        assert_eq!(
+            b.column(1).as_primitive::<Float64Type>().value(0),
+            f64::NEG_INFINITY
+        );
+        edge.insert_one(
+            doc! { "x": 1.0, "y": 1.0, "when": DateTime::from_millis(300_000_000_000_000) },
+        )
+        .run()
+        .unwrap();
+        let dated = Mongo::new(MongoConfig {
+            uri: connector_uri(),
+            database: "parallax_test".into(),
+            collection: "edges".into(),
+            filter: Some(r#"{"when": {"$exists": true}}"#.into()),
+            columns: vec![field("when", "when", "timestamp")],
+            key: None,
+        });
+        assert!(
+            dated
+                .fetch(&BTreeMap::new())
+                .unwrap_err()
+                .contains("year 9999")
+        );
         // A filter value cannot change the filter's shape.
         let hostile: BTreeMap<String, String> =
             [("first".to_owned(), r#"", "$where": "1"#.to_owned())].into();
@@ -159,6 +206,7 @@ mod odbc {
             zones: BTreeMap::new(),
             wall_clock: Vec::new(),
             json: Vec::new(),
+            doubles: Vec::new(),
         }
     }
 
@@ -230,6 +278,15 @@ mod odbc {
         assert_eq!(col("beta").as_primitive::<Float64Type>().value(1), 1.25);
         assert_eq!(col("desk").as_string::<i32>().value(1), "Rates");
         assert!(col("beta").is_null(0));
+        // A setting that names a column the query does not return is refused.
+        let mut typo = c.clone();
+        typo.wall_clock.push("traded_at".into());
+        assert!(
+            Odbc::new(typo)
+                .fetch(&parameters)
+                .unwrap_err()
+                .contains("does not return")
+        );
         // Without a declared choice, the repeated hour refuses the load.
         c.zones.clear();
         let error = Odbc::new(c).fetch(&parameters).unwrap_err();
@@ -248,6 +305,18 @@ mod odbc {
                 "CREATE TABLE parallax_lots (id NUMBER(19), qty NUMBER, note VARCHAR2(20), opened DATE)",
                 "INSERT INTO parallax_lots VALUES (1, 12345678901234567890.123456789, '', TO_DATE('2026-03-08 03:30:00', 'YYYY-MM-DD HH24:MI:SS'))",
             ],
+        );
+        // Undeclared, Oracle's driver reports the NUMBER as a double, which would round it.
+        let undeclared = Odbc::new(config(
+            connection.clone(),
+            "SELECT id, qty FROM parallax_lots",
+        ))
+        .fetch(&BTreeMap::new());
+        assert!(
+            undeclared
+                .as_ref()
+                .is_err_and(|e| e.contains("as a double")),
+            "{undeclared:?}"
         );
         let mut c = config(
             connection,

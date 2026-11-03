@@ -57,18 +57,41 @@ pub struct Filled {
 }
 
 /// Fills `{name}` placeholders in `template` from `parameters`, passing each value
-/// through `escape`, which may refuse it. A placeholder is a brace around a name
-/// of letters, digits and underscores; any other brace, such as one in a JSON
-/// filter, is copied as it is.
+/// through `escape`, which may refuse it. Every brace must start a placeholder: a
+/// name of letters, digits and underscores, closed by a brace.
+///
+/// # Errors
+///
+/// Returns a message naming a malformed placeholder, a placeholder without a
+/// parameter, or a value `escape` refuses.
+pub fn fill(
+    template: &str,
+    parameters: &BTreeMap<String, String>,
+    escape: impl Fn(&str) -> Result<String, String>,
+) -> Result<Filled, String> {
+    fill_with(template, parameters, escape, true)
+}
+
+/// Fills `{name}` placeholders in a JSON template, copying every other brace, which
+/// belongs to the JSON itself.
 ///
 /// # Errors
 ///
 /// Returns a message naming a placeholder without a parameter, or a value
 /// `escape` refuses.
-pub fn fill(
+pub fn fill_json(
     template: &str,
     parameters: &BTreeMap<String, String>,
     escape: impl Fn(&str) -> Result<String, String>,
+) -> Result<Filled, String> {
+    fill_with(template, parameters, escape, false)
+}
+
+fn fill_with(
+    template: &str,
+    parameters: &BTreeMap<String, String>,
+    escape: impl Fn(&str) -> Result<String, String>,
+    strict: bool,
 ) -> Result<Filled, String> {
     let is_name = |s: &str| {
         !s.is_empty()
@@ -91,6 +114,12 @@ pub fn fill(
                 used.insert(name.to_owned());
                 rest = &after[close + 1..];
             }
+            _ if strict => {
+                let shown: String = rest[open..].chars().take(24).collect();
+                return Err(format!(
+                    "{shown:?} in {template} is not a placeholder; write {{name}} with letters, digits and underscores"
+                ));
+            }
             _ => {
                 text.push('{');
                 rest = after;
@@ -99,6 +128,17 @@ pub fn fill(
     }
     text.push_str(rest);
     Ok(Filled { text, used })
+}
+
+/// Quotes a value for an ODBC connection string: in braces, with closing braces
+/// doubled, whenever it holds a character that would end or split the value.
+#[must_use]
+pub fn odbc_value(value: &str) -> String {
+    if value.contains([';', '{', '}']) || value.starts_with(' ') || value.ends_with(' ') {
+        format!("{{{}}}", value.replace('}', "}}"))
+    } else {
+        value.to_owned()
+    }
 }
 
 /// Percent-encodes text for a URL path segment or query value.
@@ -115,12 +155,29 @@ pub fn percent_encode(text: &str) -> String {
     out
 }
 
-/// Replaces `${NAME}` with the environment variable `NAME`.
+/// Reads a connection setting that may come from the environment: `env:NAME`
+/// takes the whole value from the variable `NAME`, and `${NAME}` inside the text is
+/// replaced by the variable's value passed through `escape`, which quotes it for
+/// the setting's syntax, so a password with special characters stays one value.
 ///
 /// # Errors
 ///
 /// Returns a message naming a variable that is not set.
-pub fn expand_environment(text: &str) -> Result<String, String> {
+pub fn expand_environment(text: &str, escape: impl Fn(&str) -> String) -> Result<String, String> {
+    expand_with(text, escape, |name| std::env::var(name).ok())
+}
+
+fn expand_with(
+    text: &str,
+    escape: impl Fn(&str) -> String,
+    lookup: impl Fn(&str) -> Option<String>,
+) -> Result<String, String> {
+    let read = |name: &str| {
+        lookup(name).ok_or_else(|| format!("the environment variable {name} is not set"))
+    };
+    if let Some(name) = text.strip_prefix("env:") {
+        return read(name.trim());
+    }
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(open) = rest.find("${") {
@@ -129,11 +186,7 @@ pub fn expand_environment(text: &str) -> Result<String, String> {
             .find('}')
             .ok_or_else(|| "an unclosed ${ in the text".to_owned())?
             + open;
-        let name = &rest[open + 2..close];
-        out.push_str(
-            &std::env::var(name)
-                .map_err(|_| format!("the environment variable {name} is not set"))?,
-        );
+        out.push_str(&escape(&read(&rest[open + 2..close])?));
         rest = &rest[close + 1..];
     }
     out.push_str(rest);
@@ -145,9 +198,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_named_braces_are_placeholders() {
+    fn json_templates_keep_their_own_braces() {
         let p: BTreeMap<String, String> = [("as_of".to_owned(), "2026-11-02".to_owned())].into();
-        let filled = fill(r#"{"date": "{as_of}", "n": {"$gt": 1}}"#, &p, |v| {
+        let filled = fill_json(r#"{"date": "{as_of}", "n": {"$gt": 1}}"#, &p, |v| {
             Ok(v.to_owned())
         })
         .unwrap();
@@ -158,11 +211,37 @@ mod tests {
                 .unwrap_err()
                 .contains("missing")
         );
+        // Outside JSON, a malformed placeholder is an error, not literal text.
+        for bad in ["/{as-of}/", "/{ as_of }/", "/{as_of/"] {
+            assert!(
+                fill(bad, &p, |v| Ok(v.to_owned()))
+                    .unwrap_err()
+                    .contains("not a placeholder"),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn environment_values_are_escaped_for_their_setting() {
+        let lookup = |name: &str| (name == "SECRET").then(|| "p@ss;w}rd".to_owned());
         assert_eq!(
-            fill("Driver={ODBC Driver 18}", &p, |v| Ok(v.to_owned()))
-                .unwrap()
-                .text,
-            "Driver={ODBC Driver 18}"
+            expand_with("PWD=${SECRET};", odbc_value, lookup).unwrap(),
+            "PWD={p@ss;w}}rd};"
         );
+        assert_eq!(
+            expand_with("mongodb://u:${SECRET}@h", percent_encode, lookup).unwrap(),
+            "mongodb://u:p%40ss%3Bw%7Drd@h"
+        );
+        assert_eq!(
+            expand_with("env:SECRET", odbc_value, lookup).unwrap(),
+            "p@ss;w}rd"
+        );
+        assert!(
+            expand_with("${UNSET}", odbc_value, lookup)
+                .unwrap_err()
+                .contains("UNSET")
+        );
+        assert_eq!(odbc_value("plain"), "plain");
     }
 }

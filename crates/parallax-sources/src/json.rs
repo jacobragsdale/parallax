@@ -382,6 +382,16 @@ fn read_instant(text: &str, zone: &TimeZone, ambiguous: Ambiguous) -> Result<i64
         return micros_of(t);
     }
     let civil: jiff::civil::DateTime = text.parse().map_err(|_| "is not a timestamp".to_owned())?;
+    resolve_civil(civil, zone, ambiguous)
+}
+
+/// The instant a wall-clock time names in `zone`, refusing the spring gap and,
+/// unless told otherwise, the autumn fold.
+fn resolve_civil(
+    civil: jiff::civil::DateTime,
+    zone: &TimeZone,
+    ambiguous: Ambiguous,
+) -> Result<i64, String> {
     let candidates = zone.to_ambiguous_zoned(civil);
     let instant = match (candidates.offset(), ambiguous) {
         (AmbiguousOffset::Unambiguous { .. }, _) => candidates.compatible(),
@@ -564,7 +574,9 @@ pub fn typed_from_text<'a>(
                         "0" | "false" => Value::Bool(false),
                         _ => Value::String(t.to_owned()),
                     },
-                    _ => Value::String(normalize_offset(t)),
+                    // Databases put a space before an offset; only times need it gone.
+                    FieldType::Timestamp => Value::String(normalize_offset(t)),
+                    _ => Value::String(t.to_owned()),
                 };
                 append(&mut builder, field, &zone, &value)
                     .map_err(|why| format!("row {row}, {}: {t:?} {why}", field.name))?;
@@ -608,10 +620,9 @@ pub fn instants_from_wall_clock(
                     .map_err(|e| format!("row {row}, {column}: {e}"))?
                     .to_zoned(TimeZone::UTC)
                     .datetime();
-                let text = civil.to_string();
                 builder.append_value(
-                    read_instant(&text, &tz, ambiguous)
-                        .map_err(|why| format!("row {row}, {column}: {text} {why}"))?,
+                    resolve_civil(civil, &tz, ambiguous)
+                        .map_err(|why| format!("row {row}, {column}: {civil} {why}"))?,
                 );
             }
         }
