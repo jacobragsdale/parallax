@@ -187,25 +187,34 @@ impl BigUint {
 }
 
 /// Returns `numerator / denominator` correctly rounded, for exact integer inputs.
+/// Several divisors divide in turn, which equals dividing by their product.
 pub(crate) fn ratio_to_f64(numerator: i128, divisors: &[u128]) -> f64 {
-    let negative = numerator < 0;
-    let mut magnitude = BigUint::from_u128(numerator.unsigned_abs());
+    big_ratio_to_f64(
+        numerator < 0,
+        BigUint::from_u128(numerator.unsigned_abs()),
+        divisors,
+    )
+}
+
+/// Returns `±magnitude / product(divisors)` correctly rounded, ties to even.
+pub(crate) fn big_ratio_to_f64(negative: bool, magnitude: BigUint, divisors: &[u128]) -> f64 {
     if magnitude.is_zero() {
         return 0.0;
     }
+    // Shift so that the quotient keeps at least 64 bits beyond a double's 53.
     let divisor_bits: usize = divisors
         .iter()
         .map(|d| 128 - d.leading_zeros() as usize)
         .sum();
     let shift = (divisor_bits + 64).saturating_sub(magnitude.bits()) + 64;
-    magnitude = magnitude.shl(shift);
+    let mut quotient = magnitude.shl(shift);
     let mut sticky = false;
     for &d in divisors {
-        let (q, r) = magnitude.div_rem_u128(d);
-        magnitude = q;
+        let (q, r) = quotient.div_rem_u128(d);
+        quotient = q;
         sticky |= r;
     }
-    magnitude.to_f64(-(shift as i64), sticky, negative)
+    quotient.to_f64(-(shift as i64), sticky, negative)
 }
 
 #[cfg(test)]

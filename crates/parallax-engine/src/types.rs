@@ -48,6 +48,18 @@ impl ColumnType {
             | DataType::UInt16
             | DataType::UInt32 => Self::Int64,
             DataType::Float32 | DataType::Float64 => Self::Float64,
+            // A negative scale such as Oracle's NUMBER(10, -2) becomes scale 0 with
+            // more digits, which is exact; values are multiplied on load.
+            DataType::Decimal128(precision, scale) if *scale < 0 => {
+                let precision = u32::from(*precision) + scale.unsigned_abs() as u32;
+                if precision > 38 {
+                    return None;
+                }
+                Self::Decimal {
+                    precision: precision as u8,
+                    scale: 0,
+                }
+            }
             DataType::Decimal128(precision, scale) => Self::Decimal {
                 precision: *precision,
                 scale: *scale,
@@ -157,6 +169,18 @@ mod tests {
             Some(ColumnType::Utf8)
         );
         assert_eq!(ColumnType::from_arrow(&DataType::Date64), None);
+    }
+
+    #[test]
+    fn negative_decimal_scales_become_exact_integers() {
+        assert_eq!(
+            ColumnType::from_arrow(&DataType::Decimal128(10, -2)),
+            Some(ColumnType::Decimal {
+                precision: 12,
+                scale: 0
+            })
+        );
+        assert_eq!(ColumnType::from_arrow(&DataType::Decimal128(38, -1)), None);
     }
 
     #[test]

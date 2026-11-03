@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use arrow_buffer::i256;
 use rustc_hash::FxHashMap;
 
-use crate::bignum::{BigUint, ratio_to_f64};
+use crate::bignum::{BigUint, big_ratio_to_f64, ratio_to_f64};
 use crate::exact::ExactSum;
 use crate::types::{ColumnType, Key};
 
@@ -228,6 +228,8 @@ pub(crate) enum State {
         sum: i256,
         squares: i256,
         n: i64,
+        /// Values too large to square without risk of overflow, for variances.
+        huge: i64,
     },
     WeightedFloat {
         weighted: ExactSum,
@@ -238,6 +240,8 @@ pub(crate) enum State {
         weighted: i256,
         weights: i256,
         n: i64,
+        /// Rows whose value or weight is too large to multiply without overflow.
+        huge: i64,
     },
     Values(FxHashMap<Key, u32>),
     Sequence(BTreeMap<u64, Key>),
@@ -319,6 +323,7 @@ impl CompiledMeasure {
                         sum: i256::ZERO,
                         squares: i256::ZERO,
                         n: 0,
+                        huge: 0,
                     }
                 } else {
                     State::Float {
@@ -334,6 +339,7 @@ impl CompiledMeasure {
                         weighted: i256::ZERO,
                         weights: i256::ZERO,
                         n: 0,
+                        huge: 0,
                     }
                 } else {
                     State::WeightedFloat {
@@ -412,21 +418,31 @@ impl State {
                     *n += sign;
                 }
             }
-            Self::Exact { sum, squares, n } => {
+            Self::Exact {
+                sum,
+                squares,
+                n,
+                huge,
+            } => {
                 if let Some(x) = input.exact {
-                    let x = i256::from_i128(x);
-                    if sign > 0 {
-                        *sum = sum.wrapping_add(x);
+                    let wide = i256::from_i128(x);
+                    *sum = if sign > 0 {
+                        sum.wrapping_add(wide)
                     } else {
-                        *sum = sum.wrapping_sub(x);
-                    }
+                        sum.wrapping_sub(wide)
+                    };
                     if matches!(measure.aggregate, Aggregate::Variance | Aggregate::StdDev) {
-                        let sq = x.wrapping_mul(x);
-                        *squares = if sign > 0 {
-                            squares.wrapping_add(sq)
+                        // Below 2^100, at most 2^54 squares fit an i256 exactly.
+                        if x.unsigned_abs() > HUGE {
+                            *huge += sign;
                         } else {
-                            squares.wrapping_sub(sq)
-                        };
+                            let square = wide.wrapping_mul(wide);
+                            *squares = if sign > 0 {
+                                squares.wrapping_add(square)
+                            } else {
+                                squares.wrapping_sub(square)
+                            };
+                        }
                     }
                     *n += sign;
                 }
@@ -456,16 +472,21 @@ impl State {
                 weighted,
                 weights,
                 n,
+                huge,
             } => {
                 if let (Some(x), Some(w)) = (input.exact, input.weight_exact) {
-                    let product = i256::from_i128(x).wrapping_mul(i256::from_i128(w));
-                    let w = i256::from_i128(w);
-                    if sign > 0 {
-                        *weighted = weighted.wrapping_add(product);
-                        *weights = weights.wrapping_add(w);
+                    if x.unsigned_abs() > HUGE || w.unsigned_abs() > HUGE {
+                        *huge += sign;
                     } else {
-                        *weighted = weighted.wrapping_sub(product);
-                        *weights = weights.wrapping_sub(w);
+                        let product = i256::from_i128(x).wrapping_mul(i256::from_i128(w));
+                        let w = i256::from_i128(w);
+                        if sign > 0 {
+                            *weighted = weighted.wrapping_add(product);
+                            *weights = weights.wrapping_add(w);
+                        } else {
+                            *weighted = weighted.wrapping_sub(product);
+                            *weights = weights.wrapping_sub(w);
+                        }
                     }
                     *n += sign;
                 }
@@ -505,16 +526,23 @@ impl State {
                 *n += n2;
             }
             (
-                Self::Exact { sum, squares, n },
+                Self::Exact {
+                    sum,
+                    squares,
+                    n,
+                    huge,
+                },
                 Self::Exact {
                     sum: s2,
                     squares: q2,
                     n: n2,
+                    huge: h2,
                 },
             ) => {
                 *sum = sum.wrapping_add(*s2);
                 *squares = squares.wrapping_add(*q2);
                 *n += n2;
+                *huge += h2;
             }
             (
                 Self::WeightedFloat {
@@ -537,16 +565,19 @@ impl State {
                     weighted,
                     weights,
                     n,
+                    huge,
                 },
                 Self::WeightedExact {
                     weighted: x2,
                     weights: w2,
                     n: n2,
+                    huge: h2,
                 },
             ) => {
                 *weighted = weighted.wrapping_add(*x2);
                 *weights = weights.wrapping_add(*w2);
                 *n += n2;
+                *huge += h2;
             }
             (Self::Values(a), Self::Values(b)) => {
                 for (&k, &c) in b {
@@ -562,45 +593,44 @@ impl State {
     }
 }
 
-const fn pow10(exp: i8) -> u128 {
-    10u128.pow(exp as u32)
+/// Returns `10^scale` for a non-negative decimal scale. Negative scales are
+/// normalized to zero on load.
+pub(crate) fn pow10(scale: i8) -> u128 {
+    debug_assert!(scale >= 0, "negative scales are normalized on load");
+    10u128.pow(u32::from(scale.unsigned_abs()))
 }
+
+/// Unscaled values above this are too large to square or multiply exactly in an
+/// i256 accumulator across 2^54 rows.
+const HUGE: u128 = 1 << 100;
 
 /// The largest unscaled value of a 38-digit decimal.
 const MAX_DECIMAL_38: i128 = 99_999_999_999_999_999_999_999_999_999_999_999_999;
 
-fn i256_to_f64(value: i256, divisors: &[u128]) -> f64 {
-    let (low, high) = value.to_parts();
-    let negative = high < 0;
+/// Splits an i256 into a sign and a magnitude.
+fn i256_parts(value: i256) -> (bool, BigUint) {
+    let negative = value < i256::ZERO;
     let magnitude = if negative {
         value.wrapping_neg()
     } else {
         value
     };
-    let (low_m, high_m) = magnitude.to_parts();
-    let _ = low;
-    let big = BigUint(vec![
-        low_m as u64,
-        (low_m >> 64) as u64,
-        high_m as u64,
-        (high_m as u128 >> 64) as u64,
-    ]);
-    if big.is_zero() {
-        return 0.0;
-    }
-    let divisor_bits: usize = divisors
-        .iter()
-        .map(|d| 128 - d.leading_zeros() as usize)
-        .sum();
-    let shift = (divisor_bits + 64).saturating_sub(big.bits()) + 64;
-    let mut q = big.shl(shift);
-    let mut sticky = false;
-    for &d in divisors {
-        let (next, r) = q.div_rem_u128(d);
-        q = next;
-        sticky |= r;
-    }
-    q.to_f64(-(shift as i64), sticky, negative)
+    let (low, high) = magnitude.to_parts();
+    let high = high as u128;
+    (
+        negative,
+        BigUint(vec![
+            low as u64,
+            (low >> 64) as u64,
+            high as u64,
+            (high >> 64) as u64,
+        ]),
+    )
+}
+
+fn i256_to_f64(value: i256, divisors: &[u128]) -> f64 {
+    let (negative, magnitude) = i256_parts(value);
+    big_ratio_to_f64(negative, magnitude, divisors)
 }
 
 /// Computes a measure's value from its state. `values` supplies the merged leaf
@@ -627,6 +657,10 @@ pub(crate) fn finish(
                     if !sum.is_finite() {
                         return MeasureValue::Float(f64::NAN);
                     }
+                    // A square beyond the double range cannot be held exactly.
+                    if !squares.is_finite() {
+                        return MeasureValue::Overflow;
+                    }
                     let var = exact_float_variance(sum, squares, *n as u64);
                     if measure.aggregate == Aggregate::Variance {
                         MeasureValue::Float(var)
@@ -637,7 +671,12 @@ pub(crate) fn finish(
                 _ => unreachable!("float state for {:?}", measure.aggregate),
             }
         }
-        State::Exact { sum, squares, n } => {
+        State::Exact {
+            sum,
+            squares,
+            n,
+            huge,
+        } => {
             if *n == 0 {
                 return MeasureValue::Null;
             }
@@ -653,18 +692,21 @@ pub(crate) fn finish(
                     if *n < 2 {
                         return MeasureValue::Null;
                     }
-                    let n256 = i256::from_i128(i128::from(*n));
-                    let var = match (n256.checked_mul(*squares), sum.checked_mul(*sum)) {
-                        (Some(nq), Some(ss)) => match nq.checked_sub(ss) {
-                            Some(numerator) => i256_to_f64(
-                                numerator,
-                                &[*n as u128 * (*n as u128 - 1), pow10(scale), pow10(scale)],
-                            ),
-                            None => f64::NAN,
-                        },
-                        _ => f64::NAN,
+                    if *huge > 0 {
+                        return MeasureValue::Overflow;
+                    }
+                    // (n * sum(x^2) - sum(x)^2) / (n (n - 1)), exactly, then rounded once.
+                    let (_, s) = i256_parts(*sum);
+                    let (_, q) = i256_parts(*squares);
+                    let nq = q.mul(&BigUint::from_u128(*n as u128));
+                    let var = match nq.checked_sub(&s.mul(&s)) {
+                        Some(numerator) => big_ratio_to_f64(
+                            false,
+                            numerator,
+                            &[*n as u128 * (*n as u128 - 1), pow10(scale), pow10(scale)],
+                        ),
+                        None => 0.0,
                     };
-                    let var = var.max(0.0);
                     if measure.aggregate == Aggregate::Variance {
                         MeasureValue::Float(var)
                     } else {
@@ -692,18 +734,24 @@ pub(crate) fn finish(
             weighted,
             weights,
             n,
+            huge,
         } => {
+            if *huge > 0 {
+                return MeasureValue::Overflow;
+            }
             if *n == 0 || *weights == i256::ZERO {
                 return MeasureValue::Null;
             }
             // value = (sum(x w) / 10^(sx + sw)) / (sum(w) / 10^sw) = sum(x w) / (sum(w) 10^sx)
-            match weights.to_i128() {
-                Some(w) if w > 0 => {
-                    MeasureValue::Float(i256_to_f64(*weighted, &[w as u128, pow10(scale)]))
-                }
-                Some(w) if w < 0 => {
-                    MeasureValue::Float(-i256_to_f64(*weighted, &[w.unsigned_abs(), pow10(scale)]))
-                }
+            let (weights_negative, weight_magnitude) = i256_parts(*weights);
+            let (weighted_negative, weighted_magnitude) = i256_parts(*weighted);
+            let negative = weights_negative != weighted_negative;
+            match i256_to_u128_or_zero(&weight_magnitude) {
+                w if w > 0 => MeasureValue::Float(big_ratio_to_f64(
+                    negative,
+                    weighted_magnitude,
+                    &[w, pow10(scale)],
+                )),
                 _ => MeasureValue::Float(
                     i256_to_f64(*weighted, &[pow10(scale)]) / i256_to_f64(*weights, &[1]),
                 ),
@@ -739,6 +787,15 @@ fn exact_float_variance(sum: &ExactSum, squares: &ExactSum, n: u64) -> f64 {
         }
         // Underflow in the tiniest squares can leave the exact identity a hair short.
         None => 0.0,
+    }
+}
+
+/// Returns the magnitude if it fits a u128, or zero.
+fn i256_to_u128_or_zero(value: &BigUint) -> u128 {
+    if value.bits() > 128 {
+        0
+    } else {
+        u128::from(value.0[0]) | u128::from(value.0[1]) << 64
     }
 }
 
@@ -804,7 +861,14 @@ fn finish_values(
             let scale = measure.scale();
             let lo_value = key_to_f64(at(lo as u64), scale);
             let hi_value = key_to_f64(at(position.ceil() as u64), scale);
-            MeasureValue::Float(lo_value + (position - lo) * (hi_value - lo_value))
+            let fraction = position - lo;
+            // Interpolating between equal neighbours, infinities included, must
+            // give that value rather than inf - inf = NaN.
+            if fraction == 0.0 || lo_value == hi_value {
+                MeasureValue::Float(lo_value)
+            } else {
+                MeasureValue::Float(lo_value + fraction * (hi_value - lo_value))
+            }
         }
         _ => unreachable!("values state for {:?}", measure.aggregate),
     }

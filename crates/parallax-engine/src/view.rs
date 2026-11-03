@@ -6,6 +6,7 @@
 //! rows, so no total is ever computed from other totals. Column pivots keep one cell
 //! per node and column key next to the node's own total.
 
+use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::ops::Range;
 use std::sync::Arc;
@@ -18,7 +19,7 @@ use arrow_schema::{DataType, Field, Schema};
 use rustc_hash::FxHashMap;
 
 use crate::aggregate::{
-    Aggregate, CompiledMeasure, Input, Measure, MeasureValue, ShowAs, State, finish,
+    Aggregate, CompiledMeasure, Input, Measure, MeasureValue, ShowAs, State, finish, pow10,
 };
 use crate::bignum::ratio_to_f64;
 use crate::column::Column;
@@ -326,6 +327,12 @@ struct Grouped {
     expanded: Vec<(Vec<Scalar>, bool)>,
     visible: Option<Vec<Visible>>,
     columns: Option<Vec<(u32, usize)>>,
+    /// Values of lazy measures above the leaves, by (node, split, measure). Cleared
+    /// whenever the view changes.
+    lazy_values: RefCell<FxHashMap<(u32, u32, usize), MeasureValue>>,
+    scratch_inputs: Vec<Input>,
+    scratch_keys: Vec<Key>,
+    scratch_path: Vec<u32>,
 }
 
 #[derive(Clone, Debug)]
@@ -469,6 +476,10 @@ impl View {
                 expanded: Vec::new(),
                 visible: None,
                 columns: None,
+                lazy_values: RefCell::default(),
+                scratch_inputs: Vec::new(),
+                scratch_keys: Vec::new(),
+                scratch_path: Vec::new(),
             }))
         } else {
             let columns = if config.columns.is_empty() {
@@ -498,8 +509,41 @@ impl View {
             config_version: 1,
             load_version: table.load_version(),
         };
+        view.check_column_limit(table)?;
         view.rebuild(table);
         Ok(view)
+    }
+
+    /// Refuses column pivots that would produce more than [`MAX_COLUMNS`] data
+    /// columns, stopping as soon as the limit is passed.
+    fn check_column_limit(&self, table: &Table) -> Result<(), ConfigError> {
+        let Kind::Grouped(g) = &self.kind else {
+            return Ok(());
+        };
+        if g.split_columns.is_empty() {
+            return Ok(());
+        }
+        let per_key = g.measures.len().max(1);
+        let limit = MAX_COLUMNS / per_key;
+        let mut seen: rustc_hash::FxHashSet<Box<[Key]>> = rustc_hash::FxHashSet::default();
+        let mut keys = Vec::with_capacity(g.split_columns.len());
+        for slot in table.live_slots() {
+            if !self.passes(Source::Table(table), slot) {
+                continue;
+            }
+            keys.clear();
+            keys.extend(g.split_columns.iter().map(|&c| table.column(c).key(slot)));
+            if !seen.contains(keys.as_slice()) {
+                seen.insert(keys.as_slice().into());
+                if seen.len() > limit {
+                    return Err(ConfigError::TooManyColumns(
+                        (seen.len() + 1) * per_key,
+                        MAX_COLUMNS,
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 
     /// The configuration.
@@ -736,11 +780,11 @@ fn to_f64(value: &MeasureValue, scale: i8) -> Option<f64> {
     match value {
         MeasureValue::Count(c) => Some(*c as f64),
         MeasureValue::Float(f) => Some(*f),
-        MeasureValue::Decimal(d) => Some(ratio_to_f64(*d, &[10u128.pow(scale as u32)])),
+        MeasureValue::Decimal(d) => Some(ratio_to_f64(*d, &[pow10(scale)])),
         MeasureValue::Key(k) => match k.0 {
             Key::Int(i) => Some(i as f64),
             Key::Float(bits) => Some(f64::from_bits(bits)),
-            Key::Decimal(d) => Some(ratio_to_f64(d, &[10u128.pow(scale as u32)])),
+            Key::Decimal(d) => Some(ratio_to_f64(d, &[pow10(scale)])),
             _ => None,
         },
         _ => None,
@@ -785,83 +829,88 @@ impl Grouped {
     fn invalidate(&mut self) {
         self.visible = None;
         self.columns = None;
+        self.lazy_values.get_mut().clear();
     }
 
-    fn inputs(&self, source: Source<'_>, row: usize) -> Vec<Input> {
+    fn fill_inputs(&self, source: Source<'_>, row: usize, out: &mut Vec<Input>) {
         let seq = source.seq(row);
-        self.measures
-            .iter()
-            .map(|m| {
-                let (key, float, exact) = match m.column {
-                    Some(c) => {
-                        let column = source.column(c);
-                        (source.key(c, row), column.f64(row), column.exact(row))
+        out.clear();
+        out.extend(
+            self.measures
+                .iter()
+                .map(|m| {
+                    let (key, float, exact) = match m.column {
+                        Some(c) => {
+                            let column = source.column(c);
+                            (source.key(c, row), column.f64(row), column.exact(row))
+                        }
+                        None => (Key::Null, None, None),
+                    };
+                    let (weight_float, weight_exact) = match m.weight {
+                        Some(w) => {
+                            let column = source.column(w);
+                            (column.f64(row), column.exact(row))
+                        }
+                        None => (None, None),
+                    };
+                    Input {
+                        key,
+                        float,
+                        exact: if matches!(m.column_type, Some(ColumnType::Float64)) {
+                            None
+                        } else {
+                            exact
+                        },
+                        weight_float: if matches!(m.weight_type, Some(ColumnType::Float64)) {
+                            weight_float
+                        } else {
+                            None
+                        },
+                        weight_exact: if matches!(m.weight_type, Some(ColumnType::Float64)) {
+                            None
+                        } else {
+                            weight_exact
+                        },
+                        unit: m.unit.map(|u| source.key(u, row)),
+                        seq,
                     }
-                    None => (Key::Null, None, None),
-                };
-                let (weight_float, weight_exact) = match m.weight {
-                    Some(w) => {
-                        let column = source.column(w);
-                        (column.f64(row), column.exact(row))
+                })
+                .map(|mut input| {
+                    if input.exact.is_some() {
+                        input.float = None;
                     }
-                    None => (None, None),
-                };
-                Input {
-                    key,
-                    float,
-                    exact: if matches!(m.column_type, Some(ColumnType::Float64)) {
-                        None
-                    } else {
-                        exact
-                    },
-                    weight_float: if matches!(m.weight_type, Some(ColumnType::Float64)) {
-                        weight_float
-                    } else {
-                        None
-                    },
-                    weight_exact: if matches!(m.weight_type, Some(ColumnType::Float64)) {
-                        None
-                    } else {
-                        weight_exact
-                    },
-                    unit: m.unit.map(|u| source.key(u, row)),
-                    seq,
-                }
-            })
-            .map(|mut input| {
-                if input.exact.is_some() {
-                    input.float = None;
-                }
-                input
-            })
-            .collect()
+                    input
+                }),
+        );
     }
 
     fn apply_row(&mut self, source: Source<'_>, row: usize, sign: i64) {
-        let inputs = self.inputs(source, row);
+        let mut inputs = std::mem::take(&mut self.scratch_inputs);
+        self.fill_inputs(source, row, &mut inputs);
         let split = if self.split_columns.is_empty() {
             None
         } else {
-            let keys: Box<[Key]> = self
-                .split_columns
-                .iter()
-                .map(|&c| source.key(c, row))
-                .collect();
-            let id = match self.split_ids.get(&keys) {
+            let mut keys = std::mem::take(&mut self.scratch_keys);
+            keys.clear();
+            keys.extend(self.split_columns.iter().map(|&c| source.key(c, row)));
+            let id = match self.split_ids.get(keys.as_slice()) {
                 Some(&id) => id,
                 None => {
                     let id = self.split_keys.len() as u32;
-                    self.split_ids.insert(keys.clone(), id);
-                    self.split_keys.push(keys);
+                    let boxed: Box<[Key]> = keys.as_slice().into();
+                    self.split_ids.insert(boxed.clone(), id);
+                    self.split_keys.push(boxed);
                     self.split_rows.push(0);
                     id
                 }
             };
+            self.scratch_keys = keys;
             self.split_rows[id as usize] += sign;
             Some(id)
         };
         let levels = self.levels();
-        let mut path = Vec::with_capacity(levels + 1);
+        let mut path = std::mem::take(&mut self.scratch_path);
+        path.clear();
         let mut node = 0u32;
         path.push(node);
         for level in 0..levels {
@@ -904,6 +953,8 @@ impl Grouped {
                 }
             }
         }
+        self.scratch_path = path;
+        self.scratch_inputs = inputs;
     }
 
     fn path(&self, table: &Table, id: u32) -> Vec<Scalar> {
@@ -983,7 +1034,37 @@ impl Grouped {
         finish(measure, state, &cmp)
     }
 
+    fn empty_value(&self, m: usize) -> MeasureValue {
+        match self.measures[m].aggregate {
+            Aggregate::Count | Aggregate::CountAll | Aggregate::DistinctCount => {
+                MeasureValue::Count(0)
+            }
+            _ => MeasureValue::Null,
+        }
+    }
+
     fn raw_value(&self, table: &Table, ids: &[u32], split: u32, m: usize) -> MeasureValue {
+        if let [id] = ids {
+            let Some(cell) = self.cell(*id, split) else {
+                return self.empty_value(m);
+            };
+            if cell.rows == 0 {
+                return self.empty_value(m);
+            }
+            if !matches!(cell.states[m], State::Lazy) {
+                return self.measure_value(table, cell, None, m);
+            }
+            if let Some(value) = self.lazy_values.borrow().get(&(*id, split, m)) {
+                return value.clone();
+            }
+            let merged = self.merged_leaves(ids, split);
+            let value = self.measure_value(table, cell, Some(&merged), m);
+            self.lazy_values
+                .borrow_mut()
+                .insert((*id, split, m), value.clone());
+            return value;
+        }
+        // An Other row: merge the cells of every member.
         let mut combined: Option<Cell> = None;
         for &id in ids {
             if let Some(c) = self.cell(id, split) {
@@ -994,17 +1075,12 @@ impl Grouped {
             }
         }
         let Some(cell) = combined else {
-            return MeasureValue::Null;
+            return self.empty_value(m);
         };
-        let lazy = matches!(cell.states[m], State::Lazy).then(|| self.merged_leaves(ids, split));
         if cell.rows == 0 {
-            return match self.measures[m].aggregate {
-                Aggregate::Count | Aggregate::CountAll | Aggregate::DistinctCount => {
-                    MeasureValue::Count(0)
-                }
-                _ => MeasureValue::Null,
-            };
+            return self.empty_value(m);
         }
+        let lazy = matches!(cell.states[m], State::Lazy).then(|| self.merged_leaves(ids, split));
         self.measure_value(table, &cell, lazy.as_ref(), m)
     }
 
@@ -1048,16 +1124,12 @@ impl Grouped {
         match self.shown(table, ids, ROW_TOTAL, m) {
             CellValue::Count(c) => Some(c as f64),
             CellValue::Float(f) if !f.is_nan() => Some(f),
-            CellValue::Decimal(d) => Some(ratio_to_f64(
-                d,
-                &[10u128.pow(self.measures[m].scale() as u32)],
-            )),
+            CellValue::Decimal(d) => Some(ratio_to_f64(d, &[pow10(self.measures[m].scale())])),
             CellValue::Value(Scalar::Int64(i)) => Some(i as f64),
             CellValue::Value(Scalar::Float64(f)) => Some(f),
-            CellValue::Value(Scalar::Decimal(d)) => Some(ratio_to_f64(
-                d,
-                &[10u128.pow(self.measures[m].scale() as u32)],
-            )),
+            CellValue::Value(Scalar::Decimal(d)) => {
+                Some(ratio_to_f64(d, &[pow10(self.measures[m].scale())]))
+            }
             _ => None,
         }
     }
@@ -1168,7 +1240,6 @@ impl Grouped {
     fn visible(&mut self, table: &Table, config: &ViewConfig) -> &[Visible] {
         if self.visible.is_none() {
             let mut out = vec![Visible::Node(0)];
-            let mut stack = vec![(0u32, 0usize)];
             // Depth-first, children in display order.
             let mut ordered: Vec<Visible> = Vec::new();
             fn walk(
@@ -1193,7 +1264,6 @@ impl Grouped {
                     });
                 }
             }
-            stack.clear();
             walk(self, table, config, 0, &mut ordered);
             out.extend(ordered);
             self.visible = Some(out);
@@ -1219,6 +1289,8 @@ impl Grouped {
                 Ordering::Equal
             });
             let m = self.measures.len();
+            // Changes after the view opened can add column keys; keep within the limit.
+            splits.truncate(MAX_COLUMNS / m.max(1) - 1);
             let mut columns: Vec<(u32, usize)> = splits
                 .iter()
                 .flat_map(|&s| (0..m).map(move |i| (s, i)))
@@ -1236,11 +1308,13 @@ impl Grouped {
         rows: Range<usize>,
         columns: Range<usize>,
     ) -> (RecordBatch, usize, usize) {
-        let visible = self.visible(table, config).to_vec();
-        let data_columns = self.data_columns(table).to_vec();
-        let start = rows.start.min(visible.len());
-        let end = rows.end.min(visible.len()).max(start);
-        let shown = &visible[start..end];
+        let total_rows = self.visible(table, config).len();
+        let start = rows.start.min(total_rows);
+        let end = rows.end.min(total_rows).max(start);
+        let shown: Vec<Visible> = self.visible(table, config)[start..end].to_vec();
+        let total_columns = self.data_columns(table).len();
+        let cols = columns.start.min(total_columns)..columns.end.min(total_columns);
+        let data_columns: Vec<(u32, usize)> = self.data_columns(table)[cols].to_vec();
         let levels = self.levels();
 
         let mut fields = vec![
@@ -1320,8 +1394,7 @@ impl Grouped {
             ));
             arrays.push(keys_to_arrow(column, &keys));
         }
-        let cols = columns.start.min(data_columns.len())..columns.end.min(data_columns.len());
-        for &(split, m) in &data_columns[cols] {
+        for &(split, m) in &data_columns {
             let measure = self.measures[m].clone();
             let values: Vec<CellValue> = shown
                 .iter()
@@ -1356,7 +1429,7 @@ impl Grouped {
         }
         let batch =
             RecordBatch::try_new(Arc::new(Schema::new(fields)), arrays).expect("consistent window");
-        (batch, visible.len(), data_columns.len())
+        (batch, total_rows, total_columns)
     }
 }
 

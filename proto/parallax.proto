@@ -1,0 +1,157 @@
+// The parallax wire protocol.
+//
+// One binary WebSocket per browser tab carries every view, tagged by view id. The
+// browser worker that hosts the WebAssembly engine speaks the same messages over
+// postMessage. Control messages are protobuf; rows travel as Arrow IPC streams
+// inside Frame messages. A view's configuration is the layout JSON document, which
+// is versioned and generated from the Rust types.
+
+syntax = "proto3";
+
+package parallax.v1;
+
+// Sent by the client.
+message ClientMessage {
+  // Echoed in replies, so a client can match responses to requests.
+  uint64 request_id = 1;
+  oneof body {
+    Hello hello = 2;
+    OpenView open_view = 3;
+    UpdateView update_view = 4;
+    SetViewport set_viewport = 5;
+    SetExpanded set_expanded = 6;
+    CloseView close_view = 7;
+    DrillThrough drill_through = 8;
+    DistinctValues distinct_values = 9;
+  }
+}
+
+// Sent by the server or worker.
+message ServerMessage {
+  // The request this replies to, or 0 for frames pushed after a table refresh.
+  uint64 request_id = 1;
+  oneof body {
+    Welcome welcome = 2;
+    ViewOpened view_opened = 3;
+    Frame frame = 4;
+    Error error = 5;
+    TableStatus table_status = 6;
+    DistinctValuesResult distinct_values = 7;
+  }
+}
+
+message Hello {
+  // The protocol version the client speaks.
+  uint32 protocol_version = 1;
+}
+
+message Welcome {
+  uint32 protocol_version = 1;
+  // Datasets the client may open, with their parameter names.
+  repeated DatasetInfo datasets = 2;
+}
+
+message DatasetInfo {
+  string name = 1;
+  repeated string parameters = 2;
+}
+
+message OpenView {
+  // Chosen by the client, unique within the connection.
+  uint32 view_id = 1;
+  string dataset = 2;
+  map<string, string> parameters = 3;
+  // The layout JSON for the view.
+  string layout_json = 4;
+}
+
+message ViewOpened {
+  uint32 view_id = 1;
+  // The table's schema as an Arrow IPC schema message.
+  bytes table_schema = 2;
+  TableStatus status = 3;
+}
+
+message UpdateView {
+  uint32 view_id = 1;
+  string layout_json = 2;
+  // Increases with every update; frames carry it back.
+  uint64 config_version = 3;
+}
+
+message SetViewport {
+  uint32 view_id = 1;
+  uint64 first_row = 2;
+  uint64 row_count = 3;
+  uint32 first_column = 4;
+  uint32 column_count = 5;
+}
+
+message SetExpanded {
+  uint32 view_id = 1;
+  // The group's values from the outermost level, as a JSON array.
+  string path_json = 2;
+  bool expanded = 3;
+}
+
+message CloseView {
+  uint32 view_id = 1;
+}
+
+message DrillThrough {
+  uint32 view_id = 1;
+  uint64 row = 2;
+  // The id for the new flat view of the group's rows.
+  uint32 new_view_id = 3;
+}
+
+message DistinctValues {
+  uint32 view_id = 1;
+  string column = 2;
+  // Case-insensitive substring to match, or empty for all.
+  string search = 3;
+  uint32 limit = 4;
+}
+
+message DistinctValuesResult {
+  uint32 view_id = 1;
+  string column = 2;
+  // One Arrow IPC stream with the values and their row counts.
+  bytes values = 3;
+  bool truncated = 4;
+}
+
+// A window of a view.
+message Frame {
+  uint32 view_id = 1;
+  uint64 config_version = 2;
+  uint64 load_version = 3;
+  uint64 first_row = 4;
+  uint32 first_column = 5;
+  uint64 total_rows = 6;
+  uint32 total_columns = 7;
+  // One Arrow IPC stream holding one record batch.
+  bytes batch = 8;
+  // When the source data was read, in microseconds since the Unix epoch.
+  int64 source_as_of_micros = 9;
+}
+
+message TableStatus {
+  uint64 load_version = 1;
+  uint64 rows = 2;
+  int64 loaded_at_micros = 3;
+  // Set when the latest refresh failed; the table keeps its previous load.
+  string refresh_error = 4;
+  int64 refresh_failed_at_micros = 5;
+  repeated ColumnCount nans_to_null = 6;
+}
+
+message ColumnCount {
+  string column = 1;
+  uint64 count = 2;
+}
+
+message Error {
+  uint32 view_id = 1;
+  string message = 2;
+}

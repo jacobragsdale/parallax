@@ -405,13 +405,18 @@ impl Column {
                     self.valid.push(array.is_valid(i) && !is_nan);
                 }
             }
-            DataType::Decimal128(_, _) => {
+            DataType::Decimal128(_, source_scale) => {
+                let factor = if *source_scale < 0 {
+                    10i128.pow(u32::from(source_scale.unsigned_abs()))
+                } else {
+                    1
+                };
                 let a = array.as_primitive::<Decimal128Type>();
                 let Values::Decimal(v) = &mut self.values else {
                     unreachable!()
                 };
                 for i in 0..n {
-                    v.push(a.value(i));
+                    v.push(a.value(i) * factor);
                     self.valid.push(a.is_valid(i));
                 }
             }
@@ -578,6 +583,18 @@ mod tests {
             Err(LoadError::LossyTimestamp { row: 0, .. })
         ));
         assert!(c.extend_from_arrow("t", &exact).is_ok());
+    }
+
+    #[test]
+    fn negative_scale_values_are_scaled_up() {
+        let a = Decimal128Array::from(vec![Some(123), None])
+            .with_precision_and_scale(10, -2)
+            .unwrap();
+        let ty = ColumnType::from_arrow(a.data_type()).unwrap();
+        let mut c = Column::new(ty);
+        c.extend_from_arrow("n", &a).unwrap();
+        assert_eq!(c.exact(0), Some(12_300));
+        assert_eq!(c.exact(1), None);
     }
 
     #[test]
