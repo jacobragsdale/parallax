@@ -24,6 +24,7 @@ fn the_conversation_answers_every_request() {
             Body::Error(_) => "error",
             Body::TableStatus(_) => "status",
             Body::DistinctValues(_) => "distinct",
+            Body::ChartFrame(_) => "chart",
         })
         .collect();
     assert_eq!(
@@ -31,7 +32,9 @@ fn the_conversation_answers_every_request() {
         vec![
             "welcome", "opened", "frame", "frame", "frame", "distinct", "opened", "frame",
             // The reload: each open view gets its status, then a pushed frame.
-            "status", "frame", "status", "frame", "error"
+            "status", "frame", "status", "frame", "error",
+            // Two charts, each opened and reduced, then a viewport a chart refuses.
+            "opened", "chart", "opened", "chart", "error"
         ]
     );
 }
@@ -214,16 +217,73 @@ fn distinct_values_respect_search_and_limit() {
 
 #[test]
 fn errors_name_the_problem() {
-    let messages = decoded();
-    let Body::Error(e) = messages.last().unwrap().body.as_ref().unwrap() else {
-        panic!("last message is an error");
+    let errors: Vec<String> = decoded()
+        .into_iter()
+        .filter_map(|m| match m.body.unwrap() {
+            Body::Error(e) => Some(e.message),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        errors.iter().any(|e| e.contains("no_such_column")),
+        "{errors:?}"
+    );
+    assert!(errors.last().unwrap().contains("is a chart"), "{errors:?}");
+}
+
+#[test]
+fn chart_frames_carry_reduced_data_and_exact_text() {
+    let charts: Vec<_> = decoded()
+        .into_iter()
+        .filter_map(|m| match m.body.unwrap() {
+            Body::ChartFrame(f) => Some(f),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(charts.len(), 2);
+    // The histogram of beta, split by long and short, at 2,000 positions.
+    let histogram = &charts[0];
+    assert_eq!(histogram.view_id, 3);
+    let labels: Vec<&str> = histogram.series.iter().map(|s| s.label.as_str()).collect();
+    assert_eq!(labels, ["beta Long", "beta Short"]);
+    assert!(!histogram.ticks.is_empty());
+    let batch = decode_batches(&histogram.batch).unwrap().remove(0);
+    let role = |b: &arrow_array::RecordBatch, name: &str| {
+        b.schema().field_with_name(name).unwrap().metadata()["parallax.role"].clone()
     };
-    assert!(e.message.contains("no_such_column"), "{}", e.message);
+    assert_eq!(role(&batch, "count"), "count");
+    let counts = arrow_array::cast::AsArray::as_primitive::<arrow_array::types::UInt64Type>(
+        batch.column_by_name("count").unwrap().as_ref(),
+    );
+    assert_eq!(counts.len(), 2 * 50, "50 bins of 8 px per series");
+    let total: u64 = counts.iter().flatten().sum();
+    assert!(total > 1_000 && total <= 2_000, "{total}");
+    let from_text = arrow_array::cast::AsArray::as_string::<i32>(
+        batch.column_by_name("from_text").unwrap().as_ref(),
+    );
+    // Two decimals, as the layout's format says.
+    assert!(
+        from_text
+            .iter()
+            .flatten()
+            .all(|t| t.split('.').nth(1).is_some_and(|d| d.len() == 2)),
+        "{from_text:?}"
+    );
+    // The density of market value against beta: 4-pixel cells.
+    let density = &charts[1];
+    assert_eq!((density.columns, density.rows), (50, 25));
+    assert!(density.y_to > density.y_from);
+    let cells = decode_batches(&density.batch).unwrap().remove(0);
+    let counts = arrow_array::cast::AsArray::as_primitive::<arrow_array::types::UInt32Type>(
+        cells.column_by_name("count").unwrap().as_ref(),
+    );
+    assert_eq!(counts.len(), 50 * 25);
+    assert!(counts.iter().flatten().map(u64::from).sum::<u64>() <= 2_000);
 }
 
 /// The WebAssembly test suite checks the same value, so both builds must answer
 /// byte for byte the same.
-pub const TRANSCRIPT_FINGERPRINT: u64 = 14_296_254_853_414_913_943;
+pub const TRANSCRIPT_FINGERPRINT: u64 = 11_536_454_445_493_801_927;
 
 #[test]
 fn transcript_fingerprint_is_stable() {

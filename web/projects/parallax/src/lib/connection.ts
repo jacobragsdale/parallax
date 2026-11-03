@@ -18,10 +18,12 @@
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
 import type { MessageInitShape } from "@bufbuild/protobuf";
 
+import { decodeChartFrame } from "./chart-frame";
+import type { ChartFrameData } from "./chart-frame";
 import { decodeDistinct, decodeFrame, FrameError } from "./frame";
 import type { DistinctValue, FrameData } from "./frame";
 import { ClientMessageSchema, ServerMessageSchema } from "./proto/parallax_pb";
-import type { DatasetInfo, DistinctValuesResult, Frame, TableStatus, ViewOpened, Welcome } from "./proto/parallax_pb";
+import type { ChartFrame, DatasetInfo, DistinctValuesResult, Frame, TableStatus, ViewOpened, Welcome } from "./proto/parallax_pb";
 
 /** The body of a client message, as plain values. */
 export type ClientBody = NonNullable<MessageInitShape<typeof ClientMessageSchema>["body"]>;
@@ -38,6 +40,8 @@ export interface Transport {
 /** What a view reports back. */
 export interface ViewListener {
   readonly frame: (frame: FrameData) => void;
+  /** A chart's reduction, for views whose layout has a chart the engine reduces. */
+  readonly chart?: (frame: ChartFrameData) => void;
   readonly opened?: (opened: ViewOpened) => void;
   readonly status?: (status: TableStatus) => void;
   readonly error?: (message: string) => void;
@@ -49,6 +53,19 @@ export interface Viewport {
   readonly rowCount: number;
   readonly firstColumn: number;
   readonly columnCount: number;
+}
+
+/** The part of a chart to reduce and the plot it fills, in pixels. Without an x range, the whole data. */
+export interface ChartWindow {
+  readonly x?: readonly [number, number];
+  /** The y range of a density; without it, the data's. */
+  readonly y?: readonly [number, number];
+  readonly width: number;
+  readonly height: number;
+}
+
+function sameChartWindow(a: ChartWindow | null, b: ChartWindow): boolean {
+  return a !== null && a.width === b.width && a.height === b.height && a.x?.[0] === b.x?.[0] && a.x?.[1] === b.x?.[1] && a.y?.[0] === b.y?.[0] && a.y?.[1] === b.y?.[1];
 }
 
 /** A column's values for a filter pick-list. */
@@ -76,6 +93,9 @@ export class ViewHandle {
   /** A viewport asked for while another was in flight, and when. */
   private pending: { readonly viewport: Viewport; readonly askedAtMs: number } | null = null;
   private closed = false;
+  /** The chart window awaiting its frame, and one asked for meanwhile, as with viewports. */
+  private chartInFlight: { readonly window: ChartWindow; readonly requestId: bigint; readonly askedAtMs: number } | null = null;
+  private chartPending: { readonly window: ChartWindow; readonly askedAtMs: number } | null = null;
   private readonly fetches = new Map<bigint, Pending<FrameData>>();
   private readonly lists = new Map<bigint, Pending<DistinctValues>>();
 
@@ -102,6 +122,55 @@ export class ViewHandle {
       return;
     }
     this.sendViewport(viewport, askedAtMs);
+  }
+
+  /**
+   * Asks for a chart's reduction. While one is in flight, a newer window replaces any waiting one, so zooming
+   * and panning faster than frames arrive never queues them.
+   */
+  public setChartWindow(window: ChartWindow): void {
+    if (this.closed || sameChartWindow(this.chartInFlight?.window ?? null, window) || sameChartWindow(this.chartPending?.window ?? null, window)) {
+      return;
+    }
+    const askedAtMs = performance.now();
+    if (this.chartInFlight !== null) {
+      this.chartPending = { window, askedAtMs };
+      return;
+    }
+    this.sendChartWindow(window, askedAtMs);
+  }
+
+  private sendChartWindow(window: ChartWindow, askedAtMs: number): void {
+    const requestId = this.connection.send({
+      case: "setChartWindow",
+      value: {
+        viewId: this.id,
+        ...(window.x === undefined ? {} : { xFrom: window.x[0], xTo: window.x[1] }),
+        ...(window.y === undefined ? {} : { yFrom: window.y[0], yTo: window.y[1] }),
+        width: Math.max(1, Math.round(window.width)),
+        height: Math.max(1, Math.round(window.height))
+      }
+    });
+    this.chartInFlight = { window, requestId, askedAtMs };
+  }
+
+  /** @internal Called by the connection. */
+  public receiveChartFrame(frame: ChartFrameData, requestId: bigint): void {
+    let askedAtMs: number | undefined;
+    if (this.chartInFlight?.requestId === requestId) {
+      askedAtMs = this.chartInFlight.askedAtMs;
+      this.chartInFlight = null;
+      const next = this.chartPending;
+      this.chartPending = null;
+      if (next !== null) {
+        this.sendChartWindow(next.window, next.askedAtMs);
+      }
+    }
+    if (frame.configVersion < this.configVersion || frame.loadVersion < this.lastLoadVersion) {
+      return;
+    }
+    this.lastLoadVersion = frame.loadVersion;
+    this.listener.chart?.(askedAtMs === undefined ? frame : { ...frame, requestedAtMs: askedAtMs });
   }
 
   /** Fetches one window without moving the viewport, for copying. At most 1,000,000 cells. */
@@ -250,6 +319,14 @@ export class ViewHandle {
       return;
     }
     this.settle(requestId);
+    if (this.chartInFlight?.requestId === requestId) {
+      this.chartInFlight = null;
+      const next = this.chartPending;
+      this.chartPending = null;
+      if (next !== null) {
+        this.sendChartWindow(next.window, next.askedAtMs);
+      }
+    }
     this.listener.error?.(message);
   }
 }
@@ -382,6 +459,22 @@ export class Connection {
     view.receiveFrame(frame, requestId);
   }
 
+  /** Decodes a chart frame for its view, reporting one that fails its checks as that view's error. */
+  private receiveChartFrame(encoded: ChartFrame, requestId: bigint): void {
+    const view = this.views.get(encoded.viewId);
+    if (view === undefined) {
+      return;
+    }
+    let frame: ChartFrameData;
+    try {
+      frame = decodeChartFrame(encoded);
+    } catch (error: unknown) {
+      view.receiveError(error instanceof FrameError ? error.message : String(error), requestId);
+      return;
+    }
+    view.receiveChartFrame(frame, requestId);
+  }
+
   /** Handles one encoded server message. */
   public receive(bytes: Uint8Array): void {
     const message = fromBinary(ServerMessageSchema, bytes);
@@ -415,6 +508,9 @@ export class Connection {
       }
       case "distinctValues":
         this.views.get(body.value.viewId)?.receiveDistinct(body.value, requestId);
+        return;
+      case "chartFrame":
+        this.receiveChartFrame(body.value, requestId);
         return;
       case undefined:
         return;

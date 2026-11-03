@@ -11,6 +11,7 @@
 use std::collections::BTreeMap;
 
 use parallax_engine::aggregate::{Aggregate, Measure, ShowAs};
+use parallax_engine::chart::{ChartConfig, ChartKind, OhlcColumns, XAxis};
 use parallax_engine::filter::{Filter, FilterOp};
 use parallax_engine::format::{Abbreviation, Format, Negative, TimePrecision, exact_decimal};
 use parallax_engine::view::{Comparison, GroupOrder, GroupSort, Having, Sort, TopN, ViewConfig};
@@ -64,6 +65,8 @@ pub struct Layout {
     /// data columns of grouped views, and `"__tree"` for the group column. The
     /// engine ignores them.
     pub column_widths: BTreeMap<String, u32>,
+    /// Draws the view as a chart instead of a grid.
+    pub chart: Option<LayoutChart>,
 }
 
 impl Default for Layout {
@@ -86,7 +89,151 @@ impl Default for Layout {
             expanded: Vec::new(),
             formats: BTreeMap::new(),
             column_widths: BTreeMap::new(),
+            chart: None,
         }
+    }
+}
+
+/// What a chart draws, in a layout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ChartKindName {
+    /// Lines through each series.
+    Line,
+    /// Lines filled down to zero.
+    Area,
+    /// Bars of the layout's grouped view: one per group, one per measure or
+    /// column pivot within it.
+    Bar,
+    /// Points, drawn as a density.
+    Scatter,
+    /// Cells of the layout's grouped view, coloured by its first measure: groups
+    /// across, column pivots up.
+    Heatmap,
+    /// Counts of the x values in bins.
+    Histogram,
+    /// Candles of each bucket's open, high, low and close.
+    Candlestick,
+    /// Bars of each bucket's open, high, low and close.
+    Ohlc,
+}
+
+impl ChartKindName {
+    /// The engine's reduction for this kind, or `None` for kinds drawn from the
+    /// layout's grouped view.
+    #[must_use]
+    pub fn reduced(self) -> Option<ChartKind> {
+        Some(match self {
+            Self::Line => ChartKind::Line,
+            Self::Area => ChartKind::Area,
+            Self::Scatter => ChartKind::Scatter,
+            Self::Histogram => ChartKind::Histogram,
+            Self::Candlestick => ChartKind::Candlestick,
+            Self::Ohlc => ChartKind::Ohlc,
+            Self::Bar | Self::Heatmap => return None,
+        })
+    }
+}
+
+/// How a chart places x values, in a layout.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum XAxisName {
+    /// By value.
+    #[default]
+    Value,
+    /// By trading time on the NYSE calendar.
+    Trading,
+}
+
+/// The price columns of a candlestick or OHLC chart, in a layout.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LayoutOhlc {
+    /// The opening price.
+    pub open: String,
+    /// The highest price.
+    pub high: String,
+    /// The lowest price.
+    pub low: String,
+    /// The closing price.
+    pub close: String,
+}
+
+/// An x range a chart was zoomed to, in axis positions.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LayoutRange {
+    /// The left edge.
+    pub from: f64,
+    /// The right edge.
+    pub to: f64,
+}
+
+/// A chart, in a layout. Bar charts and heatmaps draw the layout's grouped view;
+/// the other kinds are reduced by the engine to the plot's pixels.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LayoutChart {
+    /// What it draws.
+    pub kind: ChartKindName,
+    /// The x column of reduced kinds; a histogram bins it.
+    #[serde(default)]
+    pub x: String,
+    /// Columns drawn against the left y axis.
+    #[serde(default)]
+    pub y: Vec<String>,
+    /// Columns drawn against a second y axis on the right.
+    #[serde(default)]
+    pub y_right: Vec<String>,
+    /// A column whose values split each plotted column into series.
+    #[serde(default)]
+    pub series: Option<String>,
+    /// The price columns of candlestick and OHLC charts.
+    #[serde(default)]
+    pub ohlc: Option<LayoutOhlc>,
+    /// How x values are placed.
+    #[serde(default)]
+    pub axis: XAxisName,
+    /// A logarithmic y axis.
+    #[serde(default)]
+    pub log_y: bool,
+    /// Bars of one group stacked instead of side by side.
+    #[serde(default)]
+    pub stacked: bool,
+    /// Bars running across instead of up.
+    #[serde(default)]
+    pub horizontal: bool,
+    /// The x range zoomed to; absent shows everything.
+    #[serde(default)]
+    pub range: Option<LayoutRange>,
+    /// Series hidden from the plot, by their legend labels.
+    #[serde(default)]
+    pub hidden: Vec<String>,
+}
+
+impl LayoutChart {
+    /// The engine's chart for this layout chart, with the view's filters, or
+    /// `None` for kinds drawn from the grouped view.
+    #[must_use]
+    pub fn to_engine(&self, filters: &[Filter]) -> Option<ChartConfig> {
+        Some(ChartConfig {
+            kind: self.kind.reduced()?,
+            x: self.x.clone(),
+            y: self.y.iter().chain(&self.y_right).cloned().collect(),
+            series: self.series.clone(),
+            ohlc: self.ohlc.as_ref().map(|o| OhlcColumns {
+                open: o.open.clone(),
+                high: o.high.clone(),
+                low: o.low.clone(),
+                close: o.close.clone(),
+            }),
+            filters: filters.to_vec(),
+            axis: match self.axis {
+                XAxisName::Value => XAxis::Value,
+                XAxisName::Trading => XAxis::Trading,
+            },
+        })
     }
 }
 
@@ -597,6 +744,8 @@ fn column_type(table: &Table, column: &str) -> Result<ColumnType, LayoutError> {
 pub struct ResolvedLayout {
     /// The view configuration.
     pub config: ViewConfig,
+    /// The chart the engine reduces, for layouts with a reduced chart.
+    pub chart: Option<ChartConfig>,
     /// Group paths and whether each is expanded.
     pub expanded: Vec<(Vec<Scalar>, bool)>,
 }
@@ -794,7 +943,15 @@ impl Layout {
                 })
                 .collect::<Result<_, LayoutError>>()?,
         };
-        Ok(ResolvedLayout { config, expanded })
+        let chart = self
+            .chart
+            .as_ref()
+            .and_then(|c| c.to_engine(&config.filters));
+        Ok(ResolvedLayout {
+            config,
+            chart,
+            expanded,
+        })
     }
 }
 
@@ -1077,10 +1234,24 @@ mod tests {
             "formats": {"quantity": {"abbreviate": "thousands"}, "trade_time": {"precision": "microseconds"}},
             "column_widths": {"fund": 180, "__tree": 300, "__measure:0": 120, "region": 0}
         }"#;
-        [Layout::default(), Layout::from_json(full).unwrap()]
-            .iter()
-            .map(|l| serde_json::to_value(l).unwrap())
-            .collect()
+        let chart = r#"{
+            "dataset": "prices",
+            "filters": [{"column": "ticker", "op": "eq", "value": "AAPL"}],
+            "chart": {"kind": "candlestick", "x": "date", "y": ["vwap"], "y_right": ["volume"],
+                      "series": "ticker",
+                      "ohlc": {"open": "open", "high": "high", "low": "low", "close": "close"},
+                      "axis": "trading", "log_y": true, "stacked": true, "horizontal": true,
+                      "range": {"from": 1200.5, "to": 1450.0}, "hidden": ["volume AAPL"]}
+        }"#;
+        [
+            Layout::default(),
+            Layout::from_json(full).unwrap(),
+            Layout::from_json(chart).unwrap(),
+            Layout::from_json(r#"{"chart": {"kind": "bar"}}"#).unwrap(),
+        ]
+        .iter()
+        .map(|l| serde_json::to_value(l).unwrap())
+        .collect()
     }
 
     /// Compares a committed file with what this build generates, or rewrites it

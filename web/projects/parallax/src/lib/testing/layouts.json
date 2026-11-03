@@ -1,5 +1,6 @@
 [
   {
+    "chart": null,
     "column_widths": {},
     "columns": [],
     "dataset": "",
@@ -21,6 +22,7 @@
     "version": 1
   },
   {
+    "chart": null,
     "column_widths": {
       "__measure:0": 120,
       "__tree": 300,
@@ -168,6 +170,97 @@
       "n": 10,
       "other": true
     },
+    "version": 1
+  },
+  {
+    "chart": {
+      "axis": "trading",
+      "hidden": [
+        "volume AAPL"
+      ],
+      "horizontal": true,
+      "kind": "candlestick",
+      "log_y": true,
+      "ohlc": {
+        "close": "close",
+        "high": "high",
+        "low": "low",
+        "open": "open"
+      },
+      "range": {
+        "from": 1200.5,
+        "to": 1450.0
+      },
+      "series": "ticker",
+      "stacked": true,
+      "x": "date",
+      "y": [
+        "vwap"
+      ],
+      "y_right": [
+        "volume"
+      ]
+    },
+    "column_widths": {},
+    "columns": [],
+    "dataset": "prices",
+    "expand_depth": 0,
+    "expanded": [],
+    "filters": [
+      {
+        "column": "ticker",
+        "op": "eq",
+        "value": "AAPL",
+        "values": []
+      }
+    ],
+    "formats": {},
+    "group_by": [],
+    "group_sort": {
+      "by": "key",
+      "descending": false
+    },
+    "having": [],
+    "measures": [],
+    "parameters": {},
+    "sort": [],
+    "split_by": [],
+    "top_n": null,
+    "version": 1
+  },
+  {
+    "chart": {
+      "axis": "value",
+      "hidden": [],
+      "horizontal": false,
+      "kind": "bar",
+      "log_y": false,
+      "ohlc": null,
+      "range": null,
+      "series": null,
+      "stacked": false,
+      "x": "",
+      "y": [],
+      "y_right": []
+    },
+    "column_widths": {},
+    "columns": [],
+    "dataset": "",
+    "expand_depth": 0,
+    "expanded": [],
+    "filters": [],
+    "formats": {},
+    "group_by": [],
+    "group_sort": {
+      "by": "key",
+      "descending": false
+    },
+    "having": [],
+    "measures": [],
+    "parameters": {},
+    "sort": [],
+    "split_by": [],
+    "top_n": null,
     "version": 1
   }
 ]

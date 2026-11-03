@@ -68,8 +68,8 @@ jobs:
       - name: Install Oracle Instant Client ODBC
         run: |
           sudo mkdir -p /opt/oracle && cd /opt/oracle
-          sudo curl -sSLO https://download.oracle.com/otn_software/linux/instantclient/instantclient-basiclite-linuxx64.zip
-          sudo curl -sSLO https://download.oracle.com/otn_software/linux/instantclient/instantclient-odbc-linuxx64.zip
+          sudo curl -sSLO --retry 5 --retry-all-errors https://download.oracle.com/otn_software/linux/instantclient/instantclient-basiclite-linuxx64.zip
+          sudo curl -sSLO --retry 5 --retry-all-errors https://download.oracle.com/otn_software/linux/instantclient/instantclient-odbc-linuxx64.zip
           sudo unzip -qo instantclient-basiclite-linuxx64.zip && sudo unzip -qo instantclient-odbc-linuxx64.zip
           client=$(ls -d /opt/oracle/instantclient_* | head -1)
           # Ubuntu 24.04 renamed libaio; Instant Client looks for the old name.

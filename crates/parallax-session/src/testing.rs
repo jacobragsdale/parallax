@@ -7,8 +7,8 @@ use parallax_datagen::Dataset;
 use parallax_datagen::positions::{Positions, PositionsOptions};
 use parallax_engine::{Table, TableOptions};
 use parallax_protocol::v1::{
-    ClientMessage, CloseView, DistinctValues, DrillThrough, Hello, OpenView, SetExpanded,
-    SetViewport, UpdateView, client_message,
+    ClientMessage, CloseView, DistinctValues, DrillThrough, Hello, OpenView, SetChartWindow,
+    SetExpanded, SetViewport, UpdateView, client_message,
 };
 use prost::Message;
 
@@ -214,6 +214,66 @@ pub fn transcript() -> Vec<Vec<u8>> {
                 view_id: 1,
                 layout_json: r#"{"version":1,"group_by":["no_such_column"]}"#.into(),
                 config_version: 3,
+            }),
+        ),
+    );
+    // Charts the engine reduces: a histogram split into series, and a density.
+    let charts = [
+        (
+            3,
+            r#"{"chart":{"kind":"histogram","x":"beta","series":"long_short"},
+            "formats":{"beta":{"decimals":2}}}"#,
+            400,
+            100,
+        ),
+        (
+            4,
+            r#"{"chart":{"kind":"scatter","x":"market_value_usd","y":["beta"]}}"#,
+            200,
+            100,
+        ),
+    ];
+    for (i, (view_id, layout, width, height)) in charts.into_iter().enumerate() {
+        let request = 11 + 2 * i as u64;
+        send(
+            &mut session,
+            &mut out,
+            message(
+                request,
+                B::OpenView(OpenView {
+                    view_id,
+                    dataset: "positions".into(),
+                    parameters: Default::default(),
+                    layout_json: layout.into(),
+                }),
+            ),
+        );
+        send(
+            &mut session,
+            &mut out,
+            message(
+                request + 1,
+                B::SetChartWindow(SetChartWindow {
+                    view_id,
+                    width,
+                    height,
+                    ..SetChartWindow::default()
+                }),
+            ),
+        );
+    }
+    // A chart has no rows to show in a viewport.
+    send(
+        &mut session,
+        &mut out,
+        message(
+            15,
+            B::SetViewport(SetViewport {
+                view_id: 3,
+                first_row: 0,
+                row_count: 10,
+                first_column: 0,
+                column_count: 5,
             }),
         ),
     );

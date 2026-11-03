@@ -95,6 +95,51 @@
         }
       ]
     },
+    "ChartKindName": {
+      "description": "What a chart draws, in a layout.",
+      "oneOf": [
+        {
+          "const": "line",
+          "description": "Lines through each series.",
+          "type": "string"
+        },
+        {
+          "const": "area",
+          "description": "Lines filled down to zero.",
+          "type": "string"
+        },
+        {
+          "const": "bar",
+          "description": "Bars of the layout's grouped view: one per group, one per measure or\ncolumn pivot within it.",
+          "type": "string"
+        },
+        {
+          "const": "scatter",
+          "description": "Points, drawn as a density.",
+          "type": "string"
+        },
+        {
+          "const": "heatmap",
+          "description": "Cells of the layout's grouped view, coloured by its first measure: groups\nacross, column pivots up.",
+          "type": "string"
+        },
+        {
+          "const": "histogram",
+          "description": "Counts of the x values in bins.",
+          "type": "string"
+        },
+        {
+          "const": "candlestick",
+          "description": "Candles of each bucket's open, high, low and close.",
+          "type": "string"
+        },
+        {
+          "const": "ohlc",
+          "description": "Bars of each bucket's open, high, low and close.",
+          "type": "string"
+        }
+      ]
+    },
     "CompareName": {
       "description": "A comparison for aggregate filters.",
       "oneOf": [
@@ -219,6 +264,101 @@
           "type": "object"
         }
       ]
+    },
+    "LayoutChart": {
+      "additionalProperties": false,
+      "description": "A chart, in a layout. Bar charts and heatmaps draw the layout's grouped view;\nthe other kinds are reduced by the engine to the plot's pixels.",
+      "properties": {
+        "axis": {
+          "$ref": "#/$defs/XAxisName",
+          "default": "value",
+          "description": "How x values are placed."
+        },
+        "hidden": {
+          "default": [],
+          "description": "Series hidden from the plot, by their legend labels.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "horizontal": {
+          "default": false,
+          "description": "Bars running across instead of up.",
+          "type": "boolean"
+        },
+        "kind": {
+          "$ref": "#/$defs/ChartKindName",
+          "description": "What it draws."
+        },
+        "log_y": {
+          "default": false,
+          "description": "A logarithmic y axis.",
+          "type": "boolean"
+        },
+        "ohlc": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LayoutOhlc"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The price columns of candlestick and OHLC charts."
+        },
+        "range": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LayoutRange"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The x range zoomed to; absent shows everything."
+        },
+        "series": {
+          "default": null,
+          "description": "A column whose values split each plotted column into series.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "stacked": {
+          "default": false,
+          "description": "Bars of one group stacked instead of side by side.",
+          "type": "boolean"
+        },
+        "x": {
+          "default": "",
+          "description": "The x column of reduced kinds; a histogram bins it.",
+          "type": "string"
+        },
+        "y": {
+          "default": [],
+          "description": "Columns drawn against the left y axis.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "y_right": {
+          "default": [],
+          "description": "Columns drawn against a second y axis on the right.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "type": "object"
     },
     "LayoutExpanded": {
       "additionalProperties": false,
@@ -438,6 +578,56 @@
       ],
       "type": "object"
     },
+    "LayoutOhlc": {
+      "additionalProperties": false,
+      "description": "The price columns of a candlestick or OHLC chart, in a layout.",
+      "properties": {
+        "close": {
+          "description": "The closing price.",
+          "type": "string"
+        },
+        "high": {
+          "description": "The highest price.",
+          "type": "string"
+        },
+        "low": {
+          "description": "The lowest price.",
+          "type": "string"
+        },
+        "open": {
+          "description": "The opening price.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "open",
+        "high",
+        "low",
+        "close"
+      ],
+      "type": "object"
+    },
+    "LayoutRange": {
+      "additionalProperties": false,
+      "description": "An x range a chart was zoomed to, in axis positions.",
+      "properties": {
+        "from": {
+          "description": "The left edge.",
+          "format": "double",
+          "type": "number"
+        },
+        "to": {
+          "description": "The right edge.",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ],
+      "type": "object"
+    },
     "LayoutSort": {
       "additionalProperties": false,
       "description": "A sort in a layout.",
@@ -554,12 +744,39 @@
           "type": "string"
         }
       ]
+    },
+    "XAxisName": {
+      "description": "How a chart places x values, in a layout.",
+      "oneOf": [
+        {
+          "const": "value",
+          "description": "By value.",
+          "type": "string"
+        },
+        {
+          "const": "trading",
+          "description": "By trading time on the NYSE calendar.",
+          "type": "string"
+        }
+      ]
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "description": "A view, as saved and sent.",
   "properties": {
+    "chart": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/LayoutChart"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Draws the view as a chart instead of a grid."
+    },
     "column_widths": {
       "additionalProperties": {
         "format": "uint32",

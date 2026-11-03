@@ -159,6 +159,9 @@ pub struct Candle {
 /// A calendar bucket and where it spans on the axis.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Bucket {
+    /// The bucket's start as an x value: days since the epoch for dates,
+    /// microseconds for instants.
+    pub start: i64,
     /// The axis position of the bucket's start.
     pub from: f64,
     /// The axis position of the next bucket's start.
@@ -296,6 +299,13 @@ impl Placement {
         };
         position.is_finite().then_some(position)
     }
+}
+
+/// A numeric column's value at `slot` as a double, a decimal correctly rounded,
+/// or `None` for a null, a NaN or a column that is not numeric.
+#[must_use]
+pub fn number(column: &Column, slot: usize) -> Option<f64> {
+    y_value(column, slot)
 }
 
 /// The y value of a slot as a double, or `None` for a null or NaN.
@@ -706,6 +716,7 @@ impl ChartView {
                     candles.push((span, candle));
                 }
                 let span = Bucket {
+                    start: bucket,
                     from: self.bucket_position(bucket, interval, instants, &zone, false),
                     to: self.bucket_position(bucket, interval, instants, &zone, true),
                 };

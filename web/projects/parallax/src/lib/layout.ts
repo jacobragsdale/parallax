@@ -72,6 +72,24 @@ const topNSchema = z.strictObject({ n: count, measure: count, largest: z._defaul
 
 const expandedSchema = z.strictObject({ path: z.array(scalar), expanded: z.boolean() });
 
+/** What a chart draws. Bar charts and heatmaps draw the layout's grouped view; the engine reduces the others. */
+export const CHART_KINDS = ["line", "area", "bar", "scatter", "heatmap", "histogram", "candlestick", "ohlc"] as const;
+
+const chartSchema = z.strictObject({
+  kind: z.enum(CHART_KINDS),
+  x: z._default(z.string(), ""),
+  y: z._default(z.array(name), []),
+  y_right: z._default(z.array(name), []),
+  series: orNull(name),
+  ohlc: orNull(z.strictObject({ open: name, high: name, low: name, close: name })),
+  axis: z._default(z.enum(["value", "trading"]), "value"),
+  log_y: z._default(z.boolean(), false),
+  stacked: z._default(z.boolean(), false),
+  horizontal: z._default(z.boolean(), false),
+  range: orNull(z.strictObject({ from: z.number(), to: z.number() })),
+  hidden: z._default(z.array(z.string()), [])
+});
+
 /** The schema of a layout document. Unknown fields are errors, as in Rust. */
 export const layoutSchema = z.strictObject({
   // Older versions are read and brought up to date, as the Rust crate does.
@@ -93,7 +111,8 @@ export const layoutSchema = z.strictObject({
   expand_depth: z._default(count, 0),
   expanded: z._default(z.array(expandedSchema), []),
   formats: z._default(z.record(name, formatSchema), {}),
-  column_widths: z._default(z.record(z.string(), z.int().check(z.minimum(0), z.maximum(4_294_967_295))), {})
+  column_widths: z._default(z.record(z.string(), z.int().check(z.minimum(0), z.maximum(4_294_967_295))), {}),
+  chart: orNull(chartSchema)
 });
 
 /** A complete layout, with every default filled in. */
@@ -104,6 +123,8 @@ export type LayoutInput = z.input<typeof layoutSchema>;
 export type LayoutMeasure = z.output<typeof measureSchema>;
 /** One filter of a layout. */
 export type LayoutFilter = z.output<typeof filterSchema>;
+/** A chart of a layout. */
+export type LayoutChart = z.output<typeof chartSchema>;
 /** A display format. */
 export type LayoutFormat = z.output<typeof formatSchema>;
 /** A JSON scalar in a filter or group path. */

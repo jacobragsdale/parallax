@@ -18,6 +18,7 @@ use std::sync::{Arc, RwLock, RwLockReadGuard};
 
 use arrow_array::RecordBatch;
 use arrow_schema::Schema;
+use parallax_engine::chart::{ChartRequest, ChartView};
 use parallax_engine::{ChangeSet, LoadError, LoadReport, Table, TableOptions, View};
 use parallax_protocol::PROTOCOL_VERSION;
 use parallax_protocol::ipc::{encode_batch, encode_schema};
@@ -32,6 +33,7 @@ use parallax_protocol::v1::{
 };
 use prost::Message;
 
+mod chart;
 mod copy;
 #[cfg(feature = "testing")]
 pub mod testing;
@@ -333,7 +335,7 @@ struct OpenView {
     dataset: String,
     parameters: BTreeMap<String, String>,
     layout: Layout,
-    view: View,
+    view: Computed,
     config_version: u64,
     viewport: Option<Viewport>,
     status_version: u64,
@@ -344,6 +346,10 @@ struct OpenView {
 
 /// The most cells one [`FetchWindow`](parallax_protocol::v1::FetchWindow) may ask for.
 pub const MAX_FETCH_CELLS: u64 = 1_000_000;
+
+/// The widest and tallest plot a [`SetChartWindow`](parallax_protocol::v1::SetChartWindow)
+/// may ask for, which bounds a reduction's size.
+pub const MAX_CHART_PIXELS: u32 = 16_384;
 
 /// Refuses a layout that names a dataset or parameters other than the view's.
 fn same_source(
@@ -363,13 +369,53 @@ fn same_source(
     Ok(())
 }
 
-/// Builds a view from a resolved layout and applies its expanded groups.
-fn build_view(table: &Table, resolved: ResolvedLayout) -> Result<View, String> {
+/// What a view computes: a grid or pivot, which bar charts and heatmaps draw
+/// too, or a chart the engine reduces.
+enum Computed {
+    Grid(Box<View>),
+    Chart(Box<chart::ChartState>),
+}
+
+impl Computed {
+    fn load_version(&self) -> u64 {
+        match self {
+            Self::Grid(view) => view.load_version(),
+            Self::Chart(chart) => chart.view.load_version(),
+        }
+    }
+
+    /// The grid, for messages only grids answer.
+    fn grid(&mut self) -> Result<&mut View, String> {
+        match self {
+            Self::Grid(view) => Ok(view),
+            Self::Chart(_) => {
+                Err("this view is a chart; ask for its chart window instead".to_owned())
+            }
+        }
+    }
+}
+
+/// Builds a view from a resolved layout: its chart if the engine reduces it,
+/// otherwise its grid with the expanded groups applied.
+fn build_view(
+    table: &Table,
+    layout: &Layout,
+    resolved: ResolvedLayout,
+) -> Result<Computed, String> {
+    if let (Some(config), Some(chart)) = (resolved.chart, &layout.chart) {
+        let view = ChartView::new(table, config).map_err(|e| e.to_string())?;
+        return Ok(Computed::Chart(Box::new(chart::ChartState {
+            view,
+            layout: chart.clone(),
+            formats: resolved.config.formats,
+            window: None,
+        })));
+    }
     let mut view = View::new(table, resolved.config).map_err(|e| e.to_string())?;
     for (path, expanded) in resolved.expanded {
         view.set_expanded(path, expanded);
     }
-    Ok(view)
+    Ok(Computed::Grid(Box::new(view)))
 }
 
 impl OpenView {
@@ -381,6 +427,11 @@ impl OpenView {
         if behind >= current {
             return Ok(false);
         }
+        // A chart keeps no diffs: it rebuilds from the table.
+        if let Computed::Chart(chart) = &mut self.view {
+            chart.view.rebuild(&state.table);
+            return Ok(true);
+        }
         let missing: Vec<&Arc<ChangeSet>> = state
             .history
             .iter()
@@ -391,15 +442,16 @@ impl OpenView {
             .is_some_and(|c| c.load_version == behind + 1)
             && missing.last().is_some_and(|c| c.load_version == current);
         if contiguous {
+            let view = self.view.grid()?;
             for change in missing {
-                self.view.apply(&state.table, change);
+                view.apply(&state.table, change);
             }
         } else {
             let resolved = self
                 .layout
                 .resolve(&state.table)
                 .map_err(|e| e.to_string())?;
-            self.view = build_view(&state.table, resolved)?;
+            self.view = build_view(&state.table, &self.layout, resolved)?;
         }
         Ok(true)
     }
@@ -478,6 +530,7 @@ impl Session {
             client_message::Body::DrillThrough(m) => m.view_id,
             client_message::Body::DistinctValues(m) => m.view_id,
             client_message::Body::FetchWindow(m) => m.view_id,
+            client_message::Body::SetChartWindow(m) => m.view_id,
         };
         match self.dispatch(id, body) {
             Ok(messages) => messages,
@@ -521,22 +574,37 @@ impl Session {
                     let resolved = layout.resolve(&state.table).map_err(|e| e.to_string())?;
                     // Display-only changes, such as formats, widths or newly expanded
                     // groups, keep the computed view; anything else rebuilds it.
-                    let kept = current
-                        && open
-                            .layout
-                            .expanded
-                            .iter()
-                            .all(|old| layout.expanded.iter().any(|new| new.path == old.path))
-                        && open
-                            .view
-                            .reformat(&state.table, &resolved.config)
-                            .map_err(|e| e.to_string())?;
+                    let grid = match &mut open.view {
+                        Computed::Grid(view) if resolved.chart.is_none() => Some(view),
+                        _ => None,
+                    };
+                    let kept = match grid {
+                        Some(view) => {
+                            current
+                                && open.layout.expanded.iter().all(|old| {
+                                    layout.expanded.iter().any(|new| new.path == old.path)
+                                })
+                                && view
+                                    .reformat(&state.table, &resolved.config)
+                                    .map_err(|e| e.to_string())?
+                        }
+                        None => false,
+                    };
                     if kept {
+                        let view = open.view.grid()?;
                         for (path, expanded) in resolved.expanded {
-                            open.view.set_expanded(path, expanded);
+                            view.set_expanded(path, expanded);
                         }
                     } else {
-                        open.view = build_view(&state.table, resolved)?;
+                        // A chart rebuilds and keeps the window it was asked for.
+                        let window = match &open.view {
+                            Computed::Chart(chart) => chart.window,
+                            Computed::Grid(_) => None,
+                        };
+                        open.view = build_view(&state.table, &layout, resolved)?;
+                        if let Computed::Chart(chart) = &mut open.view {
+                            chart.window = window;
+                        }
                     }
                 }
                 open.layout = layout;
@@ -582,8 +650,9 @@ impl Session {
                 };
                 let resolved = probe.resolve(&state.table).map_err(|err| err.to_string())?;
                 drop(state);
+                let view = open.view.grid()?;
                 for (scalars, flag) in resolved.expanded {
-                    open.view.set_expanded(scalars, flag);
+                    view.set_expanded(scalars, flag);
                 }
                 open.layout.expanded.retain(|x| x.path != path);
                 open.layout.expanded.push(LayoutExpanded {
@@ -604,12 +673,30 @@ impl Session {
                     open.catch_up(&state)?;
                     let config = open
                         .view
+                        .grid()?
                         .drill_through(&state.table, usize::try_from(d.row).unwrap_or(usize::MAX))
                         .ok_or_else(|| "that row has no single group to drill into".to_owned())?;
                     Layout::from_flat_config(&config, &state.table)
                 };
                 let (dataset, parameters) = (open.dataset.clone(), open.parameters.clone());
                 self.open_view(id, d.new_view_id, table, &dataset, parameters, layout)?
+            }
+            client_message::Body::SetChartWindow(w) => {
+                let open = self.view_mut(w.view_id)?;
+                let Computed::Chart(chart) = &mut open.view else {
+                    return Err("this view is a grid; ask for its viewport instead".to_owned());
+                };
+                let range = |a: Option<f64>, b: Option<f64>| {
+                    a.zip(b)
+                        .filter(|(a, b)| a.is_finite() && b.is_finite() && b > a)
+                };
+                chart.window = Some(ChartRequest {
+                    x: range(w.x_from, w.x_to),
+                    y: range(w.y_from, w.y_to),
+                    width: w.width.clamp(1, MAX_CHART_PIXELS),
+                    height: w.height.clamp(1, MAX_CHART_PIXELS),
+                });
+                self.chart_frame(id, w.view_id, false).into_iter().collect()
             }
             client_message::Body::DistinctValues(request) => vec![reply(
                 id,
@@ -636,7 +723,7 @@ impl Session {
         let (view, schema, status) = {
             let state = read_table(&table)?;
             let resolved = layout.resolve(&state.table).map_err(|e| e.to_string())?;
-            let view = build_view(&state.table, resolved)?;
+            let view = build_view(&state.table, &layout, resolved)?;
             let schema = encode_schema(state.table.schema()).map_err(|e| e.to_string())?;
             (view, schema, state.status(view_id))
         };
@@ -675,6 +762,39 @@ impl Session {
         self.window_frame(request_id, view_id, viewport, pushed, None)
     }
 
+    /// Builds the chart frame for a chart's window, if it was asked for one. The
+    /// chart first catches up with its table, under the lock it is reduced under.
+    fn chart_frame(
+        &mut self,
+        request_id: u64,
+        view_id: u32,
+        pushed: bool,
+    ) -> Option<ServerMessage> {
+        let open = self.views.get_mut(&view_id)?;
+        let table = Arc::clone(&open.table);
+        let state = match read_table(&table) {
+            Ok(state) => state,
+            Err(message) => return Some(error(request_id, view_id, message)),
+        };
+        if let Err(message) = open.catch_up(&state) {
+            return Some(error(request_id, view_id, message));
+        }
+        let Computed::Chart(chart_state) = &open.view else {
+            return None;
+        };
+        chart_state.window?;
+        let mut frame = match chart::chart_frame(&state.table, chart_state) {
+            Ok(frame) => frame,
+            Err(message) => return Some(error(request_id, view_id, message)),
+        };
+        frame.view_id = view_id;
+        frame.config_version = open.config_version;
+        frame.load_version = chart_state.view.load_version();
+        frame.source_as_of_micros = state.source_as_of_micros;
+        frame.pushed = pushed;
+        Some(reply(request_id, server_message::Body::ChartFrame(frame)))
+    }
+
     /// Builds the frame for one window of a view, refusing windows of more than
     /// `max_cells` cells. The view first catches up with its table, under the same
     /// lock the window is read under.
@@ -697,14 +817,18 @@ impl Session {
         if let Err(message) = open.catch_up(&state) {
             return Some(error(request_id, view_id, message));
         }
+        let view = match open.view.grid() {
+            Ok(view) => view,
+            Err(message) => return Some(error(request_id, view_id, message)),
+        };
         let rows = index_range(viewport.first_row, viewport.row_count);
         let columns = index_range(
             u64::from(viewport.first_column),
             u64::from(viewport.column_count),
         );
         if let Some(max) = max_cells {
-            let total_rows = open.view.num_rows(&state.table);
-            let total_columns = open.view.num_columns(&state.table);
+            let total_rows = view.num_rows(&state.table);
+            let total_columns = view.num_columns(&state.table);
             let height = rows.end.min(total_rows).saturating_sub(rows.start) as u64;
             let width = columns.end.min(total_columns).saturating_sub(columns.start) as u64;
             if height.saturating_mul(width) > max {
@@ -717,7 +841,7 @@ impl Session {
                 ));
             }
         }
-        let window = open.view.window(&state.table, rows, columns);
+        let window = view.window(&state.table, rows, columns);
         let batch = match encode_batch(&window.batch) {
             Ok(bytes) => bytes,
             Err(e) => return Some(error(request_id, view_id, e.to_string())),
@@ -778,6 +902,7 @@ impl Session {
             drop(state);
             if changed {
                 out.extend(self.frame(0, id, true));
+                out.extend(self.chart_frame(0, id, true));
             }
         }
         out
