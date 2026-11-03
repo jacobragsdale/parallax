@@ -10,9 +10,11 @@
  * the eighth are drawn in the muted colour.
  */
 
-import type { ChartContent, ChartFrameData } from "../chart-frame";
+import type { CandleData, ChartContent, ChartFrameData } from "../chart-frame";
 import type { Layout, LayoutChart } from "../layout";
 import type { ChartColors } from "../theme";
+import { PANE_GAP, indicatorStyles, paneDomain, paneHeight, paneScale, paneSpecs, paneValues, segmentsOf } from "./indicators";
+import type { IndicatorStyle, PaneSpec } from "./indicators";
 import { linearScale, logDomain, logScale, niceDomain, valueTicks } from "./scale";
 import type { Scale, ValueTick } from "./scale";
 
@@ -32,7 +34,19 @@ export interface Hit {
 
 /** One painted shape. */
 export type Mark =
-  | { readonly kind: "line"; readonly color: string; readonly segments: readonly Float64Array[]; readonly baseline: number | null }
+  | {
+      readonly kind: "line";
+      readonly color: string;
+      readonly segments: readonly Float64Array[];
+      readonly baseline: number | null;
+      /** Pixels wide: 2 for series, thinner for indicators. */
+      readonly width: number;
+      readonly dashed: boolean;
+    }
+  /** The fill between two lines, such as Bollinger Bands', at a light wash. */
+  | { readonly kind: "band"; readonly color: string; readonly upper: Float64Array; readonly lower: Float64Array }
+  /** Thin bars from a baseline, as `x, y, w, h` quads, such as volume or MACD's histogram. */
+  | { readonly kind: "columns"; readonly color: string; readonly rects: Float64Array }
   | { readonly kind: "rect"; readonly color: string; readonly rect: Rect; readonly round: "top" | "bottom" | "left" | "right" | "none"; readonly hit: Hit }
   | { readonly kind: "cell"; readonly color: string; readonly rect: Rect; readonly hit: Hit | null }
   | {
@@ -70,6 +84,16 @@ export interface AxisTick {
   readonly label: string;
 }
 
+/** A pane of its own under the price, for one indicator, on the same x axis. */
+export interface Pane {
+  readonly title: string;
+  readonly plot: Rect;
+  readonly axis: ValueAxis;
+  readonly marks: readonly Mark[];
+  /** Lines across the pane, in pixels, such as RSI's 30 and 70. */
+  readonly guides: readonly number[];
+}
+
 /** Everything a chart paints. */
 export interface ChartModel {
   readonly width: number;
@@ -85,6 +109,16 @@ export interface ChartModel {
   readonly legend: readonly LegendEntry[];
   /** Said instead of a plot when there is nothing to draw. */
   readonly empty: string | null;
+  /** Indicator panes stacked under the plot. */
+  readonly panes: readonly Pane[];
+  /** The style of each of the frame's indicator lines, in its order. */
+  readonly indicators: readonly IndicatorStyle[];
+}
+
+/** The bottom of the lowest plot or pane, where the x axis runs. */
+export function plotBottom(model: ChartModel): number {
+  const last = model.panes.at(-1);
+  return last === undefined ? model.plot.y + model.plot.h : last.plot.y + last.plot.h;
 }
 
 /** Data of a bar chart or heatmap, taken from the layout's grouped view. */
@@ -105,6 +139,8 @@ export interface ModelInput {
   readonly measure: (text: string) => number;
   readonly frame: ChartFrameData | null;
   readonly categories: CategoryData | null;
+  /** The narrowest left gutter, so that the price's axis lines up with its panes'. */
+  readonly minGutter?: number;
 }
 
 const COUNT = new Intl.NumberFormat("en-US");
@@ -165,7 +201,7 @@ function gutter(input: ModelInput, ticks: readonly ValueTick[]): number {
 
 /** The plot area once the value axes' labels have room. */
 function plotFor(input: ModelInput, left: readonly ValueTick[], right: readonly ValueTick[] | null): Rect {
-  const x = gutter(input, left);
+  const x = Math.max(gutter(input, left), input.minGutter ?? 0);
   const w = input.width - x - (right === null ? PAD : gutter(input, right));
   return { x, y: PAD, w: Math.max(1, w), h: Math.max(1, input.height - PAD - X_AXIS) };
 }
@@ -177,14 +213,16 @@ function onto(scale: Scale, range: readonly [number, number]): Scale {
 
 function emptyModel(input: ModelInput, message: string): ChartModel {
   const plot = { x: PAD, y: PAD, w: Math.max(1, input.width - 2 * PAD), h: Math.max(1, input.height - PAD - X_AXIS) };
-  return { width: input.width, height: input.height, plot, xTicks: [], yLabels: [], yAxes: [], x: null, marks: [], legend: [], empty: message };
+  return { width: input.width, height: input.height, plot, xTicks: [], yLabels: [], yAxes: [], x: null, marks: [], legend: [], empty: message, panes: [], indicators: [] };
 }
 
 type Content<K extends ChartContent["kind"]> = Extract<ChartContent, { kind: K }>;
 
 function lineModel(input: ModelInput, frame: ChartFrameData, content: Content<"series">): ChartModel {
   const visible = content.series.map((s, i) => ({ s, i })).filter(({ s }) => !hidden(input, s.label));
-  const values = (right: boolean): number[] => visible.filter(({ s }) => s.right === right).flatMap(({ s }) => Array.from(s.y));
+  const styles = indicatorStyles(input.chart, frame, input.colors, input.muted, content.series.length);
+  const over = overlayValues(input, frame, styles);
+  const values = (right: boolean): number[] => [...visible.filter(({ s }) => s.right === right).flatMap(({ s }) => Array.from(s.y)), ...(right ? [] : over)];
   const area = input.chart.kind === "area";
   const range: readonly [number, number] = [input.height - X_AXIS, PAD];
   const leftScale = valueScale(input, values(false), range, area);
@@ -197,25 +235,11 @@ function lineModel(input: ModelInput, frame: ChartFrameData, content: Content<"s
   const x = linearScale([frame.xFrom, frame.xTo], [plot.x, plot.x + plot.w]);
   const marks: Mark[] = visible.flatMap(({ s, i }): Mark[] => {
     const y = s.right && right !== null ? right : left;
-    const segments: Float64Array[] = [];
-    let current: number[] = [];
-    for (let p = 0; p < s.x.length; p += 1) {
-      const value = s.y[p] ?? Number.NaN;
-      if (Number.isNaN(value) || (y.log && value <= 0)) {
-        if (current.length > 0) {
-          segments.push(Float64Array.from(current));
-        }
-        current = [];
-        continue;
-      }
-      current.push(x.map(s.x[p] ?? 0), y.map(value));
-    }
-    if (current.length > 0) {
-      segments.push(Float64Array.from(current));
-    }
+    const segments = segmentsOf(s.x, s.y, x, y);
     const baseline = area ? Math.min(plot.y + plot.h, Math.max(plot.y, y.map(y.log ? y.domain[0] : 0))) : null;
-    return segments.length === 0 ? [] : [{ kind: "line", color: seriesColor(input, i), segments, baseline }];
+    return segments.length === 0 ? [] : [{ kind: "line", color: seriesColor(input, i), segments, baseline, width: 2, dashed: false }];
   });
+  const shape = area ? "rect" : "line";
   return {
     width: input.width,
     height: input.height,
@@ -224,14 +248,76 @@ function lineModel(input: ModelInput, frame: ChartFrameData, content: Content<"s
     yLabels: [],
     yAxes: right === null ? [axis("left", left)] : [axis("left", left), axis("right", right)],
     x,
-    marks,
-    legend: legendOf(
+    marks: [...marks, ...overlayMarks(input, frame, styles, x, left)],
+    legend: legendWithOverlays(
       input,
-      content.series.map((s) => s.label),
-      area ? "rect" : "line"
+      content.series.map((s) => ({ label: s.label, color: "", shape })),
+      styles
     ),
-    empty: content.series.every((s) => s.x.length === 0) ? "No data in this range" : null
+    empty: content.series.every((s) => s.x.length === 0) ? "No data in this range" : null,
+    panes: [],
+    indicators: styles
   };
+}
+
+/** Whether a line is an overlay over the price that is not hidden. */
+function shownOverlay(input: ModelInput, style: IndicatorStyle | undefined): style is IndicatorStyle {
+  return style?.pane === null && !hidden(input, style.group);
+}
+
+/** The values of the overlays shown over the price, which its scale must hold. */
+function overlayValues(input: ModelInput, frame: ChartFrameData, styles: readonly IndicatorStyle[]): number[] {
+  return frame.indicators.flatMap((line, i) => (shownOverlay(input, styles[i]) ? Array.from(line.y) : []));
+}
+
+/** The overlays drawn over the price: thin lines, and a wash between Bollinger Bands. */
+function overlayMarks(input: ModelInput, frame: ChartFrameData, styles: readonly IndicatorStyle[], x: Scale, y: Scale): Mark[] {
+  const marks: Mark[] = [];
+  const bands = new Map<string, { upper?: Float64Array; lower?: Float64Array; color: string }>();
+  frame.indicators.forEach((line, i) => {
+    const style = styles[i];
+    if (!shownOverlay(input, style)) {
+      return;
+    }
+    const segments = segmentsOf(line.x, line.y, x, y);
+    if (line.line === "upper" || line.line === "lower") {
+      const band = bands.get(style.group) ?? { color: style.color };
+      band[line.line] = Float64Array.from(segments.flatMap((s) => Array.from(s)));
+      bands.set(style.group, band);
+    }
+    if (segments.length > 0) {
+      marks.push({ kind: "line", color: style.color, segments, baseline: null, width: style.dashed ? 1 : 1.5, dashed: style.dashed });
+    }
+  });
+  const washes: Mark[] = [];
+  for (const band of bands.values()) {
+    if (band.upper !== undefined && band.lower !== undefined && band.upper.length > 2 && band.lower.length > 2) {
+      washes.push({ kind: "band", color: band.color, upper: band.upper, lower: band.lower });
+    }
+  }
+  // Washes go under the lines.
+  return [...washes, ...marks];
+}
+
+/** The legend: the series when there is more than one, and every overlay, one entry each per indicator and series. */
+function legendWithOverlays(
+  input: ModelInput,
+  series: readonly { readonly label: string; readonly color: string; readonly shape: "line" | "rect" }[],
+  styles: readonly IndicatorStyle[]
+): readonly LegendEntry[] {
+  const overlays = new Map<string, string>();
+  for (const style of styles) {
+    if (style.pane === null && !overlays.has(style.group)) {
+      overlays.set(style.group, style.color);
+    }
+  }
+  const entries: LegendEntry[] =
+    series.length > 1 || overlays.size > 0 ? series.map((s, i) => ({ label: s.label, color: s.color === "" ? seriesColor(input, i) : s.color, shape: s.shape, hidden: hidden(input, s.label) })) : [];
+  for (const [label, color] of overlays) {
+    entries.push({ label, color, shape: "line", hidden: hidden(input, label) });
+  }
+  // One series alone needs no legend; an overlay always does, to be told from the price.
+  return entries.length < 2 && overlays.size === 0 ? [] : entries;
 }
 
 function histogramModel(input: ModelInput, frame: ChartFrameData, content: Content<"histogram">): ChartModel {
@@ -272,7 +358,9 @@ function histogramModel(input: ModelInput, frame: ChartFrameData, content: Conte
       content.series.map((s) => s.label),
       "rect"
     ),
-    empty: counts.every((c) => c === 0) ? "No data in this range" : null
+    empty: counts.every((c) => c === 0) ? "No data in this range" : null,
+    panes: [],
+    indicators: []
   };
 }
 
@@ -315,7 +403,9 @@ function densityModel(input: ModelInput, frame: ChartFrameData, content: Content
     x,
     marks,
     legend: [],
-    empty: most === 0 ? "No data in this range" : null
+    empty: most === 0 ? "No data in this range" : null,
+    panes: [],
+    indicators: []
   };
 }
 
@@ -335,6 +425,21 @@ export function bucketTitle(interval: string, start: string): string {
   return `${count} ${unit}${count === "1" ? "" : "s"} from ${start}`;
 }
 
+/** What a candle's tooltip reads: its prices, and its volume when the chart shows it. */
+function candleHit(c: CandleData, i: number): Hit {
+  const volume = c.volumeText === null ? [] : [{ label: "Volume", value: c.volumeText[i] ?? "" }];
+  return {
+    title: bucketTitle(c.interval, c.xText[i] ?? ""),
+    rows: [
+      { label: "Open", value: c.openText[i] ?? "" },
+      { label: "High", value: c.highText[i] ?? "" },
+      { label: "Low", value: c.lowText[i] ?? "" },
+      { label: "Close", value: c.closeText[i] ?? "" },
+      ...volume
+    ]
+  };
+}
+
 /** The candle or OHLC bar for bucket `i`, or null if a price is missing. */
 function candleMark(input: ModelInput, c: Content<"candles">["candles"], i: number, x: Scale, y: Scale, bars: boolean): Mark | null {
   const [open, high, low, close] = [c.open[i] ?? Number.NaN, c.high[i] ?? Number.NaN, c.low[i] ?? Number.NaN, c.close[i] ?? Number.NaN];
@@ -343,15 +448,7 @@ function candleMark(input: ModelInput, c: Content<"candles">["candles"], i: numb
   }
   const [from, to] = [x.map(c.from[i] ?? 0), x.map(c.to[i] ?? 0)];
   const up = close >= open;
-  const hit: Hit = {
-    title: bucketTitle(c.interval, c.xText[i] ?? ""),
-    rows: [
-      { label: "Open", value: c.openText[i] ?? "" },
-      { label: "High", value: c.highText[i] ?? "" },
-      { label: "Low", value: c.lowText[i] ?? "" },
-      { label: "Close", value: c.closeText[i] ?? "" }
-    ]
-  };
+  const hit = candleHit(c, i);
   return {
     kind: "candle",
     color: up ? input.colors.up : input.colors.down,
@@ -370,8 +467,9 @@ function candleMark(input: ModelInput, c: Content<"candles">["candles"], i: numb
 
 function candleModel(input: ModelInput, frame: ChartFrameData, content: Content<"candles">): ChartModel {
   const c = content.candles;
+  const styles = indicatorStyles(input.chart, frame, input.colors, input.muted, 0);
   const range: readonly [number, number] = [input.height - X_AXIS, PAD];
-  const scale = valueScale(input, [...c.low, ...c.high], range, false);
+  const scale = valueScale(input, [...c.low, ...c.high, ...overlayValues(input, frame, styles)], range, false);
   const plot = plotFor(input, axis("left", scale).ticks, null);
   const y = onto(scale, [plot.y + plot.h, plot.y]);
   const x = linearScale([frame.xFrom, frame.xTo], [plot.x, plot.x + plot.w]);
@@ -391,9 +489,11 @@ function candleModel(input: ModelInput, frame: ChartFrameData, content: Content<
     yLabels: [],
     yAxes: [axis("left", y)],
     x,
-    marks,
-    legend: [],
-    empty: marks.length === 0 ? "No data in this range" : null
+    marks: [...marks, ...overlayMarks(input, frame, styles, x, y)],
+    legend: legendWithOverlays(input, [], styles),
+    empty: marks.length === 0 ? "No data in this range" : null,
+    panes: [],
+    indicators: styles
   };
 }
 
@@ -493,7 +593,9 @@ function barModel(input: ModelInput, data: CategoryData): ChartModel {
       data.series.map((s) => s.label),
       "rect"
     ),
-    empty: data.categories.length === 0 ? "No groups to show" : null
+    empty: data.categories.length === 0 ? "No groups to show" : null,
+    panes: [],
+    indicators: []
   };
 }
 
@@ -544,7 +646,9 @@ function heatmapModel(input: ModelInput, data: CategoryData): ChartModel {
     x: null,
     marks,
     legend: [],
-    empty: marks.length === 0 ? "No values to show" : null
+    empty: marks.length === 0 ? "No values to show" : null,
+    panes: [],
+    indicators: []
   };
 }
 
@@ -566,14 +670,117 @@ export function chartModel(input: ModelInput): ChartModel {
   const content = frame.content;
   switch (content.kind) {
     case "series":
-      return lineModel(input, frame, content);
+      return withPanes(input, frame, null, (i) => lineModel(i, frame, content));
     case "histogram":
       return histogramModel(input, frame, content);
     case "density":
       return densityModel(input, frame, content);
     case "candles":
-      return candleModel(input, frame, content);
+      return withPanes(input, frame, content.candles, (i) => candleModel(i, frame, content));
   }
+}
+
+/** A pane's spec with its place and its values' range. */
+interface PlacedPane {
+  readonly spec: PaneSpec;
+  readonly box: Rect;
+  readonly domain: readonly [number, number];
+}
+
+/**
+ * Stacks the chart's indicator panes under its price: the price is built in the height left over, with a left gutter
+ * wide enough for every pane's labels, so the axes line up, and each pane shares its x scale.
+ */
+function withPanes(input: ModelInput, frame: ChartFrameData, candles: CandleData | null, build: (input: ModelInput) => ChartModel): ChartModel {
+  const specs = paneSpecs(input.chart);
+  if (specs.length === 0) {
+    return build(input);
+  }
+  const available = input.height - PAD - X_AXIS;
+  const height = paneHeight(specs.length, available);
+  // Fit each pane's range from a first build, whose styles say which lines go in which pane.
+  const first = build({ ...input, height: input.height - specs.length * (height + PANE_GAP) });
+  const placed = specs.map((spec, pane): PlacedPane => {
+    const values = paneValues(frame.indicators, first.indicators, pane, candles, spec);
+    return { spec, box: { x: 0, y: 0, w: 0, h: height }, domain: paneDomain(spec, values, height) };
+  });
+  const labels = placed.flatMap((p) => paneScale(p.domain, p.box).ticks);
+  const main = build({ ...input, height: input.height - specs.length * (height + PANE_GAP), minGutter: gutter(input, labels) });
+  const x = main.x;
+  if (x === null) {
+    return main;
+  }
+  let top = main.plot.y + main.plot.h;
+  const panes = placed.map((p, index): Pane => {
+    top += PANE_GAP;
+    const box = { x: main.plot.x, y: top, w: main.plot.w, h: height };
+    top += height;
+    return paneOf(input, frame, main, candles, { ...p, box }, index, x);
+  });
+  return { ...main, height: input.height, panes };
+}
+
+/** One pane's axis, guides and marks. */
+function paneOf(input: ModelInput, frame: ChartFrameData, main: ChartModel, candles: CandleData | null, placed: PlacedPane, index: number, x: Scale): Pane {
+  const { scale, ticks } = paneScale(placed.domain, placed.box);
+  const marks: Mark[] = placed.spec.volume && candles !== null ? volumeMarks(input, candles, x, scale) : [];
+  frame.indicators.forEach((line, i) => {
+    const style = main.indicators[i];
+    if (style?.pane !== index) {
+      return;
+    }
+    if (style.columns) {
+      marks.push(...signedColumns(input, line.x, line.y, x, scale));
+      return;
+    }
+    const segments = segmentsOf(line.x, line.y, x, scale);
+    if (segments.length > 0) {
+      marks.push({ kind: "line", color: style.color, segments, baseline: null, width: 1.5, dashed: false });
+    }
+  });
+  return { title: placed.spec.title, plot: placed.box, axis: { side: "left", scale, ticks }, marks, guides: placed.spec.guides.map((g) => scale.map(g)) };
+}
+
+/** Columns from zero, up in the up colour and down in the down colour, a pixel wide, as for MACD's histogram. */
+function signedColumns(input: ModelInput, xs: Float64Array, ys: Float64Array, x: Scale, y: Scale): Mark[] {
+  const zero = y.map(0);
+  const [up, down]: [number[], number[]] = [[], []];
+  for (let i = 0; i < xs.length; i += 1) {
+    const v = ys[i] ?? Number.NaN;
+    if (Number.isFinite(v)) {
+      const top = y.map(v);
+      (v >= 0 ? up : down).push(x.map(xs[i] ?? 0) - 0.5, Math.min(top, zero), 1, Math.abs(zero - top));
+    }
+  }
+  return [
+    { kind: "columns", color: input.colors.up, rects: Float64Array.from(up) },
+    { kind: "columns", color: input.colors.down, rects: Float64Array.from(down) }
+  ];
+}
+
+/** Each candle's volume, as wide as the candle, in its direction's colour. */
+function volumeMarks(input: ModelInput, c: CandleData, x: Scale, y: Scale): Mark[] {
+  const volume = c.volume;
+  if (volume === null) {
+    return [];
+  }
+  const zero = y.map(0);
+  const [up, down]: [number[], number[]] = [[], []];
+  for (let i = 0; i < volume.length; i += 1) {
+    const v = volume[i] ?? Number.NaN;
+    if (!Number.isFinite(v)) {
+      continue;
+    }
+    const [from, to] = [x.map(c.from[i] ?? 0), x.map(c.to[i] ?? 0)];
+    const width = Math.max(1, Math.min(MAX_BAR, (to - from) * 0.7));
+    const top = y.map(v);
+    const rising = (c.close[i] ?? 0) >= (c.open[i] ?? 0);
+    (rising ? up : down).push((from + to) / 2 - width / 2, top, width, Math.max(0, zero - top));
+  }
+  return [
+    { kind: "columns", color: input.colors.up, rects: Float64Array.from(up) },
+    { kind: "columns", color: input.colors.down, rects: Float64Array.from(down) }
+  ];
 }
 
 const KIND_NAMES: Readonly<Record<LayoutChart["kind"], string>> = {

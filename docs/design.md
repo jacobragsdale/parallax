@@ -368,6 +368,16 @@ engine places the axis's ticks and writes their labels, because only it can
 map trading time back to dates; a tick that falls on a closed moment moves to
 where the market next opens and takes that moment's label.
 
+Averages, Bollinger Bands and VWAP are drawn over the price, and widen its
+scale to hold them; RSI, MACD, ATR, the stochastic and volume each get a pane
+under it, on the same x axis, so zooming, panning, the crosshair and a brush
+cover every pane at once. Oscillator panes run from 0 to 100 with their usual
+guides, MACD's histogram and volume bars take the up and down colours, and
+overlays take the palette's slots after the plotted series, so an average never
+shares a price's colour. The tooltip lists each indicator line's value at the
+crosshair: on a candle, at the last row of its bucket, the one its close comes
+from, and under that row's own date when it differs from the crosshair's.
+
 A candle at either edge of the visible range keeps its whole bucket, so panning
 never changes its prices, and each price comes from a row that has one. Minute
 buckets are cut by each instant's own offset, so the repeated autumn hour gets

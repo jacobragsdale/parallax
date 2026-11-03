@@ -34,7 +34,7 @@ function card(id: string, title: string, layout: LayoutInput, linked = false): C
   imports: [ChartComponent, GridComponent],
   template: `
     @for (c of cards; track c.id) {
-      <section [attr.data-card]="c.id">
+      <section [attr.data-card]="c.id" [class.wide]="c.id === 'technical'">
         <h2>{{ c.title }}</h2>
         <px-chart [(layout)]="c.layout" [theme]="theme()" (brushed)="brush(c, $event)" />
       </section>
@@ -56,6 +56,10 @@ function card(id: string, title: string, layout: LayoutInput, linked = false): C
       overflow: auto;
       height: 100%;
       box-sizing: border-box;
+    }
+    section.wide {
+      grid-column: 1 / -1;
+      grid-row: span 2;
     }
     section {
       display: flex;
@@ -98,6 +102,21 @@ export class ChartsComponent {
   }
 
   protected readonly cards: readonly Card[] = [
+    card("technical", "QYE since 2025: SMA 50 and Bollinger Bands over the candles, RSI, MACD and volume below", {
+      dataset: "prices",
+      filters: [
+        { column: "ticker", op: "eq", value: "QYE" },
+        { column: "date", op: "ge", value: "2025-01-01" }
+      ],
+      chart: {
+        kind: "candlestick",
+        x: "date",
+        axis: "trading",
+        ohlc: { open: "open", high: "high", low: "low", close: "close" },
+        volume: "volume",
+        indicators: [{ kind: "sma", period: 50 }, { kind: "bollinger" }, { kind: "rsi" }, { kind: "macd" }, { kind: "volume" }]
+      }
+    }),
     card("closes-log", "Closing prices on trading days, log scale", {
       dataset: "prices",
       filters: [{ column: "ticker", op: "in", values: THREE }],

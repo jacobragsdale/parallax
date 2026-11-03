@@ -42,12 +42,18 @@ export function nearestIndex(xs: Float64Array, x: number): number {
 }
 
 /** Whether point `i` of `s` is drawn, rather than a break between segments. */
-function drawn(s: SeriesData, i: number): boolean {
+/** A line with text per point: a series or an indicator's line. */
+interface Points {
+  readonly x: Float64Array;
+  readonly yText: readonly (string | null)[];
+}
+
+function drawn(s: Points, i: number): boolean {
   return (s.yText[i] ?? null) !== null;
 }
 
 /** The index of the drawn point of `s` nearest `x`, skipping breaks, or -1 if there is none. */
-export function nearestDrawn(s: SeriesData, x: number): number {
+export function nearestDrawn(s: Points, x: number): number {
   const i = nearestIndex(s.x, x);
   if (i < 0) {
     return -1;
@@ -130,6 +136,8 @@ function distanceTo(mark: Mark, px: number, py: number): number | null {
       return inside ? Math.hypot(px - (r.x + r.w / 2), py - (r.y + r.h / 2)) : null;
     }
     case "line":
+    case "band":
+    case "columns":
       return null;
   }
 }
@@ -144,6 +152,8 @@ function readMark(mark: Mark): Reading | null {
     case "cell":
       return mark.hit === null ? null : { title: mark.hit.title, rows: rows(mark.hit, mark.color), crosshair: null };
     case "line":
+    case "band":
+    case "columns":
       return null;
   }
 }
@@ -162,6 +172,66 @@ export function markAt(model: ChartModel, px: number, py: number): Reading | nul
     }
   }
   return best === null ? null : readMark(best.mark);
+}
+
+/**
+ * Each indicator line's value at axis position `x`: its drawn point nearest `x`, within a few pixels, under its own x
+ * when that differs from the crosshair's, as for series. Hidden overlays read nothing.
+ */
+export function indicatorRows(frame: ChartFrameData, model: ChartModel, hidden: readonly string[], x: number): TipRow[] {
+  const scale = model.x;
+  if (scale === null) {
+    return [];
+  }
+  // On a candle, each indicator reads the last row inside the candle's bucket, the one its close comes from.
+  const bucket = bucketAt(frame, x);
+  return frame.indicators.flatMap((line, i): TipRow[] => {
+    const style = model.indicators[i];
+    if (style === undefined || hidden.includes(style.group)) {
+      return [];
+    }
+    const at = bucket === null ? nearestDrawn(line, x) : lastDrawnIn(line, bucket);
+    if (bucket !== null) {
+      const [near, value] = [line.x[at], line.yText[at]];
+      return near === undefined || value === null || value === undefined ? [] : [{ value, label: `${style.label}, ${line.xText[at] ?? ""}`, color: style.color }];
+    }
+    const [near, value] = [line.x[at], line.yText[at]];
+    if (near === undefined || value === null || value === undefined || Math.abs(scale.map(near) - scale.map(x)) > NEAR) {
+      return [];
+    }
+    const label = Math.abs(scale.map(near) - scale.map(x)) < 0.5 ? style.label : `${style.label}, ${line.xText[at] ?? ""}`;
+    return [{ value, label, color: style.color }];
+  });
+}
+
+/** The bucket of the candle at axis position `x`, as its start and the next one's, or null on a chart without candles. */
+function bucketAt(frame: ChartFrameData, x: number): Range | null {
+  if (frame.content.kind !== "candles") {
+    return null;
+  }
+  const c = frame.content.candles;
+  const i = nearestIndex(c.from, x);
+  const [from, to] = [c.from[i], c.to[i]];
+  return from === undefined || to === undefined ? null : [from, to];
+}
+
+/** The index of the last drawn point of `line` inside `[from, to)`, or -1 if none is. */
+function lastDrawnIn(line: Points, [from, to]: Range): number {
+  // The first point at or past `to`, by bisection; the one before it is the last inside.
+  let [low, high] = [0, line.x.length];
+  while (low < high) {
+    const mid = (low + high) >> 1;
+    if ((line.x[mid] ?? 0) < to) {
+      low = mid + 1;
+    } else {
+      high = mid;
+    }
+  }
+  let i = low - 1;
+  while (i >= 0 && !drawn(line, i)) {
+    i -= 1;
+  }
+  return i >= 0 && (line.x[i] ?? Number.NaN) >= from ? i : -1;
 }
 
 /** An x range in axis positions. */

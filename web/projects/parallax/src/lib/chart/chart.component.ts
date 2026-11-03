@@ -36,9 +36,9 @@ import { ChartLegendComponent, ChartTipComponent } from "./chart-parts.component
 import type { PlacedReading } from "./chart-parts.component";
 import { chartSource } from "./chart-source";
 import type { PlotSize } from "./chart-source";
-import { brushFilters, markAt, panRange, readSeries, zoomRange } from "./interaction";
+import { brushFilters, indicatorRows, markAt, panRange, readSeries, zoomRange } from "./interaction";
 import type { Range, Reading } from "./interaction";
-import { chartModel, describeChart } from "./model";
+import { chartModel, describeChart, plotBottom } from "./model";
 import type { ChartModel } from "./model";
 import { paintChart } from "./paint";
 import { ChartSync } from "./sync";
@@ -389,9 +389,14 @@ export class ChartComponent {
       return hover === null ? null : markAt(model, hover.x, hover.y);
     }
     const frame = this.source.frame();
-    if (frame?.content.kind === "series") {
-      return readSeries(frame, model, this.current()?.chart?.hidden ?? [], x);
-    }
+    const hidden = this.current()?.chart?.hidden ?? [];
+    const reading = frame?.content.kind === "series" ? readSeries(frame, model, hidden, x) : this.markReading(model, x);
+    // Indicators read at the crosshair too, under the price's rows.
+    return reading === null || frame === null ? reading : { ...reading, rows: [...reading.rows, ...indicatorRows(frame, model, hidden, x)] };
+  }
+
+  /** The candle or other mark at axis position `x`, at the pointer's height or the plot's middle. */
+  private markReading(model: ChartModel, x: number): Reading | null {
     return model.x === null ? null : markAt(model, model.x.map(x), this.hover()?.y ?? model.plot.y + model.plot.h / 2);
   }
 
@@ -408,7 +413,7 @@ export class ChartComponent {
     // Beside the crosshair or pointer, flipped near the right edge.
     const anchor = reading.crosshair ?? this.hover()?.x ?? 0;
     const left = anchor + 12 + TIP_WIDTH > model.width ? Math.max(0, anchor - 12 - TIP_WIDTH) : anchor + 12;
-    return { ...reading, top: model.plot.y, height: model.plot.h, left, tipTop: model.plot.y + 4 };
+    return { ...reading, top: model.plot.y, height: plotBottom(model) - model.plot.y, left, tipTop: model.plot.y + 4 };
   });
 
   /** The brushed range on screen. */
@@ -422,7 +427,7 @@ export class ChartComponent {
     const [a, b] = [x.map(brush[0]), x.map(brush[1])];
     const left = Math.max(model.plot.x, Math.min(a, b));
     const right = Math.min(model.plot.x + model.plot.w, Math.max(a, b));
-    return { left, width: Math.max(0, right - left), top: model.plot.y, height: model.plot.h };
+    return { left, width: Math.max(0, right - left), top: model.plot.y, height: plotBottom(model) - model.plot.y };
   });
 
   constructor() {

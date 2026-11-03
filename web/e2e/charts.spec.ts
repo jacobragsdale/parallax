@@ -24,9 +24,14 @@ async function inked(canvas: Locator): Promise<number> {
   });
 }
 
+/** The chart of a demo card, by the card's id. */
+function card(page: Page, id: string): Locator {
+  return page.locator(`section[data-card="${id}"] px-chart`);
+}
+
 async function open(page: Page): Promise<void> {
   await page.goto("/?preset=charts");
-  await expect(page.locator("px-chart")).toHaveCount(10);
+  await expect(page.locator("px-chart")).toHaveCount(11);
   // Every chart has drawn its data once its status bar says what it shows.
   await expect(page.locator("px-chart .px-status-rows").filter({ hasText: "loading" })).toHaveCount(0, { timeout: 60_000 });
 }
@@ -37,6 +42,7 @@ test("every chart kind draws its data, with an accessible name and no errors", a
   await open(page);
   const names = await page.locator("px-chart canvas").evaluateAll((canvases) => canvases.map((c) => c.getAttribute("aria-label") ?? ""));
   const kinds = [
+    "Candlestick chart of date",
     "Line chart of close by ticker",
     "Candlestick chart of date",
     "Line chart of close, volume",
@@ -54,13 +60,13 @@ test("every chart kind draws its data, with an accessible name and no errors", a
     expect(await inked(canvas)).toBeGreaterThan(5_000);
   }
   await expect(page.locator("px-chart .px-error")).toHaveCount(0);
-  await expect(page.locator("px-chart").first().locator(".px-status-where")).toHaveText("in browser");
+  await expect(card(page, "closes-log").locator(".px-status-where")).toHaveText("in browser");
   expect(errors).toEqual([]);
 });
 
 test("the legend hides a series and shows it again, keeping the others' colours", async ({ page }) => {
   await open(page);
-  const chart = page.locator("px-chart").first();
+  const chart = card(page, "closes-log");
   const entries = chart.locator(".px-legend-entry");
   await expect(entries).toHaveCount(3);
   const colours = (): Promise<string[]> => entries.locator(".px-legend-key").evaluateAll((keys) => keys.map((k) => getComputedStyle(k).backgroundColor));
@@ -77,6 +83,8 @@ test("the legend hides a series and shows it again, keeping the others' colours"
 
 /** The middle of a chart's plot, in page pixels. */
 async function centre(plot: Locator): Promise<{ readonly x: number; readonly y: number; readonly width: number }> {
+  // Mouse coordinates are the viewport's: the plot must be in it.
+  await plot.scrollIntoViewIfNeeded();
   const box = await plot.boundingBox();
   if (box === null) {
     throw new Error("the plot is not on the page");
@@ -86,7 +94,7 @@ async function centre(plot: Locator): Promise<{ readonly x: number; readonly y: 
 
 test("hovering a line reads every ticker at the nearest day, and the candles follow the crosshair", async ({ page }) => {
   await open(page);
-  const [line, candles] = [page.locator("px-chart").nth(0), page.locator("px-chart").nth(1)];
+  const [line, candles] = [card(page, "closes-log"), card(page, "candles")];
   const at = await centre(line.locator(".px-chart-plot"));
   await page.mouse.move(at.x, at.y);
   const tip = line.locator(".px-chart-tip");
@@ -106,7 +114,7 @@ test("hovering a line reads every ticker at the nearest day, and the candles fol
 
 test("the wheel zooms, dragging pans, and a double-click or 0 shows everything", async ({ page }) => {
   await open(page);
-  const candles = page.locator("px-chart").nth(1);
+  const candles = card(page, "candles");
   const plot = candles.locator(".px-chart-plot");
   const status = candles.locator(".px-status-rows");
   await expect(status).not.toContainText("zoomed");
@@ -139,7 +147,7 @@ test("the wheel zooms, dragging pans, and a double-click or 0 shows everything",
 
 test("Shift and drag on the candles lists the selected days in the grid, and Escape lists them all again", async ({ page }) => {
   await open(page);
-  const candles = page.locator("px-chart").nth(1);
+  const candles = card(page, "candles");
   const grid = page.locator("section").filter({ has: page.locator("px-grid") });
   const rows = grid.locator(".px-status-rows");
   await expect(rows).toHaveText(/^[\d,]+ rows$/);
@@ -160,4 +168,23 @@ test("Shift and drag on the candles lists the selected days in the grid, and Esc
   await candles.locator(".px-chart-plot").press("Escape");
   await expect(candles.locator(".px-chart-brush")).toHaveCount(0);
   await expect.poll(count).toBe(all);
+});
+
+test("the technical card stacks RSI, MACD and volume under the candles, and its tooltip reads every indicator", async ({ page }) => {
+  await open(page);
+  const chart = card(page, "technical");
+  await expect(chart.locator(".px-legend-entry")).toHaveText(["SMA 50", "BB 20 2"]);
+  // Panes add their own inked area under the price.
+  expect(await inked(chart.locator("canvas"))).toBeGreaterThan(40_000);
+  const at = await centre(chart.locator(".px-chart-plot"));
+  await page.mouse.move(at.x, at.y);
+  const tip = chart.locator(".px-chart-tip");
+  await expect(tip.locator(".px-tip-title")).toHaveText(/^Week of \d{4}-\d{2}-\d{2}$/);
+  // The candle's prices and volume, then every indicator line.
+  const labels = (await tip.locator(".px-tip-row span:last-child").allTextContents()).map((l) => l.replace(/, \d{4}-\d{2}-\d{2}$/, ""));
+  expect(labels).toEqual(["Open", "High", "Low", "Close", "Volume", "SMA 50", "BB 20 2 upper", "BB 20 2 middle", "BB 20 2 lower", "RSI 14", "MACD", "Signal", "Histogram"]);
+  // Hiding the bands takes them out of the tooltip too.
+  await chart.locator(".px-legend-entry").filter({ hasText: "BB 20 2" }).click();
+  await page.mouse.move(at.x + 1, at.y);
+  await expect(tip.locator(".px-tip-row")).toHaveCount(10);
 });

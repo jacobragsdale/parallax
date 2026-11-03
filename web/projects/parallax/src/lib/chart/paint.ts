@@ -5,7 +5,8 @@
  */
 
 import type { Theme } from "../theme";
-import type { ChartModel, Mark, Rect } from "./model";
+import { plotBottom } from "./model";
+import type { ChartModel, Mark, Pane, Rect, ValueAxis } from "./model";
 
 /** The data end of a bar or column is rounded; its baseline stays square. */
 const RADIUS = 4;
@@ -57,10 +58,10 @@ class Painter {
     ctx.globalAlpha = 1;
   }
 
-  private stroke(segment: Float64Array, color: string): void {
+  private stroke(segment: Float64Array, color: string, width = 2): void {
     const ctx = this.ctx;
     ctx.strokeStyle = color;
-    ctx.lineWidth = 2;
+    ctx.lineWidth = width;
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
     ctx.beginPath();
@@ -76,13 +77,39 @@ class Painter {
   }
 
   private line(mark: Extract<Mark, { kind: "line" }>): void {
+    this.ctx.setLineDash(mark.dashed ? [4, 3] : []);
     for (const segment of mark.segments) {
       if (mark.baseline !== null && segment.length >= 4) {
         this.area(segment, mark.baseline, mark.color);
       }
       if (segment.length >= 2) {
-        this.stroke(segment, mark.color);
+        this.stroke(segment, mark.color, mark.width);
       }
+    }
+    this.ctx.setLineDash([]);
+  }
+
+  /** The wash between two lines: along the upper one and back along the lower one. */
+  private band(mark: Extract<Mark, { kind: "band" }>): void {
+    const ctx = this.ctx;
+    ctx.globalAlpha = 0.1;
+    ctx.fillStyle = mark.color;
+    ctx.beginPath();
+    for (let i = 0; i < mark.upper.length; i += 2) {
+      ctx.lineTo(mark.upper[i] ?? 0, mark.upper[i + 1] ?? 0);
+    }
+    for (let i = mark.lower.length - 2; i >= 0; i -= 2) {
+      ctx.lineTo(mark.lower[i] ?? 0, mark.lower[i + 1] ?? 0);
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
+  private columns(mark: Extract<Mark, { kind: "columns" }>): void {
+    this.ctx.fillStyle = mark.color;
+    for (let i = 0; i + 3 < mark.rects.length; i += 4) {
+      this.ctx.fillRect(mark.rects[i] ?? 0, mark.rects[i + 1] ?? 0, mark.rects[i + 2] ?? 0, mark.rects[i + 3] ?? 0);
     }
   }
 
@@ -132,6 +159,12 @@ class Painter {
       case "candle":
         this.candle(mark);
         return;
+      case "band":
+        this.band(mark);
+        return;
+      case "columns":
+        this.columns(mark);
+        return;
     }
   }
 
@@ -146,7 +179,7 @@ class Painter {
       if (tick.px - half < lastRight + 6 || tick.px - half < 0 || tick.px + half > model.width) {
         continue;
       }
-      ctx.fillText(tick.label, tick.px, model.plot.y + model.plot.h + 6);
+      ctx.fillText(tick.label, tick.px, plotBottom(model) + 6);
       lastRight = tick.px + half;
     }
   }
@@ -172,18 +205,62 @@ class Painter {
     }
     ctx.textBaseline = "middle";
     for (const yAxis of model.yAxes) {
-      ctx.textAlign = yAxis.side === "left" ? "right" : "left";
-      const x = yAxis.side === "left" ? plot.x - 6 : plot.x + plot.w + 6;
-      for (const tick of yAxis.ticks) {
-        ctx.fillText(tick.label, x, tick.px);
-      }
+      this.labels(yAxis, plot);
     }
     ctx.textAlign = "right";
     for (const label of model.yLabels) {
       ctx.fillText(label.label, plot.x - 6, label.px);
     }
+    for (const pane of model.panes) {
+      this.paneAxes(pane);
+    }
     this.xLabels(model);
-    this.horizontal(plot.y + plot.h, plot.x, plot.x + plot.w);
+    this.horizontal(plotBottom(model), plot.x, plot.x + plot.w);
+  }
+
+  private labels(yAxis: ValueAxis, plot: Rect): void {
+    const ctx = this.ctx;
+    ctx.textAlign = yAxis.side === "left" ? "right" : "left";
+    const x = yAxis.side === "left" ? plot.x - 6 : plot.x + plot.w + 6;
+    for (const tick of yAxis.ticks) {
+      ctx.fillText(tick.label, x, tick.px);
+    }
+  }
+
+  /** A pane's separator, gridlines, guides, value labels and title. */
+  private paneAxes(pane: Pane): void {
+    const ctx = this.ctx;
+    const { plot } = pane;
+    ctx.strokeStyle = this.theme.gridLine;
+    ctx.lineWidth = 1;
+    this.horizontal(plot.y - 5, 0, plot.x + plot.w);
+    for (const tick of pane.axis.ticks) {
+      this.horizontal(tick.px, plot.x, plot.x + plot.w);
+    }
+    ctx.setLineDash([3, 3]);
+    ctx.strokeStyle = this.theme.muted;
+    for (const guide of pane.guides) {
+      this.horizontal(guide, plot.x, plot.x + plot.w);
+    }
+    ctx.setLineDash([]);
+    ctx.fillStyle = this.theme.muted;
+    ctx.textBaseline = "middle";
+    this.labels(pane.axis, plot);
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillText(pane.title, plot.x + 4, plot.y + 2);
+  }
+
+  private clipped(rect: Rect, marks: readonly Mark[]): void {
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(rect.x, rect.y - 1, rect.w, rect.h + 2);
+    ctx.clip();
+    for (const mark of marks) {
+      this.mark(mark);
+    }
+    ctx.restore();
   }
 
   public paint(model: ChartModel): void {
@@ -199,14 +276,10 @@ class Painter {
       return;
     }
     this.axes(model);
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(model.plot.x, model.plot.y - 1, model.plot.w, model.plot.h + 2);
-    ctx.clip();
-    for (const mark of model.marks) {
-      this.mark(mark);
+    this.clipped(model.plot, model.marks);
+    for (const pane of model.panes) {
+      this.clipped(pane.plot, pane.marks);
     }
-    ctx.restore();
   }
 }
 
