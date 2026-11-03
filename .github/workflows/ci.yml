@@ -44,6 +44,30 @@ jobs:
           sudo install -m 755 "wasm-bindgen-${version}-x86_64-unknown-linux-musl/wasm-bindgen-test-runner" /usr/local/bin/
       - run: cargo test -p parallax-wasm --target wasm32-unknown-unknown --locked
 
+  web:
+    name: Web (lint, format, unit tests, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      # The generated protocol code must match proto/parallax.proto.
+      - run: pnpm generate && git diff --exit-code -- projects/parallax/src/lib/proto
+      - run: pnpm lint
+      - run: pnpm format:check
+      - run: pnpm test
+      - run: pnpm build
+
   dependencies:
     name: Dependency licences and advisories
     runs-on: ubuntu-latest

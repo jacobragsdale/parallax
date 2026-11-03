@@ -1,0 +1,23 @@
+# The grid experiment: the demo app served next to generated datasets.
+#   cargo run --release -p parallax-server -- --config examples/experiment.toml
+# The row counts fit a memory-constrained build host; grid drawing cost depends on
+# the visible window, not on the table size.
+
+listen = "127.0.0.1:8791"
+static_dir = "web/dist/demo/browser"
+
+[[dataset]]
+name = "positions"
+primary_key = "position_id"
+[dataset.source]
+kind = "generator"
+dataset = "positions"
+rows = 200000
+
+[[dataset]]
+name = "trades"
+primary_key = "trade_id"
+[dataset.source]
+kind = "generator"
+dataset = "trades"
+rows = 1000000

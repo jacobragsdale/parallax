@@ -1,0 +1,11 @@
+# Generates the TypeScript protocol code from proto/parallax.proto, the same file
+# the Rust crates compile. Run `pnpm generate`.
+version: v2
+inputs:
+  - directory: ../proto
+plugins:
+  - local: protoc-gen-es
+    out: projects/parallax/src/lib/proto
+    opt:
+      - target=ts
+      - import_extension=none

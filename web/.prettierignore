@@ -1,0 +1,8 @@
+dist
+.angular
+coverage
+node_modules
+pnpm-lock.yaml
+projects/parallax/src/lib/proto
+test-results
+playwright-report

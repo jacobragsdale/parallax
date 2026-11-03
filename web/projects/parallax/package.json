@@ -1,0 +1,14 @@
+{
+  "name": "@jacobragsdale/parallax",
+  "version": "0.0.1",
+  "peerDependencies": {
+    "@angular/common": "^22.2.0",
+    "@angular/core": "^22.2.0"
+  },
+  "dependencies": {
+    "tslib": "^2.3.0"
+  },
+  "sideEffects": false,
+  "description": "Angular grid, pivot and chart components for parallax",
+  "license": "Apache-2.0"
+}

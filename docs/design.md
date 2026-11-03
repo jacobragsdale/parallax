@@ -306,11 +306,13 @@ Renderers, hit-testing and interaction are TypeScript inside the Angular
 library. Drawing from Rust would cross the WebAssembly boundary on every text
 call and make theming harder.
 
-The grid could draw on a canvas or as a virtualized DOM, which is Perspective's
-choice. Measurement decides. Both versions render the same 20-million-row
-server view in Chromium with the GPU disabled and the CPU throttled four
-times. Canvas is expected to win on frame time. DOM brings native text
-selection and accessibility. Screen-reader support isn't a first-milestone
+The grid draws on a canvas too. A virtualized DOM grid, Perspective's choice, was
+measured against it on the same views in Chromium with the GPU disabled and the
+CPU throttled four times. The DOM grid spent 1.5 to 2.7 times as much main-thread
+time per frame, and dropped to 30 to 40 frames per second where the canvas grid
+held about 60. [The grid experiment](grid-experiment.md) has the method and the
+numbers. The DOM grid brings native text selection and accessibility, which the
+canvas grid provides separately; screen-reader support isn't a first-milestone
 requirement.
 
 ## The wire protocol

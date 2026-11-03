@@ -1,0 +1,50 @@
+{
+  "name": "parallax-web",
+  "version": "0.0.0",
+  "scripts": {
+    "ng": "ng",
+    "generate": "buf generate",
+    "build": "ng build parallax && ng build demo",
+    "build:demo": "ng build demo",
+    "lint": "eslint . --max-warnings 0",
+    "format": "prettier . --write",
+    "format:check": "prettier . --check",
+    "test": "ng test parallax --watch=false",
+    "e2e": "playwright test -c e2e/playwright.config.ts",
+    "experiment": "playwright test -c e2e/playwright.config.ts grid-experiment"
+  },
+  "private": true,
+  "packageManager": "pnpm@12.11.2",
+  "dependencies": {
+    "@angular/common": "^22.2.0",
+    "@angular/compiler": "^22.2.0",
+    "@angular/core": "^22.2.0",
+    "@angular/forms": "^22.2.0",
+    "@angular/platform-browser": "^22.2.0",
+    "@angular/router": "^22.2.0",
+    "@bufbuild/protobuf": "^2.16.0",
+    "apache-arrow": "^21.2.0",
+    "rxjs": "~7.8.0",
+    "tslib": "^2.3.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@angular/build": "^22.2.5",
+    "@angular/cli": "^22.2.5",
+    "@angular/compiler-cli": "^22.2.0",
+    "@bufbuild/buf": "^1.75.0",
+    "@bufbuild/protoc-gen-es": "^2.16.0",
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.64.1",
+    "@types/node": "^26.6.6",
+    "angular-eslint": "^22.6.0",
+    "eslint": "^10.14.0",
+    "eslint-config-prettier": "^10.1.8",
+    "jsdom": "^30.0.0",
+    "ng-packagr": "^22.2.0",
+    "prettier": "^3.9.10",
+    "typescript": "~6.0.2",
+    "typescript-eslint": "^8.72.1",
+    "vitest": "^5.0.0"
+  }
+}
