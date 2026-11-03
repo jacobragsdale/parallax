@@ -206,7 +206,9 @@ message SetChartWindow {
 // - histogram: series, from, to, count, from_text and to_text, one row per bin;
 // - candlestick and OHLC: from, to, open, high, low, close and their texts,
 //   x_text for the bucket's start, and x_json and end_json, the bucket's start
-//   and the next bucket's start as exact JSON, one row per bucket.
+//   and the next bucket's start as exact JSON, one row per bucket; with a
+//   volume indicator, also volume (NaN for none or an overflow) and
+//   volume_text (null for none, "overflow" for a total too large to hold).
 message ChartFrame {
   uint32 view_id = 1;
   uint64 config_version = 2;
@@ -232,6 +234,26 @@ message ChartFrame {
   // stay within. It equals x_from and x_to when the window names no range.
   double extent_from = 16;
   double extent_to = 17;
+  // The indicators' lines, each for one series, and their points in
+  // indicator_batch.
+  repeated ChartIndicatorLine indicator_lines = 18;
+  // One Arrow IPC stream holding one record batch: one row per kept point of each
+  // indicator line, line by line, with columns line (the index in
+  // indicator_lines), x, y (NaN at a break), x_text (null at a break) and y_text.
+  // Empty without indicators.
+  bytes indicator_batch = 19;
+}
+
+// One line of an indicator, for one series.
+message ChartIndicatorLine {
+  // The indicator, by index in the layout's chart indicators.
+  uint32 indicator = 1;
+  // Which of its lines: "sma", "ema", "wma", "upper", "middle", "lower", "rsi",
+  // "macd", "signal", "histogram", "atr", "k", "d" or "vwap".
+  string line = 2;
+  // The series column's value it follows, as text, or empty without a series
+  // column.
+  string series = 3;
 }
 
 // A labelled tick on a chart's x axis.

@@ -17,7 +17,7 @@ function chart(partial: Partial<LayoutChart> & Pick<LayoutChart, "kind">): Layou
 }
 
 function frame(content: ChartContent, xFrom = 0, xTo = 10): ChartFrameData {
-  return { viewId: 1, configVersion: 0n, loadVersion: 1n, sourceAsOfMicros: 0n, pushed: false, xFrom, xTo, extentFrom: xFrom, extentTo: xTo, ticks: [], content };
+  return { viewId: 1, configVersion: 0n, loadVersion: 1n, sourceAsOfMicros: 0n, pushed: false, xFrom, xTo, extentFrom: xFrom, extentTo: xTo, ticks: [], content, indicators: [] };
 }
 
 function model(c: LayoutChart, f: ChartFrameData): ChartModel {
@@ -51,6 +51,8 @@ const CANDLES: CandleData = {
   highText: ["13", "13", "12"],
   lowText: ["9", "10", "10"],
   closeText: ["12", "10", "11.5"],
+  volume: null,
+  volumeText: null,
   xJson: ['"2024-01-01"', '"2024-01-02"', '"2024-01-03"'],
   endJson: ['"2024-01-02"', '"2024-01-03"', '"2024-01-04"']
 };

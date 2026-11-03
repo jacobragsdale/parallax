@@ -179,6 +179,7 @@
         "volume AAPL"
       ],
       "horizontal": true,
+      "indicators": [],
       "kind": "line",
       "log_y": true,
       "ohlc": null,
@@ -188,6 +189,7 @@
       },
       "series": "ticker",
       "stacked": true,
+      "volume": null,
       "x": "date",
       "y": [
         "close"
@@ -221,6 +223,51 @@
       "axis": "value",
       "hidden": [],
       "horizontal": false,
+      "indicators": [
+        {
+          "kind": "sma",
+          "period": 20
+        },
+        {
+          "deviations": 1.5,
+          "kind": "bollinger",
+          "period": 10
+        },
+        {
+          "kind": "rsi",
+          "period": 14
+        },
+        {
+          "fast": 5,
+          "kind": "macd",
+          "signal": 5,
+          "slow": 35
+        },
+        {
+          "kind": "atr",
+          "period": 14
+        },
+        {
+          "d": 3,
+          "k": 9,
+          "k_smooth": 3,
+          "kind": "stochastic"
+        },
+        {
+          "kind": "vwap"
+        },
+        {
+          "kind": "volume"
+        },
+        {
+          "kind": "ema",
+          "period": 50
+        },
+        {
+          "kind": "wma",
+          "period": 20
+        }
+      ],
       "kind": "candlestick",
       "log_y": false,
       "ohlc": {
@@ -232,6 +279,7 @@
       "range": null,
       "series": null,
       "stacked": false,
+      "volume": "volume",
       "x": "date",
       "y": [],
       "y_right": []
@@ -268,12 +316,14 @@
       "axis": "value",
       "hidden": [],
       "horizontal": false,
+      "indicators": [],
       "kind": "bar",
       "log_y": false,
       "ohlc": null,
       "range": null,
       "series": null,
       "stacked": false,
+      "volume": null,
       "x": "",
       "y": [],
       "y_right": []

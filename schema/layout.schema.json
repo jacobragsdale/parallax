@@ -287,6 +287,14 @@
           "description": "Bars running across instead of up.",
           "type": "boolean"
         },
+        "indicators": {
+          "default": [],
+          "description": "Technical-analysis indicators, computed over every row before the chart\nis reduced.",
+          "items": {
+            "$ref": "#/$defs/LayoutIndicator"
+          },
+          "type": "array"
+        },
         "kind": {
           "$ref": "#/$defs/ChartKindName",
           "description": "What it draws."
@@ -332,6 +340,14 @@
           "default": false,
           "description": "Bars of one group stacked instead of side by side.",
           "type": "boolean"
+        },
+        "volume": {
+          "default": null,
+          "description": "The volume column, which a VWAP and volume read.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "x": {
           "default": "",
@@ -513,6 +529,241 @@
         "value"
       ],
       "type": "object"
+    },
+    "LayoutIndicator": {
+      "description": "A technical-analysis indicator, in a layout, with TA-Lib's usual defaults.\nAverages, bands and VWAP are drawn over the price; the others in panes of\ntheir own.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The simple moving average of the price.",
+          "properties": {
+            "kind": {
+              "const": "sma",
+              "type": "string"
+            },
+            "period": {
+              "default": 20,
+              "description": "Rows averaged.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The exponential moving average of the price.",
+          "properties": {
+            "kind": {
+              "const": "ema",
+              "type": "string"
+            },
+            "period": {
+              "default": 20,
+              "description": "Rows in the smoothing.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The weighted moving average of the price.",
+          "properties": {
+            "kind": {
+              "const": "wma",
+              "type": "string"
+            },
+            "period": {
+              "default": 20,
+              "description": "Rows averaged.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Bollinger Bands around the price's simple average.",
+          "properties": {
+            "deviations": {
+              "default": 2.0,
+              "description": "Standard deviations above and below.",
+              "format": "double",
+              "type": "number"
+            },
+            "kind": {
+              "const": "bollinger",
+              "type": "string"
+            },
+            "period": {
+              "default": 20,
+              "description": "Rows averaged.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The relative strength index of the price.",
+          "properties": {
+            "kind": {
+              "const": "rsi",
+              "type": "string"
+            },
+            "period": {
+              "default": 14,
+              "description": "Rows in Wilder's smoothing.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "MACD of the price.",
+          "properties": {
+            "fast": {
+              "default": 12,
+              "description": "Rows of the fast average.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "macd",
+              "type": "string"
+            },
+            "signal": {
+              "default": 9,
+              "description": "Rows of the signal line's average.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "slow": {
+              "default": 26,
+              "description": "Rows of the slow average.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The average true range.",
+          "properties": {
+            "kind": {
+              "const": "atr",
+              "type": "string"
+            },
+            "period": {
+              "default": 14,
+              "description": "Rows in Wilder's smoothing.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The slow stochastic oscillator.",
+          "properties": {
+            "d": {
+              "default": 3,
+              "description": "Rows %D averages %K over.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "k": {
+              "default": 14,
+              "description": "Rows whose range the close is placed in.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "k_smooth": {
+              "default": 3,
+              "description": "Rows %K is averaged over.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "stochastic",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The volume-weighted average price.",
+          "properties": {
+            "kind": {
+              "const": "vwap",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Volume, summed per candle.",
+          "properties": {
+            "kind": {
+              "const": "volume",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "LayoutMeasure": {
       "additionalProperties": false,

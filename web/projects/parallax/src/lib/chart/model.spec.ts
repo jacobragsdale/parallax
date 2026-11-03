@@ -16,7 +16,20 @@ function chart(partial: Partial<LayoutChart> & Pick<LayoutChart, "kind">): Layou
 }
 
 function frame(content: ChartContent): ChartFrameData {
-  return { viewId: 1, configVersion: 0n, loadVersion: 1n, sourceAsOfMicros: 0n, pushed: false, xFrom: 0, xTo: 10, extentFrom: 0, extentTo: 10, ticks: [{ x: 5, label: "Mid" }], content };
+  return {
+    viewId: 1,
+    configVersion: 0n,
+    loadVersion: 1n,
+    sourceAsOfMicros: 0n,
+    pushed: false,
+    xFrom: 0,
+    xTo: 10,
+    extentFrom: 0,
+    extentTo: 10,
+    ticks: [{ x: 5, label: "Mid" }],
+    content,
+    indicators: []
+  };
 }
 
 function input(c: LayoutChart, data: { readonly frame?: ChartFrameData; readonly categories?: CategoryData }): ModelInput {
@@ -95,6 +108,8 @@ describe("chartModel", () => {
       highText: ["13", "13", "12"],
       lowText: ["9", "10", "10"],
       closeText: ["12", "10", null],
+      volume: null,
+      volumeText: null,
       xJson: ["0", "1", "2"],
       endJson: ["1", "2", "3"]
     };

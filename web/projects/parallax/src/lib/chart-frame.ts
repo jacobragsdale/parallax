@@ -57,6 +57,9 @@ export interface CandleData {
   readonly highText: readonly (string | null)[];
   readonly lowText: readonly (string | null)[];
   readonly closeText: readonly (string | null)[];
+  /** Each bucket's total volume for drawing, NaN for none or an overflow, and its text: null for none. Null without a volume indicator. */
+  readonly volume: Float64Array | null;
+  readonly volumeText: readonly (string | null)[] | null;
   /** Each bucket's start, and the next bucket's start, as exact JSON. */
   readonly xJson: readonly (string | null)[];
   readonly endJson: readonly (string | null)[];
@@ -84,8 +87,24 @@ export interface ChartFrameData {
   readonly extentTo: number;
   readonly ticks: readonly ChartTickData[];
   readonly content: ChartContent;
+  /** The indicators' lines, each for one series. */
+  readonly indicators: readonly IndicatorLineData[];
   /** When the chart window this frame answers was asked for, by `performance.now()`. */
   readonly requestedAtMs?: number;
+}
+
+/** One line of an indicator, for one series: points in order, with NaN y values at breaks. */
+export interface IndicatorLineData {
+  /** The indicator, by index in the layout's chart indicators. */
+  readonly indicator: number;
+  /** Which of its lines, such as "upper" of Bollinger Bands. */
+  readonly line: string;
+  /** The series column's value it follows, or "" without a series column. */
+  readonly series: string;
+  readonly x: Float64Array;
+  readonly y: Float64Array;
+  readonly xText: readonly (string | null)[];
+  readonly yText: readonly (string | null)[];
 }
 
 /** The columns of a chart batch, by name. */
@@ -212,6 +231,8 @@ function decodeContent(frame: ChartFrame, columns: Columns): ChartContent {
         highText: columns.texts("high_text"),
         lowText: columns.texts("low_text"),
         closeText: columns.texts("close_text"),
+        volume: columns.has("volume") ? columns.floats("volume") : null,
+        volumeText: columns.has("volume_text") ? columns.texts("volume_text") : null,
         xJson: columns.texts("x_json"),
         endJson: columns.texts("end_json")
       }
@@ -234,6 +255,24 @@ function decodeContent(frame: ChartFrame, columns: Columns): ChartContent {
     throw new FrameError("a density's cells do not match its size");
   }
   return { kind: "density", columns: frame.columns, rows: frame.rows, yFrom: frame.yFrom, yTo: frame.yTo, counts };
+}
+
+/** A frame's indicator lines, from their own batch. */
+function decodeIndicators(frame: ChartFrame): readonly IndicatorLineData[] {
+  if (frame.indicatorLines.length === 0) {
+    return [];
+  }
+  const decoded = tableFromIPC(frame.indicatorBatch);
+  if (!(decoded instanceof Table)) {
+    throw new FrameError("a chart frame's indicator batch must decode synchronously");
+  }
+  const columns = new Columns(decoded);
+  const [x, y, xText, yText] = [columns.floats("x"), columns.floats("y"), columns.texts("x_text"), columns.texts("y_text")];
+  const spans = runs(columns.counts32("line"), frame.indicatorLines.length);
+  return frame.indicatorLines.map((l, i) => {
+    const [from, to] = spans[i] ?? [0, 0];
+    return { indicator: l.indicator, line: l.line, series: l.series, x: x.subarray(from, to), y: y.subarray(from, to), xText: xText.slice(from, to), yText: yText.slice(from, to) };
+  });
 }
 
 function isRange(from: number, to: number): boolean {
@@ -263,6 +302,7 @@ export function decodeChartFrame(frame: ChartFrame): ChartFrameData {
     extentFrom: frame.extentFrom,
     extentTo: frame.extentTo,
     ticks: frame.ticks.map((t) => ({ x: t.x, label: t.label })),
-    content: decodeContent(frame, new Columns(decoded))
+    content: decodeContent(frame, new Columns(decoded)),
+    indicators: decodeIndicators(frame)
   };
 }

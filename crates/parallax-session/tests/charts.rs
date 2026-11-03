@@ -409,3 +409,203 @@ mod brushes {
         assert_eq!(rows(&mut session, 2, &grid(&ticker, &filters)), want);
     }
 }
+
+/// Indicators in chart frames: their lines with the engine's text, and each
+/// candle's volume, checked against the generated rows.
+mod indicators {
+    use std::collections::HashMap;
+    use std::sync::{Arc, RwLock};
+
+    use arrow_array::cast::AsArray;
+    use arrow_array::types::{Date32Type, Float64Type, UInt32Type};
+    use arrow_array::{Array, RecordBatch};
+    use parallax_datagen::Dataset;
+    use parallax_datagen::prices::{Prices, PricesOptions};
+    use parallax_engine::TableOptions;
+    use parallax_protocol::ipc::decode_batches;
+    use parallax_protocol::v1::{
+        ChartFrame, OpenView, SetChartWindow, client_message, server_message::Body,
+    };
+    use parallax_session::{MemoryCatalog, Session, TableState};
+
+    use super::send;
+
+    fn session() -> (Session, RecordBatch) {
+        let prices = Prices::new(PricesOptions {
+            tickers: 1,
+            securities: 200,
+            ..PricesOptions::default()
+        })
+        .unwrap();
+        let batch = prices.batch(0..prices.num_rows());
+        let state = TableState::from_batches(
+            &batch.schema(),
+            std::slice::from_ref(&batch),
+            TableOptions::default(),
+            1,
+            1,
+        )
+        .unwrap();
+        let catalog = Arc::new(MemoryCatalog::new());
+        catalog.insert("prices", Arc::new(RwLock::new(state)));
+        (Session::new(catalog), batch)
+    }
+
+    fn open(session: &mut Session, layout: &str) -> Vec<Body> {
+        send(
+            session,
+            1,
+            client_message::Body::OpenView(OpenView {
+                view_id: 1,
+                dataset: "prices".into(),
+                parameters: HashMap::new(),
+                layout_json: layout.into(),
+            }),
+        )
+    }
+
+    fn frame(session: &mut Session, width: u32) -> ChartFrame {
+        let replies = send(
+            session,
+            2,
+            client_message::Body::SetChartWindow(SetChartWindow {
+                view_id: 1,
+                width,
+                height: 300,
+                ..SetChartWindow::default()
+            }),
+        );
+        match replies.as_slice() {
+            [Body::ChartFrame(frame)] => frame.clone(),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    const CANDLES: &str = r#"{"chart": {"kind": "candlestick", "x": "date", "axis": "trading",
+        "ohlc": {"open": "open", "high": "high", "low": "low", "close": "close"}, "volume": "volume",
+        "indicators": [{"kind": "sma", "period": 50}, {"kind": "rsi"}, {"kind": "volume"}]}}"#;
+
+    #[test]
+    fn frames_carry_indicator_lines_with_their_text() {
+        let (mut session, _) = session();
+        open(&mut session, CANDLES);
+        let f = frame(&mut session, 600);
+        let names: Vec<(u32, &str)> = f
+            .indicator_lines
+            .iter()
+            .map(|l| (l.indicator, l.line.as_str()))
+            .collect();
+        assert_eq!(names, vec![(0, "sma"), (1, "rsi")]);
+        let lines = decode_batches(&f.indicator_batch).unwrap().remove(0);
+        let ids = lines
+            .column_by_name("line")
+            .unwrap()
+            .as_primitive::<UInt32Type>();
+        let ys = lines
+            .column_by_name("y")
+            .unwrap()
+            .as_primitive::<Float64Type>();
+        let y_texts = lines.column_by_name("y_text").unwrap().as_string::<i32>();
+        let x_texts = lines.column_by_name("x_text").unwrap().as_string::<i32>();
+        for i in 0..lines.num_rows() {
+            if ys.value(i).is_nan() {
+                assert!(y_texts.is_null(i));
+                continue;
+            }
+            // Prices show two decimals, as the close does; the RSI two as well.
+            let text = y_texts.value(i).replace(',', "");
+            assert!(
+                (text.parse::<f64>().unwrap() - ys.value(i)).abs() <= 0.005,
+                "{text} for {}",
+                ys.value(i)
+            );
+            assert_eq!(text.split('.').nth(1).map(str::len), Some(2));
+            assert!(!x_texts.is_null(i));
+            if ids.value(i) == 1 {
+                assert!((0.0..=100.0).contains(&ys.value(i)));
+            }
+        }
+    }
+
+    #[test]
+    fn each_candle_carries_its_exact_volume() {
+        let (mut session, data) = session();
+        open(&mut session, CANDLES);
+        let f = frame(&mut session, 800);
+        assert_eq!(f.interval, "month");
+        let candles = decode_batches(&f.batch).unwrap().remove(0);
+        let starts = candles.column_by_name("x_json").unwrap().as_string::<i32>();
+        let volume_texts = candles
+            .column_by_name("volume_text")
+            .unwrap()
+            .as_string::<i32>();
+        let volumes = candles
+            .column_by_name("volume")
+            .unwrap()
+            .as_primitive::<Float64Type>();
+        // Each month's rows, summed here from the generated data.
+        let dates = data
+            .column_by_name("date")
+            .unwrap()
+            .as_primitive::<Date32Type>();
+        let traded = data
+            .column_by_name("volume")
+            .unwrap()
+            .as_primitive::<arrow_array::types::Int64Type>();
+        // A day since the epoch's year and month (Howard Hinnant's algorithm).
+        let month = |days: i32| {
+            let z = i64::from(days) + 719_468;
+            let era = z.div_euclid(146_097);
+            let doe = z - era * 146_097;
+            let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+            let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+            let mp = (5 * doy + 2) / 153;
+            let m = if mp < 10 { mp + 3 } else { mp - 9 };
+            (yoe + era * 400 + i64::from(m <= 2), m)
+        };
+        let mut sums: HashMap<(i64, i64), i64> = HashMap::new();
+        for i in 0..data.num_rows() {
+            if !traded.is_null(i) {
+                *sums.entry(month(dates.value(i))).or_default() += traded.value(i);
+            }
+        }
+        assert!(candles.num_rows() > 100);
+        for i in 0..candles.num_rows() {
+            let start: String = serde_json::from_str(starts.value(i)).unwrap();
+            let parts: Vec<i64> = start.split('-').map(|p| p.parse().unwrap()).collect();
+            let expected = sums[&(parts[0], parts[1])];
+            assert_eq!(
+                volume_texts.value(i).replace(',', ""),
+                expected.to_string(),
+                "{start}"
+            );
+            assert_eq!(volumes.value(i), expected as f64);
+        }
+    }
+
+    #[test]
+    fn a_layout_with_an_impossible_indicator_is_refused() {
+        let (mut session, _) = session();
+        let replies = open(
+            &mut session,
+            r#"{"chart": {"kind": "line", "x": "date", "y": ["close"],
+                "indicators": [{"kind": "macd", "fast": 30, "slow": 10}]}}"#,
+        );
+        assert!(
+            replies
+                .iter()
+                .any(|r| matches!(r, Body::Error(e) if e.message.contains("shorter"))),
+            "{replies:?}"
+        );
+        let replies = open(
+            &mut session,
+            r#"{"chart": {"kind": "line", "x": "date", "y": ["close"], "indicators": [{"kind": "volume"}]}}"#,
+        );
+        assert!(
+            replies
+                .iter()
+                .any(|r| matches!(r, Body::Error(e) if e.message.contains("candlestick"))),
+            "{replies:?}"
+        );
+    }
+}

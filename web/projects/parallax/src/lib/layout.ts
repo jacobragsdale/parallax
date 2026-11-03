@@ -75,6 +75,27 @@ const expandedSchema = z.strictObject({ path: z.array(scalar), expanded: z.boole
 /** What a chart draws. Bar charts and heatmaps draw the layout's grouped view; the engine reduces the others. */
 export const CHART_KINDS = ["line", "area", "bar", "scatter", "heatmap", "histogram", "candlestick", "ohlc"] as const;
 
+/** The technical-analysis indicators a chart computes. */
+export const INDICATOR_KINDS = ["sma", "ema", "wma", "bollinger", "rsi", "macd", "atr", "stochastic", "vwap", "volume"] as const;
+
+/** A period of rows, with TA-Lib's usual default. */
+function period(fallback: number): z.ZodMiniDefault<z.ZodMiniNumber<number>> {
+  return z._default(z.int().check(z.minimum(1), z.maximum(100_000)), fallback);
+}
+
+const indicatorSchema = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("sma"), period: period(20) }),
+  z.strictObject({ kind: z.literal("ema"), period: period(20) }),
+  z.strictObject({ kind: z.literal("wma"), period: period(20) }),
+  z.strictObject({ kind: z.literal("bollinger"), period: period(20), deviations: z._default(z.number().check(z.positive()), 2) }),
+  z.strictObject({ kind: z.literal("rsi"), period: period(14) }),
+  z.strictObject({ kind: z.literal("macd"), fast: period(12), slow: period(26), signal: period(9) }),
+  z.strictObject({ kind: z.literal("atr"), period: period(14) }),
+  z.strictObject({ kind: z.literal("stochastic"), k: period(14), k_smooth: period(3), d: period(3) }),
+  z.strictObject({ kind: z.literal("vwap") }),
+  z.strictObject({ kind: z.literal("volume") })
+]);
+
 const chartSchema = z.strictObject({
   kind: z.enum(CHART_KINDS),
   x: z._default(z.string(), ""),
@@ -87,7 +108,9 @@ const chartSchema = z.strictObject({
   stacked: z._default(z.boolean(), false),
   horizontal: z._default(z.boolean(), false),
   range: orNull(z.strictObject({ from: z.number(), to: z.number() })),
-  hidden: z._default(z.array(z.string()), [])
+  hidden: z._default(z.array(z.string()), []),
+  indicators: z._default(z.array(indicatorSchema), []),
+  volume: orNull(name)
 });
 
 /** The schema of a layout document. Unknown fields are errors, as in Rust. */
@@ -125,6 +148,8 @@ export type LayoutMeasure = z.output<typeof measureSchema>;
 export type LayoutFilter = z.output<typeof filterSchema>;
 /** A chart of a layout. */
 export type LayoutChart = z.output<typeof chartSchema>;
+/** A technical-analysis indicator of a chart. */
+export type LayoutIndicator = z.output<typeof indicatorSchema>;
 /** A display format. */
 export type LayoutFormat = z.output<typeof formatSchema>;
 /** A JSON scalar in a filter or group path. */

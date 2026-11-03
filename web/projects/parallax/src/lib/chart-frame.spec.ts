@@ -100,10 +100,44 @@ describe("decodeChartFrame", () => {
     const candles = decodeChartFrame(chartFrame({ from: new Float64Array([0]), to: new Float64Array([7]), x_text: ["Nov 2"], ...prices, ...texts }, { interval: "week" }));
     expect(candles.content.kind === "candles" && candles.content.candles.interval).toBe("week");
     expect(candles.content.kind === "candles" && candles.content.candles.closeText).toEqual([null]);
+    // Without a volume indicator, candles have no volume.
+    expect(candles.content.kind === "candles" && candles.content.candles.volume).toBeNull();
+    const withVolume = decodeChartFrame(
+      chartFrame(
+        { from: new Float64Array([0]), to: new Float64Array([7]), x_text: ["Nov 2"], ...prices, ...texts, volume: new Float64Array([Number.NaN]), volume_text: ["overflow"] },
+        { interval: "week" }
+      )
+    );
+    expect(withVolume.content.kind === "candles" && withVolume.content.candles.volumeText).toEqual(["overflow"]);
+    expect(withVolume.indicators).toEqual([]);
   });
 });
 
 describe("chart windows", () => {
+  it("reads indicator lines from their own batch, line by line", () => {
+    const points = { x: new Float64Array([1, 2]), y: new Float64Array([1, 2]), x_text: ["a", "b"], y_text: ["a", "b"], x_json: ["1", "2"] };
+    const lines = { line: new Uint32Array([0, 0, 1]), x: new Float64Array([1, 2, 2]), y: new Float64Array([Number.NaN, 10.5, 55]), x_text: [null, "b", "b"], y_text: [null, "10.50", "55.00"] };
+    const indicatorLines = [
+      { indicator: 0, line: "sma", series: "AAPL" },
+      { indicator: 1, line: "rsi", series: "AAPL" }
+    ];
+    const frame = decodeChartFrame(chartFrame({ series: new Uint32Array([0, 0]), ...points }, { series: [{ label: "close AAPL", column: "close" }], indicatorLines, indicatorBatch: batch(lines) }));
+    expect(frame.indicators.map((l) => [l.indicator, l.line, l.series, Array.from(l.x), l.yText])).toEqual([
+      [0, "sma", "AAPL", [1, 2], [null, "10.50"]],
+      [1, "rsi", "AAPL", [2], ["55.00"]]
+    ]);
+    // A line the batch names but the frame does not list, or lines out of order, are refused.
+    expect(() =>
+      decodeChartFrame(
+        chartFrame({ series: new Uint32Array([0, 0]), ...points }, { series: [{ label: "close", column: "close" }], indicatorLines: indicatorLines.slice(0, 1), indicatorBatch: batch(lines) })
+      )
+    ).toThrow("does not list");
+    const backwards = { ...lines, line: new Uint32Array([1, 0, 0]) };
+    expect(() =>
+      decodeChartFrame(chartFrame({ series: new Uint32Array([0, 0]), ...points }, { series: [{ label: "close", column: "close" }], indicatorLines, indicatorBatch: batch(backwards) }))
+    ).toThrow("in order");
+  });
+
   it("keep one request in flight and send the newest waiting one when it is answered", () => {
     let now = 100;
     const clock = vi.spyOn(performance, "now").mockImplementation(() => now);

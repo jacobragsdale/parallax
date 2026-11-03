@@ -6,12 +6,15 @@ use std::sync::Arc;
 
 use arrow_array::{ArrayRef, Float64Array, RecordBatch, StringArray, UInt32Array, UInt64Array};
 use arrow_schema::{DataType, Field, Schema};
-use parallax_engine::chart::{ChartData, ChartRequest, ChartView, Interval, Reduced};
-use parallax_engine::format::Format;
+use parallax_engine::chart::{
+    BucketVolume, ChartConfig, ChartData, ChartRequest, ChartView, IndicatorLines, Interval,
+    Reduced,
+};
+use parallax_engine::format::{Format, OVERFLOW_TEXT};
 use parallax_engine::{ColumnType, Formatter, Scalar, Table};
 use parallax_protocol::ipc::encode_batch;
 use parallax_protocol::layout::LayoutChart;
-use parallax_protocol::v1::{ChartFrame, ChartSeries, ChartTick};
+use parallax_protocol::v1::{ChartFrame, ChartIndicatorLine, ChartSeries, ChartTick};
 
 /// A chart a view shows, and the window last asked for.
 pub(crate) struct ChartState {
@@ -123,7 +126,7 @@ pub(crate) fn chart_frame(table: &Table, state: &ChartState) -> Result<ChartFram
         x,
         extent,
         ticks,
-        ..
+        indicators,
     } = state.view.reduce(table, &request);
     let config = state.view.config();
     let texts_of = |column: &str| Texts::new(table, &state.formats, column);
@@ -247,7 +250,9 @@ pub(crate) fn chart_frame(table: &Table, state: &ChartState) -> Result<ChartFram
             ])?;
         }
         ChartData::Candles {
-            interval, candles, ..
+            interval,
+            candles,
+            volumes,
         } => {
             frame.interval = interval_name(interval);
             let ohlc = config
@@ -313,8 +318,132 @@ pub(crate) fn chart_frame(table: &Table, state: &ChartState) -> Result<ChartFram
                         .collect(),
                 ));
             }
+            if let Some(volume) = config.volume.as_deref().filter(|_| !volumes.is_empty()) {
+                columns.extend(volume_columns(&texts_of(volume), &volumes));
+            }
             frame.batch = batch(columns)?;
         }
     }
+    if !indicators.is_empty() {
+        let price = config
+            .ohlc
+            .as_ref()
+            .map(|o| o.close.as_str())
+            .or_else(|| config.y.first().map(String::as_str));
+        let price_format =
+            price.map_or_else(Format::default, |p| price_format(table, &state.formats, p));
+        let lines = IndicatorTexts {
+            x: &x_text,
+            series: series_text.as_ref(),
+            price: Formatter::new(&price_format).unwrap_or_default(),
+            oscillator: Formatter::new(&Format {
+                decimals: Some(2),
+                ..Format::default()
+            })
+            .unwrap_or_default(),
+        };
+        lines.fill(&mut frame, config, &indicators)?;
+    }
     Ok(frame)
+}
+
+/// The format of a price-unit indicator: the price column's, with a decimal
+/// column's own scale when the layout names no decimals.
+fn price_format(table: &Table, formats: &BTreeMap<String, Format>, price: &str) -> Format {
+    let mut format = formats.get(price).cloned().unwrap_or_default();
+    if format.decimals.is_none()
+        && let Some(ColumnType::Decimal { scale, .. }) = table
+            .column_index(price)
+            .map(|i| table.column(i).column_type())
+    {
+        format.decimals = u8::try_from(*scale).ok();
+    }
+    format
+}
+
+/// A candle batch's volume columns: each bucket's total for drawing, NaN for
+/// none or an overflow, and its exact text.
+fn volume_columns(text: &Texts<'_>, volumes: &[BucketVolume]) -> [(Field, ArrayRef); 2] {
+    let number = |v: &BucketVolume| match v {
+        BucketVolume::Total(Scalar::Int64(n)) => *n as f64,
+        BucketVolume::Total(Scalar::Float64(n)) => *n,
+        // For drawing only: the text shows every digit.
+        BucketVolume::Total(Scalar::Decimal(n)) => match text.ty {
+            ColumnType::Decimal { scale, .. } => *n as f64 / 10f64.powi(i32::from(scale)),
+            _ => *n as f64,
+        },
+        _ => f64::NAN,
+    };
+    let words = |v: &BucketVolume| match v {
+        BucketVolume::None => None,
+        BucketVolume::Total(total) => Some(text.value(total)),
+        BucketVolume::Overflow => Some(OVERFLOW_TEXT.to_owned()),
+    };
+    [
+        floats("volume", volumes.iter().map(number).collect()),
+        texts("volume_text", volumes.iter().map(words).collect()),
+    ]
+}
+
+/// How a frame's indicator lines are written.
+struct IndicatorTexts<'a> {
+    x: &'a Texts<'a>,
+    series: Option<&'a Texts<'a>>,
+    /// Averages, bands, MACD, ATR and VWAP are in the price's units.
+    price: Formatter,
+    /// RSI and the stochastic run from 0 to 100.
+    oscillator: Formatter,
+}
+
+impl IndicatorTexts<'_> {
+    fn fill(
+        &self,
+        frame: &mut ChartFrame,
+        config: &ChartConfig,
+        indicators: &[IndicatorLines],
+    ) -> Result<(), String> {
+        let (mut ids, mut xs, mut ys, mut x_texts, mut y_texts) =
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        for lines in indicators {
+            let indicator = config.indicators[lines.indicator];
+            let formatter = if indicator.in_price_units() {
+                &self.price
+            } else {
+                &self.oscillator
+            };
+            let series = match (&lines.key, self.series) {
+                (Some(key), Some(texts)) => texts.value(key),
+                _ => String::new(),
+            };
+            for (name, points) in &lines.lines {
+                let id = frame.indicator_lines.len() as u32;
+                frame.indicator_lines.push(ChartIndicatorLine {
+                    indicator: lines.indicator as u32,
+                    line: (*name).to_owned(),
+                    series: series.clone(),
+                });
+                for p in points {
+                    ids.push(id);
+                    xs.push(p.x);
+                    ys.push(p.y);
+                    x_texts.push(self.x.cell(p.slot));
+                    y_texts
+                        .push((!p.y.is_nan()).then(|| {
+                            formatter.scalar(&ColumnType::Float64, &Scalar::Float64(p.y))
+                        }));
+                }
+            }
+        }
+        frame.indicator_batch = batch(vec![
+            (
+                field("line", DataType::UInt32, false),
+                Arc::new(UInt32Array::from(ids)),
+            ),
+            floats("x", xs),
+            floats("y", ys),
+            texts("x_text", x_texts),
+            texts("y_text", y_texts),
+        ])?;
+        Ok(())
+    }
 }

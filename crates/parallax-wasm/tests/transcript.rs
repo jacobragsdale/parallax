@@ -4,7 +4,7 @@ use parallax_session::testing::{fingerprint, transcript};
 use wasm_bindgen_test::wasm_bindgen_test;
 
 /// The same value as `TRANSCRIPT_FINGERPRINT` in parallax-session's native tests.
-const NATIVE_FINGERPRINT: u64 = 12_262_624_676_178_972_019;
+const NATIVE_FINGERPRINT: u64 = 2_290_088_687_113_481_011;
 
 #[wasm_bindgen_test]
 fn webassembly_answers_like_the_native_build() {
