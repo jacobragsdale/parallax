@@ -174,13 +174,19 @@ pub(crate) fn chart_frame(table: &Table, state: &ChartState) -> Result<ChartFram
             .iter()
             .map(|e| {
                 let text = event_text.cell(Some(e.slot)).unwrap_or_default();
+                let series = match (&e.key, &series_text) {
+                    (Some(key), Some(texts)) => texts.value(key),
+                    _ => String::new(),
+                };
                 ChartEvent {
                     x: e.x,
                     x_text: x_text.cell(Some(e.slot)).unwrap_or_default(),
-                    text: match (&e.key, &series_text) {
-                        (Some(key), Some(series)) => format!("{}: {text}", series.value(key)),
-                        _ => text,
+                    text: if series.is_empty() {
+                        text
+                    } else {
+                        format!("{series}: {text}")
                     },
+                    series,
                 }
             })
             .collect();
@@ -399,14 +405,18 @@ pub(crate) fn measure(table: &Table, state: &ChartState, request: &MeasureChart)
         .series
         .as_deref()
         .map(|s| Texts::new(table, &state.formats, s));
-    // The series asked for by its value's text, or the first.
-    let wanted = series_text.as_ref().and_then(|texts| {
-        let column = table.column(texts.index?);
-        table
-            .live_slots()
-            .map(|slot| column.scalar(slot))
-            .find(|v| texts.value(v) == request.series)
-    });
+    // The series asked for by its value's text, among the chart's own series, or
+    // the first when none is asked for.
+    let wanted = series_text
+        .as_ref()
+        .filter(|_| !request.series.is_empty())
+        .and_then(|texts| {
+            state
+                .view
+                .series_keys(table)
+                .into_iter()
+                .find(|v| texts.value(v) == request.series)
+        });
     let Some(m) = state
         .view
         .measure(table, request.from, request.to, wanted.as_ref())
@@ -442,7 +452,12 @@ pub(crate) fn measure(table: &Table, state: &ChartState, request: &MeasureChart)
         percent: a
             .zip(b)
             .filter(|(a, _)| *a != 0.0)
-            .map(|(a, b)| percent.scalar(&ColumnType::Float64, &Scalar::Float64(b / a - 1.0)))
+            .map(|(a, b)| {
+                percent.scalar(
+                    &ColumnType::Float64,
+                    &Scalar::Float64(parallax_engine::chart::percent_change(a, b) / 100.0),
+                )
+            })
             .unwrap_or_default(),
         rows: m.rows as u64,
     }

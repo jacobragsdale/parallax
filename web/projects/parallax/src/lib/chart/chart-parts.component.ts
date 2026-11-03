@@ -4,7 +4,7 @@ import { ChangeDetectionStrategy, Component, ViewEncapsulation, afterNextRender,
 import type { ElementRef } from "@angular/core";
 
 import { MAX_NOTE } from "../layout";
-import type { Measuring } from "./drawing-editor";
+import type { MeasureView } from "./drawing-editor";
 import type { Point, Tool } from "./drawings";
 import type { TipRow } from "./interaction";
 import type { LegendEntry } from "./model";
@@ -174,19 +174,16 @@ export class ChartHeadComponent {
   public readonly removed = output();
 }
 
-/** What a measurement's card says, by its state. */
-const MEASURE_STATES: Readonly<Record<Exclude<Measuring["state"], "measured">, string>> = { dragging: "", asking: "Measuring…", nothing: "Nothing to measure here", failed: "The measurement failed" };
-
 /** A measurement: the band dragged, and a card of what the engine said changed across it. */
 @Component({
   selector: "px-chart-measure",
   changeDetection: ChangeDetectionStrategy.OnPush,
   encapsulation: ViewEncapsulation.None,
   template: `
-    <div class="px-chart-measure-band" [style.left.px]="box().left" [style.top.px]="box().top" [style.width.px]="box().width" [style.height.px]="box().height"></div>
-    @if (card(); as c) {
-      <div class="px-chart-tip px-chart-measure" role="status" [style.left.px]="box().left + box().width + 8" [style.top.px]="box().top">
-        @for (line of c; track $index) {
+    <div class="px-chart-measure-band" [style.left.px]="view().band.x" [style.top.px]="view().band.y" [style.width.px]="view().band.w" [style.height.px]="view().band.h"></div>
+    @if (view().lines.length > 0) {
+      <div class="px-chart-tip px-chart-measure" role="status" [style.left.px]="view().card.x" [style.top.px]="view().card.y">
+        @for (line of view().lines; track $index) {
           <div class="px-tip-row">
             <strong>{{ line.value }}</strong
             ><span>{{ line.label }}</span>
@@ -197,25 +194,5 @@ const MEASURE_STATES: Readonly<Record<Exclude<Measuring["state"], "measured">, s
   `
 })
 export class ChartMeasureComponent {
-  public readonly measuring = input.required<Measuring>();
-
-  protected box(): { readonly left: number; readonly top: number; readonly width: number; readonly height: number } {
-    const { from, to } = this.measuring();
-    return { left: Math.min(from.x, to.x), top: Math.min(from.y, to.y), width: Math.abs(to.x - from.x), height: Math.max(1, Math.abs(to.y - from.y)) };
-  }
-
-  /** The card's lines: the change and its percentage, the bars, the dates and the prices, as the engine wrote them. */
-  protected card(): readonly { readonly value: string; readonly label: string }[] | null {
-    const { state, measurement: m } = this.measuring();
-    if (state === "measured" && m !== null) {
-      return [
-        { value: `${m.change}${m.percent === "" ? "" : ` (${m.percent})`}`, label: "change" },
-        { value: String(m.rows), label: m.rows === 1 ? "bar" : "bars" },
-        { value: `${m.fromValue} → ${m.toValue}`, label: "" },
-        { value: `${m.fromX} → ${m.toX}`, label: "" }
-      ];
-    }
-    const text = state === "measured" ? "" : MEASURE_STATES[state];
-    return text === "" ? null : [{ value: text, label: "" }];
-  }
+  public readonly view = input.required<MeasureView>();
 }

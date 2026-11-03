@@ -13,6 +13,7 @@
 import { canonicalJson } from "../chart-frame";
 import type { ChartFrameData } from "../chart-frame";
 import type { LayoutAnchor, LayoutDrawing } from "../layout";
+import { nearestIndex } from "./interaction";
 import type { ChartModel, Rect } from "./model";
 import type { Scale } from "./scale";
 
@@ -273,6 +274,33 @@ export function snap(frame: ChartFrameData, model: ChartModel, p: Point, hidden:
   }
   const price = rounded(y.invert(p.y), Math.abs(y.invert(p.y) - y.invert(p.y + 1)));
   return { anchor: { x: value, y: price }, point: { x: x.map(near.position), y: y.map(price) } };
+}
+
+/**
+ * The shown series nearest `p` on a line chart, by its line's value at the pointer's x: its legend label and its
+ * series value as text. Null on charts of one series or candles, where there is only one to choose.
+ */
+export function seriesAt(frame: ChartFrameData, model: ChartModel, p: Point, hidden: readonly string[]): { readonly label: string; readonly key: string } | null {
+  const content = frame.content;
+  const x = model.x;
+  if (content.kind !== "series" || x === null || content.series.length < 2) {
+    return null;
+  }
+  const at = x.invert(p.x);
+  let best: { readonly label: string; readonly key: string; readonly distance: number } | null = null;
+  for (const s of content.series.filter((series) => !hidden.includes(series.label))) {
+    const y = model.yAxes.find((a) => a.side === (s.right ? "right" : "left"))?.scale;
+    const i = nearestIndex(s.x, at);
+    const value = s.y[i];
+    if (y === undefined || value === undefined || Number.isNaN(value)) {
+      continue;
+    }
+    const distance = Math.abs(y.map(value) - p.y);
+    if (best === null || distance < best.distance) {
+      best = { label: s.label, key: s.label.slice(s.column.length + 1), distance };
+    }
+  }
+  return best === null ? null : { label: best.label, key: best.key };
 }
 
 /** A drawing made with a tool from one anchor to another, or at one, with a note's text. */

@@ -236,3 +236,31 @@ fn rejects_more_tickers_than_equities() {
         "{err}"
     );
 }
+
+#[test]
+fn the_first_day_takes_no_event_that_fell_before_it() {
+    // The data starts on Monday 2016-01-25: a report due before it is not put on
+    // its first day as if it had been due then.
+    let dataset = Prices::new(PricesOptions {
+        tickers: 10,
+        start: jiff::civil::date(2016, 1, 25),
+        end: jiff::civil::date(2016, 2, 5),
+        securities: 200,
+        ..PricesOptions::default()
+    })
+    .unwrap();
+    let batch = dataset.batch(0..dataset.num_rows());
+    let events = batch.column_by_name("event").unwrap().as_string::<i32>();
+    let dates = batch
+        .column_by_name("date")
+        .unwrap()
+        .as_primitive::<arrow_array::types::Date32Type>();
+    let first = dates.value(0);
+    // Tickers report from the 18th to the 27th. The 23rd and 24th are a weekend,
+    // so those reporting on the 23rd, 24th and 25th report on Monday the 25th;
+    // those reporting before, on the 22nd or earlier, did so before the data.
+    let on_first_day = (0..batch.num_rows())
+        .filter(|&i| dates.value(i) == first && !events.is_null(i))
+        .count();
+    assert_eq!(on_first_day, 3);
+}

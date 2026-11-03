@@ -126,8 +126,10 @@ export interface EventMark {
   readonly xText: string;
 }
 
-function eventMarks(frame: ChartFrameData, x: Scale): readonly EventMark[] {
-  return frame.events.map((e) => ({ px: x.map(e.x), x: e.x, text: e.text, xText: e.xText }));
+/** The events of series shown: a hidden series' events go with it. */
+function eventMarks(input: ModelInput, frame: ChartFrameData, x: Scale): readonly EventMark[] {
+  const price = input.chart.y[0] ?? "";
+  return frame.events.filter((e) => e.series === "" || !hidden(input, `${price} ${e.series}`)).map((e) => ({ px: x.map(e.x), x: e.x, text: e.text, xText: e.xText }));
 }
 
 /** The bottom of the lowest plot or pane, where the x axis runs. */
@@ -198,7 +200,8 @@ function extent(values: Iterable<number>, positive: boolean): readonly [number, 
 /** A value scale over `values` for the plot's height, logarithmic if asked and possible. */
 function valueScale(input: ModelInput, values: readonly number[], range: readonly [number, number], zero: boolean): Scale {
   const count = Math.max(2, Math.abs(range[0] - range[1]) * TICKS_PER_PX);
-  if (input.chart.log_y) {
+  // Percentage changes run through zero and below it: a comparison is never on a log scale.
+  if (input.chart.log_y && !input.chart.compare) {
     const positive = extent(values, true);
     if (positive !== null) {
       return logScale(logDomain(positive[0], positive[1]), range);
@@ -279,7 +282,7 @@ function lineModel(input: ModelInput, frame: ChartFrameData, content: Content<"s
     empty: content.series.every((s) => s.x.length === 0) ? "No data in this range" : null,
     panes: [],
     indicators: styles,
-    events: eventMarks(frame, x)
+    events: eventMarks(input, frame, x)
   };
 }
 
@@ -527,7 +530,7 @@ function candleModel(input: ModelInput, frame: ChartFrameData, content: Content<
     empty: marks.length === 0 ? "No data in this range" : null,
     panes: [],
     indicators: styles,
-    events: eventMarks(frame, x)
+    events: eventMarks(input, frame, x)
   };
 }
 

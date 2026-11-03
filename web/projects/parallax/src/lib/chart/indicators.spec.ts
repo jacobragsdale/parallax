@@ -318,8 +318,8 @@ describe("events and compare mode", () => {
     const f: ChartFrameData = {
       ...frame([]),
       events: [
-        { x: 1, xText: "day 1", text: "Q1 earnings" },
-        { x: 7, xText: "day 7", text: "Dividend" }
+        { x: 1, xText: "day 1", text: "Q1 earnings", series: "" },
+        { x: 7, xText: "day 7", text: "Dividend", series: "" }
       ],
       eventsTotal: 2
     };
@@ -331,7 +331,8 @@ describe("events and compare mode", () => {
   });
 
   it("labels a comparison's axis in percentages", () => {
-    const layout = parseLayout({ chart: { kind: "line", x: "date", y: ["close"], compare: true } }).chart;
+    // Asked for a log scale too, a comparison stays linear: its changes run through zero.
+    const layout = parseLayout({ chart: { kind: "line", x: "date", y: ["close"], compare: true, log_y: true } }).chart;
     if (layout === null) {
       throw new Error("no chart");
     }
@@ -349,8 +350,38 @@ describe("events and compare mode", () => {
     const labels = m.yAxes[0]?.ticks.map((t) => t.label) ?? [];
     expect(labels.length).toBeGreaterThan(1);
     expect(labels.every((l) => l.endsWith("%"))).toBe(true);
+    expect(m.yAxes[0]?.scale.log).toBe(false);
     // The gutter holds the widest label as shown, its "%" included.
     const widest = Math.max(...labels.map((l) => l.length * 6));
     expect(m.plot.x).toBeGreaterThanOrEqual(widest + 8);
+  });
+});
+
+describe("events of hidden series", () => {
+  it("go with their series", () => {
+    const layout = parseLayout({ chart: { kind: "line", x: "date", y: ["close"], series: "ticker", hidden: ["close AAPL"] } }).chart;
+    if (layout === null) {
+      throw new Error("no chart");
+    }
+    const series = (label: string): SeriesData => ({
+      label,
+      column: "close",
+      right: false,
+      x: Float64Array.from(DAYS),
+      y: Float64Array.from(DAYS),
+      xText: DAYS.map(String),
+      yText: DAYS.map(String),
+      xJson: DAYS.map(String)
+    });
+    const f: ChartFrameData = {
+      ...frame([]),
+      content: { kind: "series", series: [series("close AAPL"), series("close MSFT")] },
+      events: [
+        { x: 2, xText: "day 2", text: "AAPL: Dividend", series: "AAPL" },
+        { x: 3, xText: "day 3", text: "MSFT: Q1 earnings", series: "MSFT" }
+      ],
+      eventsTotal: 2
+    };
+    expect(model(layout, f).events.map((e) => e.text)).toEqual(["MSFT: Q1 earnings"]);
   });
 });

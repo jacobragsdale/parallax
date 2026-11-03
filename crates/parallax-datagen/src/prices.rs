@@ -57,6 +57,9 @@ pub struct Prices {
     schema: SchemaRef,
     equities: Vec<usize>,
     days: Vec<i32>,
+    /// The trading day before the first, so that the first day's events are
+    /// known as well as any other's.
+    before_first: Option<i32>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -113,12 +116,20 @@ impl Prices {
                 end: options.end,
             });
         }
+        let before_first = options
+            .start
+            .checked_sub(jiff::Span::new().days(10))
+            .ok()
+            .zip(options.start.checked_sub(jiff::Span::new().days(1)).ok())
+            .and_then(|(from, to)| trading_days(from, to).last().copied())
+            .map(epoch_days);
         Ok(Self {
             options,
             universe,
             schema: Arc::new(schema()),
             equities,
             days,
+            before_first,
         })
     }
 
@@ -202,6 +213,8 @@ impl Prices {
 /// and October set by the ticker, and for every third ticker a quarterly dividend
 /// on the first trading day on or after the 10th of the last month of each
 /// quarter. Worked out from the ticker and the dates alone, so no price changes.
+/// `previous` is the trading day before `day`, which the first day of the data
+/// has too, so no event is taken for one that fell before the data starts.
 fn event(ticker: usize, day: i32, previous: Option<i32>) -> Option<&'static str> {
     // The first trading day on or after the `target`th of a month in `months`.
     let first_on_or_after = |months: [i8; 4], target: i8| {
@@ -270,7 +283,10 @@ impl Dataset for Prices {
                 );
                 dates.push(self.days[day]);
                 bars.push(*bar);
-                let previous = day.checked_sub(1).map(|d| self.days[d]);
+                let previous = day
+                    .checked_sub(1)
+                    .map(|d| self.days[d])
+                    .or(self.before_first);
                 events.push(event(ticker, self.days[day], previous));
                 row += 1;
             }

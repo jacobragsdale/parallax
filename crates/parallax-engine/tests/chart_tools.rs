@@ -8,7 +8,7 @@ use arrow_array::{ArrayRef, Float64Array, RecordBatch, StringArray};
 use arrow_schema::{Field, Schema};
 use parallax_engine::chart::{
     ChartConfig, ChartData, ChartKind, ChartRequest, ChartView, MAX_EVENTS, OhlcColumns, Point,
-    XAxis,
+    XAxis, percent_change,
 };
 use parallax_engine::indicator::Indicator;
 use parallax_engine::{ConfigError, Scalar, Table, TableOptions};
@@ -89,12 +89,12 @@ fn compare_mode_puts_each_series_on_its_change_from_the_first_value_shown() {
     // Both start at 0 %, and AAA's day 9 is 90 % up from 10; BBB's 45 % from 200.
     let at = |points: &[Point], x: f64| points.iter().find(|p| p.x == x).unwrap().y;
     assert_eq!((at(&all[0], 0.0), at(&all[1], 0.0)), (0.0, 0.0));
-    assert_eq!(at(&all[0], 9.0), (19.0 / 10.0 - 1.0) * 100.0);
-    assert_eq!(at(&all[1], 9.0), (290.0 / 200.0 - 1.0) * 100.0);
+    assert_eq!(at(&all[0], 9.0), 90.0);
+    assert_eq!(at(&all[1], 9.0), 45.0);
     // Zoomed to days 5 to 9, the first value shown, day 5's, is the base.
     let zoomed = series(&view, &t, Some((5.0, 9.0)));
     assert_eq!(at(&zoomed[0], 5.0), 0.0);
-    assert_eq!(at(&zoomed[0], 9.0), (19.0 / 15.0 - 1.0) * 100.0);
+    assert_eq!(at(&zoomed[0], 9.0), percent_change(15.0, 19.0));
     // Without compare mode, prices are prices.
     let plain = ChartView::new(&t, line(false)).unwrap();
     assert_eq!(at(&series(&plain, &t, None)[1], 9.0), 290.0);
@@ -246,4 +246,26 @@ fn measuring_takes_the_nearest_priced_rows_and_counts_the_bars_between() {
             .scalar(m.to),
         Scalar::Utf8("BBB".into())
     );
+}
+
+#[test]
+fn a_comparison_holds_its_line_between_rows_and_reads_losses_as_falls() {
+    let t = two_tickers();
+    let view = ChartView::new(&t, line(true)).unwrap();
+    // A window between two of each series' rows holds none of them: each line
+    // still crosses it, based where it enters.
+    let between = series(&view, &t, Some((4.25, 4.75)));
+    for points in &between {
+        let drawn: Vec<f64> = points
+            .iter()
+            .filter(|p| !p.y.is_nan())
+            .map(|p| p.y)
+            .collect();
+        assert_eq!(drawn.len(), 2, "{points:?}");
+        assert_eq!(drawn[0], 0.0);
+    }
+    // A loss from -100 to -200 has fallen by 100 %; from 100 to 50, by half.
+    assert_eq!(percent_change(-100.0, -200.0), -100.0);
+    assert_eq!(percent_change(100.0, 50.0), -50.0);
+    assert_eq!(percent_change(-100.0, -50.0), 50.0);
 }

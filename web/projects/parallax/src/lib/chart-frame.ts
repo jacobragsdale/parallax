@@ -103,6 +103,8 @@ export interface ChartEventData {
   readonly x: number;
   readonly xText: string;
   readonly text: string;
+  /** The series column's value as text, or "" without a series column. */
+  readonly series: string;
 }
 
 /** One line of an indicator, for one series: points in order, with NaN y values at breaks. */
@@ -325,7 +327,7 @@ export function decodeChartFrame(frame: ChartFrame): ChartFrameData {
     ticks: frame.ticks.map((t) => ({ x: t.x, label: t.label })),
     content: decodeContent(frame, new Columns(decoded)),
     indicators: decodeIndicators(frame),
-    events: frame.events.map((e) => ({ x: e.x, xText: e.xText, text: e.text })),
+    events: frame.events.map((e) => ({ x: e.x, xText: e.xText, text: e.text, series: e.series })),
     eventsTotal: frame.eventsTotal,
     anchors: new Map(
       frame.anchors.flatMap((a): [string, number][] => {

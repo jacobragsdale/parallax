@@ -273,6 +273,13 @@ pub enum BucketVolume {
     Overflow,
 }
 
+/// The change from `base` to `value` as a percentage of the base's size, so that
+/// a loss growing from -100 to -200 reads as a fall of 100 %, not a rise.
+#[must_use]
+pub fn percent_change(base: f64, value: f64) -> f64 {
+    (value - base) / base.abs() * 100.0
+}
+
 /// The most events a reduced chart carries; more are thinned evenly.
 pub const MAX_EVENTS: usize = 500;
 
@@ -905,6 +912,16 @@ impl ChartView {
         starts
     }
 
+    /// The values of the series column, one per series, in the series' order;
+    /// empty without a series column.
+    #[must_use]
+    pub fn series_keys(&self, table: &Table) -> Vec<Scalar> {
+        self.rows
+            .iter()
+            .filter_map(|(key, _)| self.scalar(table, *key))
+            .collect()
+    }
+
     /// The axis position of a value of the x column, such as a drawing's anchor,
     /// or `None` for a value of another type, a null or a NaN.
     #[must_use]
@@ -1118,9 +1135,12 @@ impl ChartView {
                 // In compare mode, each value as a percentage of the series' first
                 // value in the range shown; a first value of zero leaves nothing to
                 // compare with.
+                // The base: the series' first value in the range shown, or, with no
+                // row inside it, the value where its line enters the range.
                 let base = if self.config.compare {
                     ordered
                         .within(from, to)
+                        .chain(range.clone())
                         .find_map(|r| y_value(column, ordered.slots[r]))
                 } else {
                     None
@@ -1131,7 +1151,7 @@ impl ChartView {
                         return Some(v);
                     }
                     let b = base.filter(|b| *b != 0.0)?;
-                    Some((v / b - 1.0) * 100.0)
+                    Some(percent_change(b, v))
                 };
                 let points = range.clone().map(|r| {
                     let slot = ordered.slots[r];

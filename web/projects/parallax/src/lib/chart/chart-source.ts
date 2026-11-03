@@ -41,8 +41,8 @@ export interface ChartSource {
   readonly placement: Signal<ViewPlacement | null>;
   /** Asks for the chart at a plot size, over an x range or everything. */
   readonly show: (size: PlotSize, range: readonly [number, number] | null) => void;
-  /** Asks the engine to measure the chart between two axis positions; null without a view or a row to measure. */
-  readonly measure: (from: number, to: number) => Promise<Measurement | null>;
+  /** Asks the engine to measure a series between two axis positions; null without a view or a row to measure. */
+  readonly measure: (from: number, to: number, series: string) => Promise<Measurement | null>;
 }
 
 /** Whether a layout's chart draws its grouped view rather than a reduction. */
@@ -234,6 +234,6 @@ export function chartSource(layout: Signal<Layout | null>): ChartSource {
         request(current.view, drawsGroups(next));
       }
     },
-    measure: (from, to) => current?.view.measure(from, to) ?? Promise.resolve(null)
+    measure: (from, to, series) => current?.view.measure(from, to, series) ?? Promise.resolve(null)
   };
 }

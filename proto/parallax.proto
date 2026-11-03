@@ -261,6 +261,8 @@ message ChartEvent {
   string x_text = 2;
   // The event, as text; with a series column, after the series' value.
   string text = 3;
+  // The series column's value as text, or empty without a series column.
+  string series = 4;
 }
 
 // Asks what changed between two places on a chart: the price at the row nearest

@@ -33,7 +33,7 @@ import type { Layout, LayoutFilter, LayoutInput } from "../layout";
 import { CHART_COLORS, THEMES, installThemeStyles, readChartColors, readTheme } from "../theme";
 import type { ChartColors, Theme, ThemeName } from "../theme";
 import { ChartHeadComponent, ChartMeasureComponent, ChartNoteComponent, ChartTipComponent } from "./chart-parts.component";
-import { DrawingEditor } from "./drawing-editor";
+import { DrawingEditor, measureView } from "./drawing-editor";
 import type { PlacedReading } from "./chart-parts.component";
 import { chartSource } from "./chart-source";
 import type { PlotSize } from "./chart-source";
@@ -292,8 +292,8 @@ const KEYS: Readonly<Partial<Record<string, "in" | "out" | "left" | "right" | "a
       @if (editor.note(); as note) {
         <px-chart-note [at]="note.point" (done)="noteDone($event)" />
       }
-      @if (editor.measuring(); as m) {
-        <px-chart-measure [measuring]="m" />
+      @if (measured(); as m) {
+        <px-chart-measure [view]="m" />
       }
     </div>
     <px-status-bar
@@ -436,7 +436,13 @@ export class ChartComponent {
     },
     measure: (text) => this.measure(text, this.tokens().font),
     hidden: computed(() => this.current()?.chart?.hidden ?? []),
-    measureChart: (from, to) => this.source.measure(from, to)
+    measureChart: (from, to, series) => this.source.measure(from, to, series)
+  });
+
+  /** The measurement shown, where its ends are on the chart now; none once the data has been loaded again. */
+  protected readonly measured = computed(() => {
+    const [m, model, frame] = [this.editor.measuring(), this.model(), this.source.frame()];
+    return m === null || model === null || frame?.loadVersion !== m.load ? null : measureView(m, model);
   });
 
   protected removeDrawing(): void {
