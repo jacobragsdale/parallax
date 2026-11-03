@@ -123,6 +123,7 @@ pub(crate) fn chart_frame(table: &Table, state: &ChartState) -> Result<ChartFram
         x,
         extent,
         ticks,
+        ..
     } = state.view.reduce(table, &request);
     let config = state.view.config();
     let texts_of = |column: &str| Texts::new(table, &state.formats, column);
@@ -245,7 +246,9 @@ pub(crate) fn chart_frame(table: &Table, state: &ChartState) -> Result<ChartFram
                 texts("to_text", to_texts),
             ])?;
         }
-        ChartData::Candles { interval, candles } => {
+        ChartData::Candles {
+            interval, candles, ..
+        } => {
             frame.interval = interval_name(interval);
             let ohlc = config
                 .ohlc

@@ -32,7 +32,9 @@ use jiff::tz::TimeZone;
 use crate::calendar::{TradingCalendar, epoch_days, from_epoch_days};
 use crate::column::Column;
 use crate::error::ConfigError;
+use crate::exact::ExactSum;
 use crate::filter::{CompiledFilter, Filter};
+use crate::indicator::{Indicator, Inputs};
 use crate::table::Table;
 use crate::types::{ColumnType, Key, Scalar};
 
@@ -96,6 +98,10 @@ pub struct ChartConfig {
     pub filters: Vec<Filter>,
     /// How x values are placed.
     pub axis: XAxis,
+    /// Indicators computed over every row of each series before reduction.
+    pub indicators: Vec<Indicator>,
+    /// The volume column, which a VWAP and volume read.
+    pub volume: Option<String>,
 }
 
 /// The part of a chart to reduce, and the pixels it fills.
@@ -232,7 +238,22 @@ pub enum ChartData {
         interval: Interval,
         /// Each bucket's span and the rows giving its prices.
         candles: Vec<(Bucket, Candle)>,
+        /// Each bucket's total volume, exact, when the chart shows volume; null
+        /// for a bucket without any. Empty otherwise.
+        volumes: Vec<Scalar>,
     },
+}
+
+/// An indicator's lines for one series, reduced like the series themselves.
+#[derive(Clone, Debug, PartialEq)]
+pub struct IndicatorLines {
+    /// The indicator, by index in [`ChartConfig::indicators`].
+    pub indicator: usize,
+    /// The series column's value, or `None` without a series column.
+    pub key: Option<Scalar>,
+    /// Each line, named as in [`Indicator::lines`]. A point's slot is the row
+    /// the value was computed at.
+    pub lines: Vec<(&'static str, Vec<Point>)>,
 }
 
 /// A reduced chart and its x axis.
@@ -247,6 +268,9 @@ pub struct Reduced {
     pub extent: (f64, f64),
     /// The x axis's ticks.
     pub ticks: Vec<Tick>,
+    /// The indicators' lines, per series, in the order of
+    /// [`ChartConfig::indicators`]. Volume is in [`ChartData::Candles`] instead.
+    pub indicators: Vec<IndicatorLines>,
 }
 
 /// How the x column's values become axis positions.
@@ -335,6 +359,38 @@ fn x_order(key: Key) -> i128 {
     }
 }
 
+/// Checks that a chart can compute its indicators: their parameters, that it is
+/// a kind that draws them, and that it has the columns they read.
+fn check_indicators(config: &ChartConfig, has_volume: bool) -> Result<(), ConfigError> {
+    let candles = matches!(config.kind, ChartKind::Candlestick | ChartKind::Ohlc);
+    let lines = matches!(config.kind, ChartKind::Line | ChartKind::Area);
+    for indicator in &config.indicators {
+        indicator.check()?;
+        let fits = match indicator.inputs() {
+            Inputs::Price => candles || lines,
+            Inputs::Range | Inputs::RangeAndVolume | Inputs::Volume => candles,
+        };
+        if !fits {
+            let needs = if indicator.inputs() == Inputs::Price {
+                "a line, area, candlestick or OHLC chart"
+            } else {
+                "a candlestick or OHLC chart, which has the high, low and close"
+            };
+            return Err(ConfigError::Chart(format!(
+                "{} needs {needs}",
+                indicator.name()
+            )));
+        }
+        if matches!(indicator.inputs(), Inputs::RangeAndVolume | Inputs::Volume) && !has_volume {
+            return Err(ConfigError::MissingChartColumns(format!(
+                "volume, which {} reads",
+                indicator.name()
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn numeric(ty: &ColumnType) -> bool {
     matches!(
         ty,
@@ -363,6 +419,48 @@ impl Ordered {
     }
 }
 
+/// An indicator's values for one series: the rows that have its inputs, by
+/// place in the series, and each line's value at them, NaN where it has none.
+#[derive(Clone, Debug, Default)]
+struct Computed {
+    rows: Vec<usize>,
+    lines: Vec<Vec<f64>>,
+}
+
+/// A bucket's total volume, summed exactly in the column's own type.
+#[derive(Clone, Debug, Default)]
+struct VolumeSum {
+    integers: i128,
+    floats: ExactSum,
+    any: bool,
+}
+
+impl VolumeSum {
+    fn add(&mut self, column: &Column, slot: usize) {
+        match column.key(slot) {
+            Key::Int(v) => self.integers += i128::from(v),
+            Key::Decimal(v) => self.integers += v,
+            _ => match y_value(column, slot) {
+                Some(v) => self.floats.add(v),
+                None => return,
+            },
+        }
+        self.any = true;
+    }
+
+    fn scalar(&self, column: &Column) -> Scalar {
+        if !self.any {
+            return Scalar::Null;
+        }
+        match column.column_type() {
+            ColumnType::Int64 => i64::try_from(self.integers)
+                .map_or(Scalar::Float64(self.integers as f64), Scalar::Int64),
+            ColumnType::Decimal { .. } => Scalar::Decimal(self.integers),
+            _ => Scalar::Float64(self.floats.value()),
+        }
+    }
+}
+
 /// A chart of a table.
 #[derive(Clone, Debug)]
 pub struct ChartView {
@@ -373,8 +471,11 @@ pub struct ChartView {
     y: Vec<usize>,
     series: Option<usize>,
     ohlc: Option<[usize; 4]>,
+    volume: Option<usize>,
     /// Rows by series key, each in x order.
     rows: Vec<(Option<Key>, Ordered)>,
+    /// Each series' indicators, in the order of the configuration's.
+    computed: Vec<Vec<Computed>>,
     load_version: u64,
 }
 
@@ -463,6 +564,12 @@ impl ChartView {
             });
         }
         let series = config.series.as_deref().map(index).transpose()?;
+        let volume = config
+            .volume
+            .as_deref()
+            .map(|c| numeric_column(c, "volume"))
+            .transpose()?;
+        check_indicators(&config, volume.is_some())?;
         let mut view = Self {
             config,
             filters,
@@ -471,7 +578,9 @@ impl ChartView {
             y,
             series,
             ohlc,
+            volume,
             rows: Vec::new(),
+            computed: Vec::new(),
             load_version: table.load_version(),
         };
         view.rebuild(table);
@@ -542,6 +651,84 @@ impl ChartView {
             });
         }
         self.rows = rows;
+        self.computed = self
+            .rows
+            .iter()
+            .map(|(_, ordered)| {
+                self.config
+                    .indicators
+                    .iter()
+                    .map(|indicator| self.compute(table, ordered, indicator))
+                    .collect()
+            })
+            .collect();
+    }
+
+    /// One indicator over one series, from the rows that have its inputs.
+    fn compute(&self, table: &Table, ordered: &Ordered, indicator: &Indicator) -> Computed {
+        let price = self.ohlc.map(|o| o[3]).or_else(|| self.y.first().copied());
+        let columns: Vec<usize> = match (indicator.inputs(), self.ohlc) {
+            (Inputs::Price, _) => price.into_iter().collect(),
+            (Inputs::Range, Some([_, high, low, close])) => vec![high, low, close],
+            (Inputs::RangeAndVolume, Some([_, high, low, close])) => {
+                [high, low, close].into_iter().chain(self.volume).collect()
+            }
+            _ => return Computed::default(),
+        };
+        let mut rows = Vec::new();
+        let mut values: Vec<Vec<f64>> = vec![Vec::new(); columns.len()];
+        for (r, &slot) in ordered.slots.iter().enumerate() {
+            let row: Option<Vec<f64>> = columns
+                .iter()
+                .map(|&c| y_value(table.column(c), slot))
+                .collect();
+            if let Some(row) = row {
+                rows.push(r);
+                for (column, value) in values.iter_mut().zip(row) {
+                    column.push(value);
+                }
+            }
+        }
+        let sessions = self.sessions(table, ordered, &rows);
+        let inputs = match indicator.inputs() {
+            Inputs::Price => crate::indicator::Series {
+                price: &values[0],
+                ..Default::default()
+            },
+            _ => crate::indicator::Series {
+                high: &values[0],
+                low: &values[1],
+                close: &values[2],
+                volume: values.get(3).map_or(&[][..], Vec::as_slice),
+                sessions: &sessions,
+                ..Default::default()
+            },
+        };
+        let lines = indicator.compute(&inputs);
+        Computed { rows, lines }
+    }
+
+    /// Where VWAP sessions start among `rows`: each New York trading day for
+    /// instants, and only the first row for dates.
+    fn sessions(&self, table: &Table, ordered: &Ordered, rows: &[usize]) -> Vec<usize> {
+        if !matches!(
+            self.placement,
+            Placement::Instant | Placement::TradingInstant(_)
+        ) {
+            return vec![0];
+        }
+        let x = table.column(self.x);
+        let zone = TimeZone::get(crate::format::DEFAULT_ZONE).unwrap_or(TimeZone::UTC);
+        let mut starts = Vec::new();
+        let mut previous = None;
+        for (i, &r) in rows.iter().enumerate() {
+            let day = bucket_start(x.key(ordered.slots[r]), Interval::Day, &zone);
+            if i == 0 || day != previous {
+                starts.push(i);
+                previous = day;
+            }
+        }
+        starts
     }
 
     /// The x range of the data, in axis positions, or `None` without rows.
@@ -580,12 +767,60 @@ impl ChartView {
             ChartKind::Candlestick | ChartKind::Ohlc => self.candles(table, from, to, width),
         };
         let ticks = self.ticks(from, to, width);
+        let indicators = self.reduce_indicators(table, from, to, width);
         Reduced {
             data,
             x: (from, to),
             extent,
             ticks,
+            indicators,
         }
+    }
+
+    /// Each series' indicator lines in `from..=to`, reduced with M4 like the
+    /// series, from the values computed over every row.
+    fn reduce_indicators(
+        &self,
+        table: &Table,
+        from: f64,
+        to: f64,
+        width: u32,
+    ) -> Vec<IndicatorLines> {
+        let mut out = Vec::new();
+        for ((key, ordered), computed) in self.rows.iter().zip(&self.computed) {
+            for (index, (indicator, c)) in self.config.indicators.iter().zip(computed).enumerate() {
+                if c.lines.is_empty() {
+                    continue;
+                }
+                // The computed rows inside the range, plus one on each side.
+                let start = c.rows.partition_point(|&r| ordered.x[r] < from);
+                let end = c.rows.partition_point(|&r| ordered.x[r] <= to);
+                let range = start.saturating_sub(1)..(end + 1).min(c.rows.len());
+                let lines = indicator
+                    .lines()
+                    .iter()
+                    .zip(&c.lines)
+                    .map(|(&name, values)| {
+                        let points = range.clone().map(|i| {
+                            let r = c.rows[i];
+                            let value = values[i];
+                            (
+                                ordered.x[r],
+                                (!value.is_nan()).then_some(value),
+                                ordered.slots[r],
+                            )
+                        });
+                        (name, m4(points, from, to, width))
+                    })
+                    .collect();
+                out.push(IndicatorLines {
+                    indicator: index,
+                    key: self.scalar(table, *key),
+                    lines,
+                });
+            }
+        }
+        out
     }
 
     fn series_m4(
@@ -695,6 +930,7 @@ impl ChartView {
             return ChartData::Candles {
                 interval,
                 candles: Vec::new(),
+                volumes: Vec::new(),
             };
         };
         let x = table.column(self.x);
@@ -721,6 +957,13 @@ impl ChartView {
             table.column(low),
             table.column(close),
         );
+        // Volume, when the chart shows it, summed exactly per bucket.
+        let volume = self
+            .volume
+            .filter(|_| self.config.indicators.contains(&Indicator::Volume))
+            .map(|v| table.column(v));
+        let mut volumes: Vec<Scalar> = Vec::new();
+        let mut sum = VolumeSum::default();
         let mut candles: Vec<(Bucket, Candle)> = Vec::new();
         let mut current: Option<(i64, Bucket, Candle, f64, f64)> = None;
         for r in start..end {
@@ -729,6 +972,9 @@ impl ChartView {
             if current.as_ref().is_none_or(|(key, ..)| *key != bucket) {
                 if let Some((_, span, candle, _, _)) = current.take() {
                     candles.push((span, candle));
+                    if let Some(v) = volume {
+                        volumes.push(std::mem::take(&mut sum).scalar(v));
+                    }
                 }
                 let span = Bucket {
                     start: bucket,
@@ -766,11 +1012,21 @@ impl ChartView {
             if y_value(c, slot).is_some() {
                 candle.close = Some(slot);
             }
+            if let Some(v) = volume {
+                sum.add(v, slot);
+            }
         }
         if let Some((_, span, candle, _, _)) = current {
             candles.push((span, candle));
+            if let Some(v) = volume {
+                volumes.push(sum.scalar(v));
+            }
         }
-        ChartData::Candles { interval, candles }
+        ChartData::Candles {
+            interval,
+            candles,
+            volumes,
+        }
     }
 
     /// The smallest interval whose buckets in `from..to` are at least

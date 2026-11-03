@@ -25,6 +25,7 @@ arrow-select.workspace = true
 num-bigint = "0.4.8"
 parallax-datagen.workspace = true
 proptest = "1.12"
+serde_json.workspace = true
 
 [lints]
 workspace = true

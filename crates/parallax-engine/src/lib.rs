@@ -20,6 +20,7 @@ pub mod error;
 pub mod exact;
 pub mod filter;
 pub mod format;
+pub mod indicator;
 pub mod table;
 pub mod types;
 pub mod view;

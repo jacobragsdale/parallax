@@ -318,7 +318,16 @@ Six layers of tests run on that data:
 
 Technical-analysis indicators are checked against TA-Lib. Where indicator
 definitions vary, such as how an EMA starts, parallax follows TA-Lib's
-convention of seeding with an SMA. Excel can't run on the Linux build host, so
+convention of seeding with an SMA, and MACD aligns its two averages as TA-Lib
+does. Two cases differ on purpose, because TA-Lib reports zero where there is
+no answer: a stochastic over a window whose high equals its low, and a VWAP
+before any volume has traded, have no value. An RSI over a window without
+movement reads 50, as in TA-Lib. Indicators skip rows that lack an input, such
+as a null close, rather than reading them as zero or breaking the line; a
+VWAP starts again with each New York trading day for intraday data, and runs
+from the first row for daily data. Moving sums carry their rounding error, so a
+moving average over a million rows stays within one unit in the last place of
+the exact mean, where a plain running sum drifts by a dozen. Excel can't run on the Linux build host, so
 at each milestone someone opens a verification workbook in real Excel on a VDI.
 
 ## Drawing without a GPU

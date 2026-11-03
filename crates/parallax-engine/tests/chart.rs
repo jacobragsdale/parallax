@@ -42,6 +42,8 @@ fn line(axis: XAxis) -> ChartConfig {
         ohlc: None,
         filters: Vec::new(),
         axis,
+        indicators: Vec::new(),
+        volume: None,
     }
 }
 
@@ -244,6 +246,8 @@ fn weekly_candles_match_the_daily_prices() {
             FilterOp::Eq(Scalar::Utf8(ticker.clone())),
         )],
         axis: XAxis::Value,
+        indicators: Vec::new(),
+        volume: None,
     };
     let view = ChartView::new(&t, config).unwrap();
     let (from, to) = view.x_extent().unwrap();
@@ -258,7 +262,10 @@ fn weekly_candles_match_the_daily_prices() {
             height: 300,
         },
     );
-    let ChartData::Candles { interval, candles } = reduced.data else {
+    let ChartData::Candles {
+        interval, candles, ..
+    } = reduced.data
+    else {
         panic!("not candles")
     };
     assert_eq!(interval, Interval::Week);
@@ -543,6 +550,8 @@ fn candlestick(x: &str, filters: Vec<Filter>, axis: XAxis) -> ChartConfig {
         }),
         filters,
         axis,
+        indicators: Vec::new(),
+        volume: None,
     }
 }
 
@@ -557,7 +566,9 @@ fn candles_of(
     request: &ChartRequest,
 ) -> (Interval, Vec<(f64, Candle)>) {
     match view.reduce(t, request).data {
-        ChartData::Candles { interval, candles } => (
+        ChartData::Candles {
+            interval, candles, ..
+        } => (
             interval,
             candles.into_iter().map(|(b, c)| (b.from, c)).collect(),
         ),

@@ -25,6 +25,21 @@ Releases are semver 0.x until milestone 3. Each milestone publishes
 - **Other tools:** compare mode, which normalizes series to percentage change
   from the start; event markers; and a measure tool.
 
+## Milestone 3 build order
+
+1. Indicators in the engine: SMA, EMA, WMA, Bollinger Bands, RSI, MACD, ATR,
+   VWAP and stochastic, computed per series over every row before the chart is
+   reduced, compared with TA-Lib; volume summed exactly per candle.
+2. Indicators in the layout, the protocol and the session, with chart frames
+   that carry each indicator line with the engine's text.
+3. Panes in `<px-chart>`: price and indicator panes stacked on one x axis, with
+   shared zoom, pan and crosshair, bands, the MACD histogram, oscillator guides
+   and volume bars.
+4. Drawing tools: trend line, horizontal line, Fibonacci retracement, rectangle
+   and text note, anchored to data values and saved in the layout.
+5. Compare mode, event markers and the measure tool.
+6. The demo's technical-analysis page, with screenshots, and the release.
+
 ## Milestone 1 build order
 
 1. Repository, CI, licence checks and the synthetic data generator.

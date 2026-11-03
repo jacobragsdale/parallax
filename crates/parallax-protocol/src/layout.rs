@@ -233,6 +233,8 @@ impl LayoutChart {
                 XAxisName::Value => XAxis::Value,
                 XAxisName::Trading => XAxis::Trading,
             },
+            indicators: Vec::new(),
+            volume: None,
         })
     }
 }

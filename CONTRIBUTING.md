@@ -74,6 +74,21 @@ change alters generated values on purpose, update the hashes in the same pull
 request and say so in its description. Any stored expectation built from
 generated data becomes invalid at that point.
 
+### TA-Lib fixtures
+
+The indicator tests compare the engine with TA-Lib's output, stored in
+`crates/parallax-engine/tests/fixtures/talib.json`. The script beside it writes
+that file from generated bars with TA-Lib's Python wheel, which bundles the C
+library; Python is used for nothing else. To regenerate it after changing the
+bars or the parameters it covers, run from that directory:
+
+```sh
+uv run generate_talib.py
+```
+
+The script pins TA-Lib and NumPy, and the test checks the TA-Lib version
+recorded in the file.
+
 ## How changes land
 
 1. Work on a branch named for the milestone step, for example
