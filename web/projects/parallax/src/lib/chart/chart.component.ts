@@ -108,66 +108,9 @@ const CHART_STYLES = `
     color: #fff;
     font-size: 12px;
   }
-  px-chart px-status-bar {
-    position: relative;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    min-height: 24px;
-    padding: 0 8px;
-    border-top: 1px solid var(--px-grid-line);
-    background: var(--px-status-bg);
-    color: var(--px-status-fg);
-    font-size: 12px;
-    white-space: nowrap;
-  }
-  px-chart px-status-bar .px-status-message {
-    flex: 1;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  px-chart px-status-bar .px-badge {
-    padding: 1px 6px;
-    border-radius: 8px;
-    color: #fff;
-    background: var(--px-muted-fg);
-  }
-  px-chart px-status-bar .px-badge-warning {
-    background: var(--px-warning);
-  }
-  px-chart px-status-bar .px-badge-danger {
-    background: var(--px-danger);
-  }
-  px-chart px-status-bar .px-status-info {
-    width: 18px;
-    height: 18px;
-    padding: 0;
-    border: 1px solid currentColor;
-    border-radius: 50%;
-    background: transparent;
-    color: inherit;
-    font: inherit;
-    cursor: pointer;
-  }
-  px-chart px-status-bar .px-info {
-    position: absolute;
-    right: 8px;
-    bottom: 28px;
-    z-index: 3;
-    display: grid;
-    grid-template-columns: auto auto;
-    gap: 2px 12px;
-    margin: 0;
-    padding: 8px 10px;
-    border: 1px solid var(--px-grid-line);
-    border-radius: 4px;
-    background: var(--px-header-bg);
-    color: var(--px-header-fg);
-  }
-  px-chart px-status-bar .px-info dd {
-    margin: 0;
-  }
 `;
+
+const COUNT = new Intl.NumberFormat("en-US");
 
 /** Words for what a chart shows, for its accessible name. */
 const KIND_NAMES: Readonly<Record<NonNullable<Layout["chart"]>["kind"], string>> = {
@@ -286,13 +229,13 @@ export class ChartComponent {
     const frame = this.source.frame();
     const categories = this.source.categories();
     if (categories !== null && (this.current()?.chart?.kind === "bar" || this.current()?.chart?.kind === "heatmap")) {
-      return `${new Intl.NumberFormat("en-US").format(categories.categories.length)} groups`;
+      return `${COUNT.format(categories.categories.length)} groups`;
     }
     if (frame === null) {
       return "loading…";
     }
     const content = frame.content;
-    const count = new Intl.NumberFormat("en-US");
+    const count = COUNT;
     switch (content.kind) {
       case "series":
         return `${count.format(content.series.reduce((n, s) => n + s.x.length, 0))} points drawn`;

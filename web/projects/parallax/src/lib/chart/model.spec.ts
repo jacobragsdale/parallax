@@ -153,6 +153,34 @@ describe("chartModel", () => {
     expect(cells.map((c) => c.color)).toEqual([CHART_COLORS.light.ramp[0], CHART_COLORS.light.ramp[6]]);
   });
 
+  it("says so when a zoomed range holds no points, rather than drawing bare axes", () => {
+    const model = chartModel(input(chart({ kind: "line" }), { frame: frame({ kind: "series", series: [series("a", []), series("b", [])] }) }));
+    expect(model.marks).toEqual([]);
+    expect(model.empty).toBe("No data in this range");
+  });
+
+  it("handles a density as large as a 4K plot", () => {
+    const counts = new Uint32Array(960 * 540);
+    counts[7] = 3;
+    const content: ChartContent = { kind: "density", columns: 960, rows: 540, yFrom: 0, yTo: 1, counts };
+    expect(kinds(chartModel(input(chart({ kind: "scatter" }), { frame: frame(content) })).marks, "cell").length).toBe(1);
+  });
+
+  it("draws a heatmap of only losses on the negative arm, the deepest darkest", () => {
+    const model = chartModel(input(chart({ kind: "heatmap" }), { categories: { categories: ["a", "b"], series: [{ label: "x", values: [-8, -1], texts: ["-8", "-1"] }] } }));
+    const colors = kinds(model.marks, "cell").map((c) => c.color);
+    expect(colors[0]).toBe(CHART_COLORS.light.negativeRamp[6]);
+    expect(CHART_COLORS.light.negativeRamp.indexOf(colors[1] ?? "")).toBeLessThan(6);
+  });
+
+  it("thins horizontal bar labels by line height", () => {
+    const many: CategoryData = { categories: Array.from({ length: 80 }, (_, i) => `T${String(i)}`), series: [{ label: "v", values: Array.from({ length: 80 }, () => 1), texts: [] }] };
+    const model = chartModel(input(chart({ kind: "bar", horizontal: true }), { categories: many }));
+    const gaps = model.yLabels.slice(1).map((l, i) => l.px - (model.yLabels[i]?.px ?? 0));
+    expect(model.yLabels.length).toBeGreaterThan(5);
+    expect(Math.min(...gaps)).toBeGreaterThanOrEqual(16);
+  });
+
   it("says when there is nothing to draw yet", () => {
     expect(chartModel(input(chart({ kind: "line" }), {})).empty).toBe("Loading…");
     expect(chartModel(input(chart({ kind: "bar" }), { categories: { categories: [], series: [] } })).empty).toBe("No groups to show");

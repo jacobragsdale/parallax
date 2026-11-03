@@ -190,7 +190,7 @@ class Painter {
     const ctx = this.ctx;
     ctx.fillStyle = this.theme.background;
     ctx.fillRect(0, 0, model.width, model.height);
-    if (model.empty !== null && model.marks.length === 0) {
+    if (model.empty !== null) {
       ctx.font = this.theme.font;
       ctx.fillStyle = this.theme.muted;
       ctx.textAlign = "center";

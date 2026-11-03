@@ -31,5 +31,7 @@ describe("scales", () => {
   it("place round ticks across the domain, powers of ten on a log scale", () => {
     expect(valueTicks(linearScale([0, 100], [0, 1]), 5).map((t) => t.value)).toEqual([0, 20, 40, 60, 80, 100]);
     expect(valueTicks(logScale([1, 1_000], [0, 1]), 5).map((t) => t.label)).toEqual(["1", "10", "100", "1,000"]);
+    // One style per axis: once a log axis reaches 10,000, its thousands are compact too.
+    expect(valueTicks(logScale([0.1, 100_000], [0, 1]), 5).map((t) => t.label)).toEqual(["0.1", "1", "10", "100", "1K", "10K", "100K"]);
   });
 });

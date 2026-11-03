@@ -102,7 +102,9 @@ export function valueTicks(scale: Scale, count: number): readonly ValueTick[] {
     for (let p = Math.ceil(Math.log10(low) - 1e-9); p <= Math.floor(Math.log10(high) + 1e-9); p += 1) {
       values.push(10 ** p);
     }
-    const labels = values.map((v) => tickLabels([v], v)[0] ?? "");
+    // One style for the axis: compact throughout once it reaches 10,000, where every power from 1,000 takes a suffix.
+    const compact = (values[values.length - 1] ?? 0) >= 1e4;
+    const labels = values.map((v) => (compact && v >= 1e3 ? (tickLabels([v, 1e4], v)[0] ?? "") : (tickLabels([v], v)[0] ?? "")));
     return values.map((value, i) => ({ value, px: scale.map(value), label: labels[i] ?? "" }));
   }
   const step = niceStep(high - low, count);

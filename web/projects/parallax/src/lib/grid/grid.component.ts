@@ -201,69 +201,7 @@ const GRID_STYLES = `
     pointer-events: none;
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
   }
-  px-status-bar {
-    position: relative;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    min-height: 24px;
-    padding: 0 8px;
-    border-top: 1px solid var(--px-grid-line);
-    background: var(--px-status-bg);
-    color: var(--px-status-fg);
-    font-size: 12px;
-    white-space: nowrap;
-  }
-  px-status-bar .px-status-message {
-    flex: 1;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  px-status-bar .px-badge {
-    padding: 1px 6px;
-    border-radius: 8px;
-    color: #fff;
-  }
-  px-status-bar .px-badge-warning {
-    background: var(--px-warning);
-  }
-  px-status-bar .px-badge-danger {
-    background: var(--px-danger);
-  }
-  px-status-bar .px-status-info {
-    width: 18px;
-    height: 18px;
-    padding: 0;
-    border: 1px solid currentColor;
-    border-radius: 50%;
-    background: transparent;
-    color: inherit;
-    font: italic 600 11px serif;
-    cursor: pointer;
-  }
-  px-status-bar .px-info {
-    position: absolute;
-    right: 8px;
-    bottom: 28px;
-    z-index: 3;
-    display: grid;
-    grid-template-columns: auto auto;
-    gap: 4px 12px;
-    margin: 0;
-    padding: 10px 12px;
-    border: 1px solid var(--px-grid-line);
-    border-radius: 4px;
-    background: var(--px-grid-bg);
-    color: var(--px-grid-fg);
-    white-space: normal;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
-  }
-  px-status-bar .px-info dt {
-    color: var(--px-muted-fg);
-  }
-  px-status-bar .px-info dd {
-    margin: 0;
-  }
+
 `;
 
 @Component({

@@ -107,6 +107,8 @@ export interface ModelInput {
   readonly categories: CategoryData | null;
 }
 
+const COUNT = new Intl.NumberFormat("en-US");
+
 const PAD = 8;
 const X_AXIS = 22;
 const MAX_BAR = 24;
@@ -193,7 +195,7 @@ function lineModel(input: ModelInput, frame: ChartFrameData, content: Content<"s
   const left = onto(leftScale, yRange);
   const right = rightScale === null ? null : onto(rightScale, yRange);
   const x = linearScale([frame.xFrom, frame.xTo], [plot.x, plot.x + plot.w]);
-  const marks: Mark[] = visible.map(({ s, i }) => {
+  const marks: Mark[] = visible.flatMap(({ s, i }): Mark[] => {
     const y = s.right && right !== null ? right : left;
     const segments: Float64Array[] = [];
     let current: number[] = [];
@@ -212,7 +214,7 @@ function lineModel(input: ModelInput, frame: ChartFrameData, content: Content<"s
       segments.push(Float64Array.from(current));
     }
     const baseline = area ? Math.min(plot.y + plot.h, Math.max(plot.y, y.map(y.log ? y.domain[0] : 0))) : null;
-    return { kind: "line", color: seriesColor(input, i), segments, baseline };
+    return segments.length === 0 ? [] : [{ kind: "line", color: seriesColor(input, i), segments, baseline }];
   });
   return {
     width: input.width,
@@ -252,7 +254,7 @@ function histogramModel(input: ModelInput, frame: ChartFrameData, content: Conte
         continue;
       }
       const top = y.map(count);
-      const hit: Hit = { title: `${s.fromText[b] ?? ""} to ${s.toText[b] ?? ""}`, rows: [{ label: s.label, value: new Intl.NumberFormat("en-US").format(count) }] };
+      const hit: Hit = { title: `${s.fromText[b] ?? ""} to ${s.toText[b] ?? ""}`, rows: [{ label: s.label, value: COUNT.format(count) }] };
       marks.push({ kind: "rect", color: seriesColor(input, i), rect: { x: from + GAP / 2 + n * share, y: top, w: share, h: base - top }, round: "top", hit });
     }
   });
@@ -286,7 +288,11 @@ function densityModel(input: ModelInput, frame: ChartFrameData, content: Content
   const plot = plotFor(input, axis("left", scale).ticks, null);
   const y = linearScale([content.yFrom, content.yTo], [plot.y + plot.h, plot.y]);
   const x = linearScale([frame.xFrom, frame.xTo], [plot.x, plot.x + plot.w]);
-  const most = Math.max(0, ...content.counts);
+  // A density has a cell per 4 px square, too many to spread as arguments.
+  let most = 0;
+  for (const count of content.counts) {
+    most = Math.max(most, count);
+  }
   const [cw, ch] = [plot.w / content.columns, plot.h / content.rows];
   const marks: Mark[] = [];
   for (let r = 0; r < content.rows; r += 1) {
@@ -375,10 +381,16 @@ function candleModel(input: ModelInput, frame: ChartFrameData, content: Content<
   };
 }
 
-/** Category labels thinned so that they do not overlap along `length` pixels. */
-function categoryTicks(input: ModelInput, categories: readonly string[], position: (i: number) => number, length: number): readonly AxisTick[] {
-  const widest = Math.max(1, ...categories.map((c) => input.measure(c))) + PAD;
-  const every = Math.max(1, Math.ceil((widest * categories.length) / Math.max(1, length)));
+/** A label's height where labels stack down the side. */
+const LINE = 16;
+
+/**
+ * Category labels thinned so that they do not overlap: along an axis across, each needs its text's width; down the
+ * side, each needs a line.
+ */
+function categoryTicks(input: ModelInput, categories: readonly string[], position: (i: number) => number, length: number, across = true): readonly AxisTick[] {
+  const room = across ? Math.max(1, ...categories.map((c) => input.measure(c))) + PAD : LINE;
+  const every = Math.max(1, Math.ceil((room * categories.length) / Math.max(1, length)));
   return categories.flatMap((label, i) => (i % every === 0 ? [{ px: position(i), label }] : []));
 }
 
@@ -456,7 +468,7 @@ function barModel(input: ModelInput, data: CategoryData): ChartModel {
     height: input.height,
     plot,
     xTicks: horizontal ? valueTicks(value, Math.max(2, plot.w / 90)).map((t) => ({ px: t.px, label: t.label })) : categoryTicks(input, data.categories, positions, plot.w),
-    yLabels: horizontal ? categoryTicks(input, data.categories, positions, plot.h * 4) : [],
+    yLabels: horizontal ? categoryTicks(input, data.categories, positions, plot.h, false) : [],
     yAxes: horizontal ? [] : [axis("left", value)],
     x: null,
     marks,
@@ -477,6 +489,10 @@ function heatColor(colors: ChartColors, value: number, low: number, high: number
       return colors.middle;
     }
     return rampColor(value > 0 ? colors.ramp : colors.negativeRamp, Math.abs(value) / most);
+  }
+  if (high <= 0 && low < 0) {
+    // Only losses: the negative arm, the deepest darkest.
+    return rampColor(colors.negativeRamp, Math.max(Number.EPSILON, value / low));
   }
   const span = high - low;
   return rampColor(colors.ramp, span === 0 ? 1 : Math.max(Number.EPSILON, (value - low) / span));

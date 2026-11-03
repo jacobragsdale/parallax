@@ -97,6 +97,13 @@ interface Current {
   readonly view: ViewHandle;
   readonly source: string;
   computed: string;
+  shape: string;
+}
+
+/** What a frame's data looks like: the chart's kind and the columns it plots. */
+function shapeOf(layout: Layout): string {
+  const c = layout.chart;
+  return JSON.stringify(c === null ? null : [c.kind, c.x, c.y, c.y_right, c.series, c.ohlc, layout.group_by, layout.split_by, layout.measures]);
 }
 
 /** Opens a view for a chart and follows its layout. Call in an injection context. */
@@ -130,6 +137,7 @@ export function chartSource(layout: Signal<Layout | null>): ChartSource {
     categories.set(null);
     status.set(null);
     placement.set(null);
+    error.set(null);
     generation += 1;
     const mine = generation;
     client.connectionFor(next.dataset, next.parameters).then(
@@ -162,11 +170,14 @@ export function chartSource(layout: Signal<Layout | null>): ChartSource {
           },
           next.parameters
         );
-        current = { view, source: JSON.stringify([next.dataset, next.parameters]), computed: computedPart(next) };
+        current = { view, source: JSON.stringify([next.dataset, next.parameters]), computed: computedPart(next), shape: shapeOf(next) };
         request(view, drawsGroups(next));
       },
       (failure: unknown) => {
-        error.set(failure instanceof Error ? failure.message : String(failure));
+        // A failure for a layout since replaced, or a chart since gone, says nothing.
+        if (!destroyed && mine === generation) {
+          error.set(failure instanceof Error ? failure.message : String(failure));
+        }
       }
     );
   };
@@ -184,6 +195,13 @@ export function chartSource(layout: Signal<Layout | null>): ChartSource {
       }
       const computed = computedPart(next);
       if (computed !== current.computed) {
+        // Data of another shape must not be drawn as the new chart while the answer is on its way; the same shape
+        // keeps its last frame until then.
+        if (current.shape !== shapeOf(next)) {
+          frame.set(null);
+          categories.set(null);
+        }
+        current.shape = shapeOf(next);
         current.computed = computed;
         current.view.update(JSON.stringify(next));
         // A grouped view needs its rows asked for again after an update.
