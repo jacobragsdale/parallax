@@ -1,0 +1,29 @@
+[package]
+name = "parallax-session"
+description = "Runs the parallax protocol over the engine, independent of transport"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+arrow-array.workspace = true
+arrow-schema.workspace = true
+parallax-engine.workspace = true
+parallax-protocol.workspace = true
+prost = "0.14"
+serde_json = { version = "1.0", features = ["arbitrary_precision"] }
+parallax-datagen = { workspace = true, optional = true }
+
+[features]
+# A fixed protocol conversation over generated data, used to check that native and
+# WebAssembly builds answer byte for byte the same.
+testing = ["dep:parallax-datagen"]
+
+[dev-dependencies]
+parallax-datagen.workspace = true
+parallax-session = { workspace = true, features = ["testing"] }
+
+[lints]
+workspace = true

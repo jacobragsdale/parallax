@@ -67,9 +67,11 @@ message OpenView {
 
 message ViewOpened {
   uint32 view_id = 1;
-  // The table's schema as an Arrow IPC schema message.
+  // The table's schema as an Arrow IPC stream with no batches.
   bytes table_schema = 2;
   TableStatus status = 3;
+  // The layout the view runs, which for a drill-through is new to the client.
+  string layout_json = 4;
 }
 
 message UpdateView {
@@ -134,9 +136,13 @@ message Frame {
   bytes batch = 8;
   // When the source data was read, in microseconds since the Unix epoch.
   int64 source_as_of_micros = 9;
+  // Whether this frame answers a viewport request or was pushed after a refresh.
+  bool pushed = 10;
 }
 
 message TableStatus {
+  // The view whose table this describes.
+  uint32 view_id = 7;
   uint64 load_version = 1;
   uint64 rows = 2;
   int64 loaded_at_micros = 3;

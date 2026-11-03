@@ -1,0 +1,27 @@
+[package]
+name = "parallax-wasm"
+description = "The parallax engine for the browser: a WebAssembly worker speaking the parallax protocol"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+arrow-array.workspace = true
+js-sys = "0.3.107"
+parallax-engine.workspace = true
+parallax-protocol.workspace = true
+parallax-session.workspace = true
+prost = "0.14"
+wasm-bindgen = "=0.2.130"
+
+[dev-dependencies]
+parallax-session = { workspace = true, features = ["testing"] }
+wasm-bindgen-test = "0.3.80"
+
+[lints]
+workspace = true

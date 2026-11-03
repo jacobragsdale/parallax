@@ -1,0 +1,27 @@
+[package]
+name = "parallax-protocol"
+description = "The parallax wire protocol and layout documents"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+arrow-array.workspace = true
+arrow-ipc.workspace = true
+arrow-schema.workspace = true
+jiff.workspace = true
+parallax-engine.workspace = true
+prost = "0.14"
+schemars = "1.2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["arbitrary_precision"] }
+thiserror.workspace = true
+
+[build-dependencies]
+prost-build = "0.14"
+protox = "0.10"
+
+[lints]
+workspace = true

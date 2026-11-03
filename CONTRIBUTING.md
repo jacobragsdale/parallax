@@ -23,6 +23,32 @@ On a machine with little free memory, set `CARGO_BUILD_JOBS=1`. Parallel
 `rustc` processes can exhaust memory and get killed by an out-of-memory guard
 such as earlyoom.
 
+The WebAssembly tests run in Node. They need `wasm-bindgen-test-runner` from
+[wasm-bindgen's releases](https://github.com/wasm-bindgen/wasm-bindgen/releases),
+at the same version as `wasm-bindgen` in `Cargo.lock`. `.cargo/config.toml`
+makes it the runner for the `wasm32-unknown-unknown` target:
+
+```sh
+cargo test -p parallax-wasm --target wasm32-unknown-unknown
+```
+
+That test replays the protocol conversation in `parallax-session`'s `testing`
+module and checks its fingerprint against the native build's. The browser engine
+must answer byte for byte like the server.
+
+## Run the server
+
+`examples/parallax.toml` serves generated positions, trades and prices on
+`127.0.0.1:8790`:
+
+```sh
+cargo run --release -p parallax-server -- --config examples/parallax.toml
+```
+
+The protocol runs on `/ws`. `POST /invalidate/DATASET` reloads every cached
+table of `DATASET` and pushes fresh frames to open views. `GET /health` answers
+`ok`.
+
 ## Generate test data
 
 `parallax-datagen` writes reproducible synthetic finance data as Arrow IPC

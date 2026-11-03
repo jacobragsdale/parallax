@@ -1,0 +1,29 @@
+# A reference server configuration with generated data. Run it with
+#   cargo run --release -p parallax-server -- --config examples/parallax.toml
+
+listen = "127.0.0.1:8790"
+
+[[dataset]]
+name = "positions"
+primary_key = "position_id"
+# Reload when a view opens on a table older than five minutes.
+max_age_seconds = 300
+[dataset.source]
+kind = "generator"
+dataset = "positions"
+rows = 200000
+
+[[dataset]]
+name = "trades"
+primary_key = "trade_id"
+[dataset.source]
+kind = "generator"
+dataset = "trades"
+rows = 500000
+
+[[dataset]]
+name = "prices"
+[dataset.source]
+kind = "generator"
+dataset = "prices"
+tickers = 50

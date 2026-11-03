@@ -327,6 +327,11 @@ it, tagged by view ID.
 - Every data frame carries the view ID, configuration version, window bounds,
   table load version and source timestamp.
 
+The browser worker that hosts the WebAssembly engine speaks the same messages
+over `postMessage`, through the same session code as the server. The server
+and the worker therefore can't drift apart: a fixed conversation must produce
+byte-identical replies from the native and WebAssembly builds.
+
 gRPC-web was ruled out because browsers can't use it for bidirectional
 streaming. WebTransport was ruled out because it runs over UDP, which corporate
 proxies often block.

@@ -10,6 +10,10 @@ license = "Apache-2.0"
 repository = "https://github.com/jacobragsdale/parallax"
 
 [workspace.dependencies]
+parallax-datagen = { path = "crates/parallax-datagen", version = "0.1.0" }
+parallax-engine = { path = "crates/parallax-engine", version = "0.1.0" }
+parallax-protocol = { path = "crates/parallax-protocol", version = "0.1.0" }
+parallax-session = { path = "crates/parallax-session", version = "0.1.0" }
 anyhow = "1.0.104"
 arrow-array = { version = "60.1", default-features = false }
 arrow-buffer = { version = "60.1", default-features = false }
@@ -27,3 +31,8 @@ missing_docs = "warn"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
+
+# Dependencies build without debug info: it halves rustc's memory for large crates
+# such as js-sys and arrow, which matters on memory-constrained machines.
+[profile.dev.package."*"]
+debug = false

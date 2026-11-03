@@ -674,6 +674,40 @@ impl View {
         }
     }
 
+    /// Returns the group values of visible row `row` of a grouped view, from the
+    /// outermost level down: empty for the grand total, `None` for an Other row, a
+    /// row out of range, or a flat view.
+    pub fn row_path(&mut self, table: &Table, row: usize) -> Option<Vec<Scalar>> {
+        let Kind::Grouped(g) = &mut self.kind else {
+            return None;
+        };
+        match g.visible(table, &self.config).get(row)? {
+            Visible::Node(id) => {
+                let id = *id;
+                Some(g.path(table, id))
+            }
+            Visible::Other { .. } => None,
+        }
+    }
+
+    /// Returns a flat view configuration of the base rows under visible row `row`:
+    /// the view's filters plus one equality filter per group level.
+    pub fn drill_through(&mut self, table: &Table, row: usize) -> Option<ViewConfig> {
+        let path = self.row_path(table, row)?;
+        let mut filters = self.config.filters.clone();
+        for (column, value) in self.config.group_by.iter().zip(path) {
+            let op = match value {
+                Scalar::Null => crate::filter::FilterOp::IsNull,
+                value => crate::filter::FilterOp::Eq(value),
+            };
+            filters.push(Filter::new(column, op));
+        }
+        Some(ViewConfig {
+            filters,
+            ..ViewConfig::default()
+        })
+    }
+
     /// Returns every node of a grouped view with its values, including collapsed and
     /// hidden ones, for checks and exports. Empty for a flat view.
     pub fn cells(&mut self, table: &Table) -> Vec<GroupCell> {

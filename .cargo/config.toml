@@ -1,0 +1,4 @@
+# Runs WebAssembly tests in Node through wasm-bindgen's test runner, which must
+# match the wasm-bindgen version in Cargo.lock.
+[target.wasm32-unknown-unknown]
+runner = "wasm-bindgen-test-runner"
