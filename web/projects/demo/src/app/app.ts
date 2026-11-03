@@ -19,8 +19,13 @@ const REFERENCE_PIVOT = {
   expand_depth: 3
 } as const satisfies LayoutInput;
 
+/** The views the demo opens, in the order of their tabs. */
+const PRESET_NAMES = ["pivot", "browser", "trades", "sorted", "prices"] as const;
+
+type PresetName = (typeof PRESET_NAMES)[number];
+
 /** The views the demo opens, and the end-to-end tests with them. */
-const PRESETS = {
+const PRESETS: Readonly<Record<PresetName, Preset>> = {
   pivot: {
     title: "Positions pivot",
     about:
@@ -48,16 +53,15 @@ const PRESETS = {
     about: "Daily prices for 50 tickers with fat-tailed returns, held in the browser. Charts and technical analysis come in milestones 2 and 3.",
     layout: { dataset: "prices", sort: [{ column: "date", descending: true }, { column: "ticker" }] }
   }
-} as const satisfies Record<string, Preset>;
+};
 
-type PresetName = keyof typeof PRESETS;
-
-const PRESET_NAMES = Object.keys(PRESETS).filter((name): name is PresetName => Object.hasOwn(PRESETS, name));
+const themeSchema = z.enum(["light", "dark"]);
+const densitySchema = z.enum(["compact", "comfortable"]);
 
 const searchSchema = z.strictObject({
-  preset: z.enum(["pivot", "browser", "trades", "sorted", "prices"]).default("pivot"),
-  theme: z.enum(["light", "dark"]).default("light"),
-  density: z.enum(["compact", "comfortable"]).default("compact"),
+  preset: z.enum(PRESET_NAMES).default("pivot"),
+  theme: themeSchema.default("light"),
+  density: densitySchema.default("compact"),
   performance: z.enum(["on", "off"]).default("off"),
   layout: z.string().optional()
 });
@@ -75,9 +79,6 @@ function remember(name: string, value: string): void {
   url.searchParams.set(name, value);
   history.replaceState(null, "", url);
 }
-
-const themeSchema = z.enum(["light", "dark"]);
-const densitySchema = z.enum(["compact", "comfortable"]);
 
 @Component({
   selector: "demo-root",

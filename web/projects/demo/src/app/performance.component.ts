@@ -3,8 +3,11 @@
  * figures the roadmap's budgets name and copies them as a report:
  *
  * - frame time, from `requestAnimationFrame`, as the median and 95th percentile
- *   of the last few seconds;
- * - main-thread time blocked by long frames, from the Long Animation Frames API;
+ *   of the last few seconds the tab was visible. While open, the overlay asks
+ *   for a frame at every vsync to time them, which costs a little main-thread time
+ *   of its own;
+ * - main-thread time blocked by long frames, the Long Animation Frames API's
+ *   blocking duration;
  * - the grid's own drawing time per frame, and the time from asking for rows to
  *   drawing them, from the grid's counters;
  * - tab memory, from `measureUserAgentSpecificMemory` when the page is
@@ -36,12 +39,16 @@ interface Figures {
   readonly latencyP95: number | null;
 }
 
-function percentile(values: readonly number[], p: number): number {
-  if (values.length === 0) {
+/** The `p`th percentile, interpolating between the two nearest ranks. */
+export function percentile(values: readonly number[], p: number): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  const rank = (p / 100) * (sorted.length - 1);
+  const below = sorted[Math.floor(rank)];
+  const above = sorted[Math.ceil(rank)];
+  if (below === undefined || above === undefined) {
     return 0;
   }
-  const sorted = [...values].sort((a, b) => a - b);
-  return sorted[Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length))] ?? 0;
+  return below + (above - below) * (rank - Math.floor(rank));
 }
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
@@ -68,6 +75,21 @@ async function tabMemory(): Promise<Memory | null> {
   }
   const result: unknown = await Reflect.apply(measure, performance, []);
   return isRecord(result) && typeof result["bytes"] === "number" ? { bytes: result["bytes"], scope: "whole tab, workers included" } : null;
+}
+
+/**
+ * The grid's drawing time per frame between two samples of its counters, or `last` if it drew nothing since.
+ * A layout change can replace the grid, whose counters then start again, so the figure starts again too.
+ */
+function drawTime(stats: DrawStats | null, previous: DrawStats | null, last: number | null): number | null {
+  if (stats === null || previous === null) {
+    return stats === null ? null : last;
+  }
+  if (stats.frames < previous.frames) {
+    return null;
+  }
+  const frames = stats.frames - previous.frames;
+  return frames > 0 ? (stats.drawMs - previous.drawMs) / frames : last;
 }
 
 const MEGABYTE = 1024 * 1024;
@@ -160,11 +182,18 @@ export class PerformanceComponent {
   constructor() {
     const intervals: number[] = [];
     const longFrames: { readonly at: number; readonly blocked: number }[] = [];
-    let last = performance.now();
+    // A hidden tab draws nothing, so the interval spanning its absence is not a frame.
+    let last: number | null = null;
+    const onVisibility = (): void => {
+      last = null;
+    };
+    document.addEventListener("visibilitychange", onVisibility);
     let handle = requestAnimationFrame(function tick(now: number): void {
-      intervals.push(now - last);
-      if (intervals.length > FRAMES) {
-        intervals.shift();
+      if (last !== null && !document.hidden) {
+        intervals.push(now - last);
+        if (intervals.length > FRAMES) {
+          intervals.shift();
+        }
       }
       last = now;
       handle = requestAnimationFrame(tick);
@@ -173,7 +202,9 @@ export class PerformanceComponent {
     if (PerformanceObserver.supportedEntryTypes.includes("long-animation-frame")) {
       observer = new PerformanceObserver((list) => {
         for (const entry of list.getEntries()) {
-          longFrames.push({ at: entry.startTime, blocked: Math.max(0, entry.duration - 50) });
+          // The time long tasks in the frame ran past 50 ms each, as the API reports it.
+          const blocking: unknown = Reflect.get(entry, "blockingDuration");
+          longFrames.push({ at: entry.startTime, blocked: typeof blocking === "number" ? blocking : 0 });
         }
       });
       observer.observe({ type: "long-animation-frame", buffered: false });
@@ -187,10 +218,7 @@ export class PerformanceComponent {
         longFrames.shift();
       }
       const stats = this.stats()();
-      const frames = stats === null || previous === null ? 0 : stats.frames - previous.frames;
-      if (stats !== null && previous !== null && frames > 0) {
-        drawMsPerFrame = (stats.drawMs - previous.drawMs) / frames;
-      }
+      drawMsPerFrame = drawTime(stats, previous, drawMsPerFrame);
       previous = stats;
       const latencies = stats?.latencyMs ?? [];
       this.figures.set({
@@ -232,6 +260,7 @@ export class PerformanceComponent {
     const memoryTimer = setInterval(measure, 10_000);
     inject(DestroyRef).onDestroy(() => {
       cancelAnimationFrame(handle);
+      document.removeEventListener("visibilitychange", onVisibility);
       observer?.disconnect();
       clearInterval(sampler);
       clearInterval(memoryTimer);

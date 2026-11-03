@@ -71,8 +71,10 @@ function sameViewport(a: Viewport | null, b: Viewport): boolean {
 export class ViewHandle {
   private configVersion = 0n;
   private lastLoadVersion = 0n;
-  private inFlight: { readonly viewport: Viewport; readonly requestId: bigint; readonly sentAtMs: number } | null = null;
-  private pending: Viewport | null = null;
+  /** The viewport request awaiting its frame, and when the grid asked for it. */
+  private inFlight: { readonly viewport: Viewport; readonly requestId: bigint; readonly askedAtMs: number } | null = null;
+  /** A viewport asked for while another was in flight, and when. */
+  private pending: { readonly viewport: Viewport; readonly askedAtMs: number } | null = null;
   private closed = false;
   private readonly fetches = new Map<bigint, Pending<FrameData>>();
   private readonly lists = new Map<bigint, Pending<DistinctValues>>();
@@ -85,19 +87,21 @@ export class ViewHandle {
 
   /** The most recent window asked for, whether answered yet or not. */
   public requested(): Viewport | null {
-    return this.pending ?? this.inFlight?.viewport ?? null;
+    return this.pending?.viewport ?? this.inFlight?.viewport ?? null;
   }
 
   /** Asks for a window of rows and data columns. */
   public setViewport(viewport: Viewport): void {
-    if (this.closed || sameViewport(this.inFlight?.viewport ?? null, viewport) || sameViewport(this.pending, viewport)) {
+    if (this.closed || sameViewport(this.inFlight?.viewport ?? null, viewport) || sameViewport(this.pending?.viewport ?? null, viewport)) {
       return;
     }
+    // The clock starts now, so time spent waiting behind the request in flight counts.
+    const askedAtMs = performance.now();
     if (this.inFlight !== null) {
-      this.pending = viewport;
+      this.pending = { viewport, askedAtMs };
       return;
     }
-    this.sendViewport(viewport);
+    this.sendViewport(viewport, askedAtMs);
   }
 
   /** Fetches one window without moving the viewport, for copying. At most 1,000,000 cells. */
@@ -165,12 +169,12 @@ export class ViewHandle {
     }
   }
 
-  private sendViewport(viewport: Viewport): void {
+  private sendViewport(viewport: Viewport, askedAtMs: number): void {
     const requestId = this.connection.send({
       case: "setViewport",
       value: { viewId: this.id, firstRow: BigInt(viewport.firstRow), rowCount: BigInt(viewport.rowCount), firstColumn: viewport.firstColumn, columnCount: viewport.columnCount }
     });
-    this.inFlight = { viewport, requestId, sentAtMs: performance.now() };
+    this.inFlight = { viewport, requestId, askedAtMs };
   }
 
   /** Releases the in-flight viewport if `requestId` answers it, and sends any pending one. */
@@ -182,7 +186,7 @@ export class ViewHandle {
     const next = this.pending;
     this.pending = null;
     if (next !== null) {
-      this.sendViewport(next);
+      this.sendViewport(next.viewport, next.askedAtMs);
     }
   }
 
@@ -194,13 +198,13 @@ export class ViewHandle {
       fetch.resolve(frame);
       return;
     }
-    const sentAtMs = this.inFlight?.requestId === requestId ? this.inFlight.sentAtMs : undefined;
+    const askedAtMs = this.inFlight?.requestId === requestId ? this.inFlight.askedAtMs : undefined;
     this.settle(requestId);
     if (frame.configVersion < this.configVersion || frame.loadVersion < this.lastLoadVersion) {
       return;
     }
     this.lastLoadVersion = frame.loadVersion;
-    this.listener.frame(sentAtMs === undefined ? frame : { ...frame, requestedAtMs: sentAtMs });
+    this.listener.frame(askedAtMs === undefined ? frame : { ...frame, requestedAtMs: askedAtMs });
   }
 
   /** @internal Called by the connection when the transport closes: fetches fail and the view reports why. */

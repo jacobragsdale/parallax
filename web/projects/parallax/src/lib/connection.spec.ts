@@ -1,7 +1,8 @@
 import { create, toBinary } from "@bufbuild/protobuf";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { Connection } from "./connection";
+import type { FrameData } from "./frame";
 import { ServerMessageSchema } from "./proto/parallax_pb";
 
 function connection(): { readonly connection: Connection; readonly sent: Uint8Array[] } {
@@ -54,5 +55,47 @@ describe("Connection.dataset", () => {
     const waiting = closed.dataset("positions");
     closed.disconnect("gone");
     await expect(waiting).rejects.toThrow("gone");
+  });
+});
+
+describe("ViewHandle request timing", () => {
+  const frame = (configVersion = 0n): FrameData => ({
+    viewId: 1,
+    configVersion,
+    loadVersion: 1n,
+    firstRow: 0,
+    firstColumn: 0,
+    rowCount: 0,
+    totalRows: 0,
+    totalColumns: 0,
+    sourceAsOfMicros: 0n,
+    pushed: false,
+    columns: [],
+    groups: [],
+    tree: null
+  });
+
+  it("stamps each answered frame with when the grid asked, including time queued behind another request", () => {
+    let now = 1_000;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+    const { connection: c } = connection();
+    const seen: FrameData[] = [];
+    const view = c.open("positions", "{}", {
+      frame: (f) => {
+        seen.push(f);
+      }
+    });
+    view.setViewport({ firstRow: 0, rowCount: 50, firstColumn: 0, columnCount: 5 });
+    now = 1_010;
+    // Asked while the first is in flight: queued, and timed from now.
+    view.setViewport({ firstRow: 100, rowCount: 50, firstColumn: 0, columnCount: 5 });
+    now = 1_200;
+    // Hello was request 1 and opening the view 2, so the viewports are 3 and then 4.
+    view.receiveFrame(frame(), 3n);
+    view.receiveFrame(frame(), 4n);
+    // A frame nobody asked for, such as a pushed refresh, has no time.
+    view.receiveFrame(frame(), 99n);
+    expect(seen.map((f) => f.requestedAtMs)).toEqual([1_000, 1_010, undefined]);
+    clock.mockRestore();
   });
 });

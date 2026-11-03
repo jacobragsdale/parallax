@@ -374,8 +374,8 @@ export class GridComponent {
   private readonly extent = computed((): Extent => ({ rows: this.totalRows(), columns: this.geometry().count, tree: this.geometry().treePx > 0 }));
 
   private stats: DrawStats = { frames: 0, fullDraws: 0, cellDraws: 0, drawMs: 0, latencyMs: [] };
-  /** The last frame drawn, so that its request-to-draw time is counted once. */
-  private timedFrame: FrameData | null = null;
+  /** When the rows of the last frame timed were asked for, so that each request is counted once. */
+  private timedRequest: number | null = null;
   private drawn = new Map<string, string>();
   private drawnRows = new Set<number>();
   /** Full text of cells drawn cut short, and notes for flagged cells, by cell key. */
@@ -981,9 +981,12 @@ export class GridComponent {
     if (frame !== null) {
       const cells = this.drawRows(pass, frame, first, height);
       const now = performance.now();
-      const answered = frame !== this.timedFrame && frame.requestedAtMs !== undefined;
-      this.timedFrame = frame;
-      const latencyMs = answered ? [...this.stats.latencyMs.slice(1 - LATENCIES), now - (frame.requestedAtMs ?? now)] : this.stats.latencyMs;
+      const asked = frame.requestedAtMs;
+      const answered = asked !== undefined && asked !== this.timedRequest;
+      if (answered) {
+        this.timedRequest = asked;
+      }
+      const latencyMs = answered ? [...this.stats.latencyMs.slice(1 - LATENCIES), now - asked] : this.stats.latencyMs;
       this.stats = { frames: this.stats.frames + 1, fullDraws: this.stats.fullDraws, cellDraws: this.stats.cellDraws + cells, drawMs: this.stats.drawMs + now - started, latencyMs };
     }
   }

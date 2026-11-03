@@ -85,7 +85,7 @@ export interface FrameData {
   readonly totalColumns: number;
   readonly sourceAsOfMicros: bigint;
   readonly pushed: boolean;
-  /** When the viewport request this frame answers was sent, by `performance.now()`; absent for frames nobody asked for. */
+  /** When the grid asked for the rows this frame answers, by `performance.now()`; absent for frames nobody asked for. */
   readonly requestedAtMs?: number;
   /** Data columns, in display order. */
   readonly columns: readonly FrameColumn[];

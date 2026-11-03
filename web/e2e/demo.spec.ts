@@ -72,7 +72,7 @@ test("the performance overlay measures the page and copies its report", async ({
   }
   await expect(figure("latency")).toContainText("median", { timeout: 10_000 });
   await expect(figure("draw")).toContainText(/[\d.]+ ms per frame/, { timeout: 10_000 });
-  // The heap figure shows at once; the whole tab's, which the isolated test page allows, arrives when the browser answers.
+  // The heap figure shows at once; the whole tab's, which an isolated page allows, arrives when the browser answers.
   await expect(figure("memory")).toContainText("MB", { timeout: 10_000 });
   await expect(figure("memory-scope")).toHaveText(/^(whole tab, workers included|JavaScript heap of the page, without workers or canvases)$/);
   await page.locator("demo-performance").getByRole("button", { name: "Copy report" }).click();
@@ -81,6 +81,8 @@ test("the performance overlay measures the page and copies its report", async ({
   expect(report).toContain("parallax performance report");
   expect(report).toContain("Showing: trades, grid, light theme, compact rows");
   expect(report).toMatch(/Rows asked to drawn: [\d.]+ ms median/);
-  expect(report).toContain("Cross-origin isolated: yes");
+  // examples/experiment.toml isolates the page, but a server already running may not.
+  const isolated = await page.evaluate(() => crossOriginIsolated);
+  expect(report).toContain(`Cross-origin isolated: ${isolated ? "yes" : "no"}`);
   expect(report).toMatch(/Memory: \d+ MB/);
 });
