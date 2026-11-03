@@ -25,8 +25,12 @@ describe("layoutSchema", () => {
 
   it("refuses values the engine would refuse", () => {
     expect(layoutSchema.safeParse({ version: 2 }).success).toBe(false);
+    expect(layoutSchema.safeParse({ column_widths: { x: -1 } }).success).toBe(false);
     expect(layoutSchema.safeParse({ measures: [{ aggregate: "percentile", percentile: 1.5 }] }).success).toBe(false);
     expect(layoutSchema.safeParse({ formats: { x: { decimals: 31 } } }).success).toBe(false);
-    expect(layoutSchema.safeParse({ column_widths: { x: 0 } }).success).toBe(false);
+  });
+
+  it("brings older versions up to date, as the Rust crate does", () => {
+    expect(parseLayout({ version: 0 }).version).toBe(1);
   });
 });

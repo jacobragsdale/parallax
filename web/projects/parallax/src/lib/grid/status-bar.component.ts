@@ -89,7 +89,9 @@ export class StatusBarComponent {
   });
 
   protected readonly asOf = computed(() => {
-    const micros = this.sourceAsOf() ?? this.status()?.loadedAtMicros ?? null;
+    // Zero means the source gave no time; fall back to when the table loaded.
+    const source = this.sourceAsOf();
+    const micros = source !== null && source !== 0n ? source : (this.status()?.loadedAtMicros ?? null);
     if (micros === null || micros === 0n) {
       return null;
     }

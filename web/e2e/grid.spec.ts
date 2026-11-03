@@ -50,15 +50,29 @@ test("the pivot draws, and the status bar says where the numbers come from", asy
   expect(errors).toEqual([]);
 });
 
-test("clicking a group collapses and expands it, and the layout records it", async ({ page }) => {
+// Row 0 is the grand total; row 1 is the first fund, expanded by default. Its
+// marker sits one indent in: 6 px of padding plus 14 px per level.
+const FIRST_FUND_MARKER = 24;
+
+test("clicking a group's marker collapses and expands it, and the layout records it", async ({ page }) => {
   await open(page, "preset=pivot");
   const before = await rowCount(page);
-  // Row 0 is the grand total; row 1 is the first fund, expanded by default.
-  await clickAt(page, 60, ROW * 2 + ROW / 2);
+  await clickAt(page, FIRST_FUND_MARKER, ROW * 2 + ROW / 2);
   await expect.poll(() => rowCount(page)).toBeLessThan(before);
   expect(await layout(page)).toMatchObject({ expanded: [{ expanded: false }] });
-  await clickAt(page, 60, ROW * 2 + ROW / 2);
+  await clickAt(page, FIRST_FUND_MARKER, ROW * 2 + ROW / 2);
   await expect.poll(() => rowCount(page)).toBe(before);
+});
+
+test("clicking a group's label selects it without toggling; a double click toggles", async ({ page }) => {
+  await open(page, "preset=pivot");
+  const before = await rowCount(page);
+  await clickAt(page, 120, ROW * 2 + ROW / 2);
+  await page.waitForTimeout(300);
+  expect(await rowCount(page)).toBe(before);
+  expect((await copied(page)).trim()).toBe("Atlas Global Macro");
+  await page.locator("canvas.px-canvas").dblclick({ position: { x: 120, y: ROW * 2 + ROW / 2 } });
+  await expect.poll(() => rowCount(page)).toBeLessThan(before);
 });
 
 test("clicking a header sorts, and copying carries every digit", async ({ page }) => {
@@ -133,6 +147,19 @@ test("copying more rows than are loaded fetches them first", async ({ page }) =>
   await open(page, "preset=pivot");
   await clickAt(page, 60, ROW + ROW / 2);
   await page.keyboard.press("ControlOrMeta+a");
+  const text = await copied(page);
+  expect(text.split("\r\n")).toHaveLength(await rowCount(page));
+});
+
+test("on a page that is not a secure context, rows fetched for a copy wait for a second Ctrl+C", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(window, "isSecureContext", { value: false });
+  });
+  await open(page, "preset=pivot");
+  await clickAt(page, 120, ROW + ROW / 2);
+  await page.keyboard.press("ControlOrMeta+a");
+  await page.keyboard.press("ControlOrMeta+c");
+  await expect(page.locator(".px-status-message")).toContainText("press Ctrl+C again", { timeout: 30_000 });
   const text = await copied(page);
   expect(text.split("\r\n")).toHaveLength(await rowCount(page));
 });

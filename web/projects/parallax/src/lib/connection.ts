@@ -169,6 +169,18 @@ export class ViewHandle {
     this.listener.frame(frame);
   }
 
+  /** @internal Called by the connection when the transport closes: fetches fail and the view reports why. */
+  public receiveDisconnect(reason: string): void {
+    for (const pending of this.fetches.values()) {
+      pending.reject(new Error(reason));
+    }
+    this.fetches.clear();
+    this.inFlight = null;
+    this.pending = null;
+    this.closed = true;
+    this.listener.error?.(reason);
+  }
+
   /** @internal Called by the connection. */
   public receiveOpened(opened: ViewOpened): void {
     this.listener.opened?.(opened);
@@ -230,6 +242,9 @@ export class Connection {
       socket.addEventListener("error", () => {
         reject(new Error(`could not connect to ${url}`));
       });
+      socket.addEventListener("close", () => {
+        connection?.disconnect("The connection to the server closed. Reload the page to reconnect.");
+      });
     });
   }
 
@@ -264,6 +279,17 @@ export class Connection {
     this.nextRequest += 1n;
     this.transport.send(toBinary(ClientMessageSchema, create(ClientMessageSchema, { requestId, body })));
     return requestId;
+  }
+
+  /** Marks every view disconnected: pending fetches fail and each view reports `reason`. */
+  public disconnect(reason: string): void {
+    for (const view of [...this.views.values()]) {
+      view.receiveDisconnect(reason);
+    }
+    this.views.clear();
+    for (const listener of this.errors) {
+      listener(reason);
+    }
   }
 
   /** @internal Forgets a closed view. */

@@ -1060,7 +1060,7 @@ mod tests {
             "expand_depth": 2,
             "expanded": [{"path": ["Atlas", null, 1.5, true], "expanded": false}],
             "formats": {"quantity": {"abbreviate": "thousands"}, "trade_time": {"precision": "microseconds"}},
-            "column_widths": {"fund": 180, "__tree": 300, "0": 120}
+            "column_widths": {"fund": 180, "__tree": 300, "0": 120, "region": 0}
         }"#;
         [Layout::default(), Layout::from_json(full).unwrap()]
             .iter()

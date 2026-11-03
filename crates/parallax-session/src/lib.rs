@@ -449,15 +449,19 @@ impl Session {
                 let table = Arc::clone(&open.table);
                 {
                     let state = read_table(&table)?;
-                    open.catch_up(&state)?;
+                    // A view that cannot catch up, because its old layout no longer
+                    // fits the table, is rebuilt from the new layout instead, so a
+                    // corrected layout repairs it.
+                    let current = open.catch_up(&state).is_ok();
                     let resolved = layout.resolve(&state.table).map_err(|e| e.to_string())?;
                     // Display-only changes, such as formats, widths or newly expanded
                     // groups, keep the computed view; anything else rebuilds it.
-                    let kept = open
-                        .layout
-                        .expanded
-                        .iter()
-                        .all(|old| layout.expanded.iter().any(|new| new.path == old.path))
+                    let kept = current
+                        && open
+                            .layout
+                            .expanded
+                            .iter()
+                            .all(|old| layout.expanded.iter().any(|new| new.path == old.path))
                         && open
                             .view
                             .reformat(&state.table, &resolved.config)

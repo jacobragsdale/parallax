@@ -62,7 +62,14 @@ const expandedSchema = z.strictObject({ path: z.array(scalar), expanded: z.boole
 
 /** The schema of a layout document. Unknown fields are errors, as in Rust. */
 export const layoutSchema = z.strictObject({
-  version: z.literal(LAYOUT_VERSION).default(LAYOUT_VERSION),
+  // Older versions are read and brought up to date, as the Rust crate does.
+  version: z
+    .number()
+    .int()
+    .min(0)
+    .max(LAYOUT_VERSION)
+    .default(LAYOUT_VERSION)
+    .transform((): typeof LAYOUT_VERSION => LAYOUT_VERSION),
   dataset: z.string().default(""),
   parameters: z.record(z.string(), z.string()).default({}),
   columns: z.array(name).default([]),
@@ -77,7 +84,7 @@ export const layoutSchema = z.strictObject({
   expand_depth: count.default(0),
   expanded: z.array(expandedSchema).default([]),
   formats: z.record(name, formatSchema).default({}),
-  column_widths: z.record(z.string(), z.number().int().positive()).default({})
+  column_widths: z.record(z.string(), z.number().int().min(0).max(4_294_967_295)).default({})
 });
 
 /** A complete layout, with every default filled in. */

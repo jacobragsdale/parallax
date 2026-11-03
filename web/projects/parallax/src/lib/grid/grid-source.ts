@@ -75,6 +75,12 @@ function pathKey(path: readonly LayoutScalar[]): string {
   return JSON.stringify(path);
 }
 
+/** Records a group as expanded or collapsed, replacing any earlier entry for the same path. */
+export function withExpanded(layout: Layout, entry: ExpandedEntry): Layout {
+  const key = pathKey(entry.path);
+  return { ...layout, expanded: [...layout.expanded.filter((e) => pathKey(e.path) !== key), { path: [...entry.path], expanded: entry.expanded }] };
+}
+
 function readFields(schema: Uint8Array): readonly SourceField[] {
   const table = tableFromIPC(schema);
   if (!(table instanceof Table)) {
@@ -227,9 +233,8 @@ export function gridSource(layout: Signal<Layout | null>): GridSource {
         return null;
       }
       const entry: ExpandedEntry = { path: groupPath(shown, local), expanded: !expanded };
-      const key = pathKey(entry.path);
       current.view.setExpanded(entry.path, entry.expanded);
-      current.sent = { ...current.sent, expanded: [...current.sent.expanded.filter((e) => pathKey(e.path) !== key), { path: [...entry.path], expanded: entry.expanded }] };
+      current.sent = withExpanded(current.sent, entry);
       return entry;
     },
     fetch: (viewport) => (current === null ? Promise.reject(new Error("the view is not open yet")) : current.view.fetch(viewport))

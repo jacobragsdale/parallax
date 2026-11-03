@@ -44,7 +44,7 @@ import { installThemeStyles, readTheme } from "../theme";
 import type { Theme, ThemeName } from "../theme";
 import { DEFAULT_TREE_WIDTH, DEFAULT_WIDTH, MIN_WIDTH, flatGeometry, groupedGeometry, rowGeometry } from "./geometry";
 import type { ColumnGeometry } from "./geometry";
-import { gridSource } from "./grid-source";
+import { gridSource, withExpanded } from "./grid-source";
 import { contains, moveFocus, rangeOf, selectAll, toTsv } from "./selection";
 import type { CellRange, CellRef, Extent, Selection } from "./selection";
 import { StatusBarComponent } from "./status-bar.component";
@@ -65,6 +65,8 @@ export type Density = keyof typeof ROW_HEIGHTS;
 
 const PADDING = 6;
 const INDENT = 14;
+/** The width of the expand marker, which a click toggles. */
+const MARKER_WIDTH = 14;
 /** How close to a header edge, in pixels, the pointer starts a resize. */
 const EDGE = 4;
 const TOOLTIP_DELAY_MS = 350;
@@ -108,6 +110,8 @@ interface Pass {
   readonly width: number;
   readonly range: CellRange | null;
   readonly focus: CellRef | null;
+  /** Rows to redraw even if their text has not changed, because the selection moved over them. */
+  readonly stale: ReadonlySet<number>;
 }
 
 function isGrouped(layout: Layout): boolean {
@@ -117,28 +121,6 @@ function isGrouped(layout: Layout): boolean {
 function parse(input: LayoutInput): Parsed {
   const result = layoutSchema.safeParse(input);
   return result.success ? { ok: true, layout: result.data } : { ok: false, error: `Invalid layout: ${z.prettifyError(result.error)}` };
-}
-
-/** Writes text to the clipboard outside a copy event. */
-async function writeClipboard(text: string): Promise<void> {
-  if (window.isSecureContext) {
-    await navigator.clipboard.writeText(text);
-    return;
-  }
-  // Plain-HTTP intranet pages have no Clipboard API; a selected text area and the
-  // copy command still work there.
-  const area = document.createElement("textarea");
-  area.value = text;
-  area.style.position = "fixed";
-  area.style.opacity = "0";
-  document.body.append(area);
-  area.select();
-  // eslint-disable-next-line @typescript-eslint/no-deprecated -- the only clipboard path on pages that are not secure contexts
-  const copied = document.execCommand("copy");
-  area.remove();
-  if (!copied) {
-    throw new Error("the browser refused to copy");
-  }
 }
 
 const GRID_STYLES = `
@@ -293,6 +275,8 @@ const GRID_STYLES = `
           (pointermove)="onPointerMove($event)"
           (pointerup)="onPointerUp($event)"
           (pointerleave)="onPointerLeave()"
+          (pointercancel)="endPointer()"
+          (lostpointercapture)="endPointer()"
           (dblclick)="onDoubleClick($event)"
         ></canvas>
       </div>
@@ -373,6 +357,11 @@ export class GridComponent {
   private readonly textWidths = new Map<string, number>();
   private pressed: { readonly hit: Hit; readonly x: number; readonly startWidth: number; readonly key: string } | null = null;
   private selecting = false;
+  /** The selection as last drawn, to find the rows a new selection changes. */
+  private drawnRange: CellRange | null = null;
+  private drawnFocus: CellRef | null = null;
+  /** Rows fetched for a copy that could not reach the clipboard at once, kept for the next Ctrl+C. */
+  private prepared: { readonly key: string; readonly text: string } | null = null;
   private tooltipTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
@@ -523,8 +512,29 @@ export class GridComponent {
     this.selection.set(event.shiftKey && previous !== null ? { anchor: previous.anchor, focus: cell } : { anchor: cell, focus: cell });
     this.selecting = true;
     canvas.setPointerCapture(event.pointerId);
-    if (hit.column === -1 && !event.shiftKey) {
+    if (hit.column === -1 && !event.shiftKey && this.onMarker(hit.row, event.offsetX)) {
       this.toggleRow(hit.row);
+    }
+  }
+
+  /** Whether `x` falls on the expand marker of row `row`'s group cell. */
+  private onMarker(row: number, x: number): boolean {
+    const frame = this.source.frame();
+    const tree = frame?.tree ?? null;
+    const local = frame === null ? -1 : row - frame.firstRow;
+    if (frame === null || tree === null || local < 0 || local >= frame.rowCount || tree.expanded(local) === null) {
+      return false;
+    }
+    const left = PADDING + tree.depth(local) * INDENT;
+    return x >= left - 4 && x <= left + MARKER_WIDTH;
+  }
+
+  /** Ends a drag that the browser cancelled, as when the window loses focus. */
+  protected endPointer(): void {
+    this.pressed = null;
+    this.selecting = false;
+    if (this.liveWidth() !== null) {
+      this.liveWidth.set(null);
     }
   }
 
@@ -578,6 +588,9 @@ export class GridComponent {
     const hit = this.hit(event.offsetX, event.offsetY);
     if (hit.header && hit.edge !== null) {
       this.setWidth(this.widthKeyOf(hit.edge), this.fitWidth(hit.edge));
+    } else if (!hit.header && hit.column === -1 && hit.row !== null && !this.onMarker(hit.row, event.offsetX)) {
+      // The marker toggles on a single click, so only the label toggles here.
+      this.toggleRow(hit.row);
     }
   }
 
@@ -658,8 +671,7 @@ export class GridComponent {
     }
     const entry = this.source.toggle(frame, local);
     if (entry !== null) {
-      const key = JSON.stringify(entry.path);
-      this.change((layout) => ({ ...layout, expanded: [...layout.expanded.filter((e) => JSON.stringify(e.path) !== key), { path: [...entry.path], expanded: entry.expanded }] }));
+      this.change((layout) => withExpanded(layout, entry));
     }
   }
 
@@ -732,6 +744,11 @@ export class GridComponent {
     return toTsv(rows);
   }
 
+  /** Identifies a copied range in one configuration and load of the view. */
+  private copyKey(frame: FrameData, range: CellRange): string {
+    return JSON.stringify([frame.configVersion.toString(), frame.loadVersion.toString(), range]);
+  }
+
   protected onCopy(event: ClipboardEvent): void {
     const selection = this.selection();
     const frame = this.source.frame();
@@ -741,28 +758,52 @@ export class GridComponent {
     event.preventDefault();
     const range = rangeOf(selection);
     const rows = range.bottom - range.top + 1;
-    const noun = rows === 1 ? "row" : "rows";
-    const held = this.rangeText(frame, range);
-    if (held !== null) {
-      event.clipboardData?.setData("text/plain", held);
-      this.message.set(`Copied ${rows.toLocaleString("en-US")} ${noun}`);
+    const count = `${rows.toLocaleString("en-US")} ${rows === 1 ? "row" : "rows"}`;
+    const key = this.copyKey(frame, range);
+    const ready = this.prepared?.key === key ? this.prepared.text : this.rangeText(frame, range);
+    if (ready !== null) {
+      event.clipboardData?.setData("text/plain", ready);
+      this.prepared = null;
+      this.message.set(`Copied ${count}`);
       return;
     }
     const firstColumn = Math.max(0, range.left);
-    this.message.set(`Copying ${rows.toLocaleString("en-US")} ${noun}…`);
-    this.source
-      .fetch({ firstRow: range.top, rowCount: rows, firstColumn, columnCount: Math.max(1, range.right - firstColumn + 1) })
-      .then(async (fetched) => {
-        const text = this.rangeText(fetched, range);
-        if (text === null) {
-          throw new Error("the rows changed while copying; copy again");
+    this.message.set(`Copying ${count}…`);
+    const fetched = this.source.fetch({ firstRow: range.top, rowCount: rows, firstColumn, columnCount: Math.max(1, range.right - firstColumn + 1) }).then((f) => {
+      const text = this.rangeText(f, range);
+      if (text === null) {
+        throw new Error("the rows changed while copying; copy again");
+      }
+      return { text, key: this.copyKey(f, range) };
+    });
+    const keep = (): void => {
+      // Browsers only let a page write to the clipboard during the user's action,
+      // and the rows arrived after it ended: keep them for the next Ctrl+C.
+      fetched.then(
+        (copy) => {
+          this.prepared = copy;
+          this.message.set(`${count} ready: press Ctrl+C again to copy them`);
+        },
+        (failure: unknown) => {
+          this.message.set(`Copy failed: ${failure instanceof Error ? failure.message : String(failure)}`);
         }
-        await writeClipboard(text);
-        this.message.set(`Copied ${rows.toLocaleString("en-US")} ${noun}`);
-      })
-      .catch((failure: unknown) => {
-        this.message.set(`Copy failed: ${failure instanceof Error ? failure.message : String(failure)}`);
-      });
+      );
+    };
+    if (!window.isSecureContext || typeof ClipboardItem === "undefined") {
+      keep();
+      return;
+    }
+    // Started inside the copy event, the write still counts as the user's action;
+    // the text follows when the rows arrive.
+    const blob = fetched.then((copy) => new Blob([copy.text], { type: "text/plain" }));
+    navigator.clipboard.write([new ClipboardItem({ "text/plain": blob })]).then(
+      () => {
+        this.message.set(`Copied ${count}`);
+      },
+      () => {
+        keep();
+      }
+    );
   }
 
   // ---- Tooltips ----------------------------------------------------------
@@ -846,28 +887,37 @@ export class GridComponent {
     const layout = this.current();
     const versions = frame === null ? null : [frame.configVersion.toString(), frame.loadVersion.toString(), frame.totalRows, frame.firstColumn];
     const decor = layout === null ? null : [layout.column_widths, layout.sort, layout.group_sort];
-    return JSON.stringify([at, versions, this.theme(), geometry.treePx, geometry.contentWidth, decor, this.selection()]);
+    return JSON.stringify([at, versions, this.theme(), geometry.treePx, geometry.contentWidth, decor]);
+  }
+
+  /** Visible rows the selection covered or now covers, which must be redrawn even if their text is unchanged. */
+  private selectionRows(range: CellRange | null, focus: CellRef | null, at: Area): ReadonlySet<number> {
+    const rows = new Set<number>();
+    const visible = Math.ceil(at.height / this.rowHeight());
+    for (let row = at.first; row < at.first + visible; row += 1) {
+      const covered = (r: CellRange | null): boolean => r !== null && row >= r.top && row <= r.bottom;
+      if (covered(range) || covered(this.drawnRange) || row === focus?.row || row === this.drawnFocus?.row) {
+        rows.add(row);
+      }
+    }
+    return rows;
   }
 
   private begin(target: CanvasRenderingContext2D, frame: FrameData | null, at: Area): Pass {
     const geometry = this.geometry();
     const selection = this.selection();
     const shape = this.shapeOf(frame, at);
+    const range = selection === null ? null : rangeOf(selection);
+    const focus = selection?.focus ?? null;
+    const moved = JSON.stringify([range, focus]) !== JSON.stringify([this.drawnRange, this.drawnFocus]);
+    const stale = moved ? this.selectionRows(range, focus, at) : new Set<number>();
+    this.drawnRange = range;
+    this.drawnFocus = focus;
     const full = this.tokens === null || shape !== this.shape;
     const theme = full || this.tokens === null ? readTheme(this.canvas().nativeElement) : this.tokens;
     this.tokens = theme;
     this.shape = shape;
-    const pass: Pass = {
-      context: target,
-      theme,
-      rowPx: this.rowHeight(),
-      full,
-      geometry,
-      scrollLeft: at.scrollLeft,
-      width: at.width,
-      range: selection === null ? null : rangeOf(selection),
-      focus: selection?.focus ?? null
-    };
+    const pass: Pass = { context: target, theme, rowPx: this.rowHeight(), full, geometry, scrollLeft: at.scrollLeft, width: at.width, range, focus, stale };
     const { context } = pass;
     context.font = theme.font;
     context.textBaseline = "middle";
@@ -1019,7 +1069,7 @@ export class GridComponent {
     const marker = expanded === null ? "  " : expanded ? "▾ " : "▸ ";
     const text = `${marker}${tree.label(local)}`;
     const key = `${String(row)}:-1`;
-    if (!pass.full && this.drawn.get(key) === text) {
+    if (!pass.full && !pass.stale.has(row) && this.drawn.get(key) === text) {
       return 0;
     }
     const { context, theme, rowPx, geometry } = pass;
@@ -1042,7 +1092,7 @@ export class GridComponent {
     }
     const text = data.text(local);
     const key = `${String(row)}:${String(column)}`;
-    if (!pass.full && this.drawn.get(key) === text) {
+    if (!pass.full && !pass.stale.has(row) && this.drawn.get(key) === text) {
       return false;
     }
     const { context, theme, rowPx, geometry } = pass;

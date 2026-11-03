@@ -35,6 +35,11 @@ export interface ColumnGeometry {
 
 type Widths = Readonly<Record<string, number>>;
 
+/** A stored width, kept at or above the minimum so that every column can be found and grabbed. */
+function widthOr(widths: Widths, key: string, fallback: number): number {
+  return Math.max(MIN_WIDTH, widths[key] ?? fallback);
+}
+
 function prefixSums(widths: readonly number[]): readonly number[] {
   const sums = [0];
   for (const w of widths) {
@@ -61,7 +66,7 @@ function search(sums: readonly number[], x: number): number {
 /** Geometry of a flat view whose columns are `names`, in order. Columns past the names known so far get the default width. */
 export function flatGeometry(count: number, names: readonly string[], widths: Widths): ColumnGeometry {
   const key = (column: number): string => names[column] ?? `#${String(column)}`;
-  const sums = prefixSums(Array.from({ length: count }, (_, j) => widths[key(j)] ?? DEFAULT_WIDTH));
+  const sums = prefixSums(Array.from({ length: count }, (_, j) => widthOr(widths, key(j), DEFAULT_WIDTH)));
   const total = sums.at(-1) ?? 0;
   return {
     count,
@@ -77,8 +82,8 @@ export function flatGeometry(count: number, names: readonly string[], widths: Wi
 /** Geometry of a grouped view with `count` data columns built from `measures` measures. */
 export function groupedGeometry(count: number, measures: number, widths: Widths): ColumnGeometry {
   const period = Math.max(1, measures);
-  const treePx = widths[TREE_WIDTH_KEY] ?? DEFAULT_TREE_WIDTH;
-  const sums = prefixSums(Array.from({ length: period }, (_, m) => widths[measureWidthKey(m)] ?? DEFAULT_WIDTH));
+  const treePx = widthOr(widths, TREE_WIDTH_KEY, DEFAULT_TREE_WIDTH);
+  const sums = prefixSums(Array.from({ length: period }, (_, m) => widthOr(widths, measureWidthKey(m), DEFAULT_WIDTH)));
   const span = sums.at(-1) ?? DEFAULT_WIDTH;
   const x = (column: number): number => treePx + Math.floor(column / period) * span + (sums[column % period] ?? 0);
   return {
