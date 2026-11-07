@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Parallax alone: one chart</title>
+    <style>
+      body {
+        font:
+          14px system-ui,
+          sans-serif;
+        margin: 16px;
+        background: #fff;
+        color: #111;
+      }
+      textarea {
+        width: 100%;
+        height: 40vh;
+        font:
+          12px ui-monospace,
+          monospace;
+      }
+    </style>
+    <script type="module" src="chart.js"></script>
+  </head>
+  <body>
+    <canvas width="640" height="320"></canvas>
+    <p><button id="copy">Copy report</button> <button id="clear">Forget earlier loads</button></p>
+    <textarea id="report" readonly></textarea>
+  </body>
+</html>
