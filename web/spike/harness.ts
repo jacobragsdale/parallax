@@ -365,6 +365,8 @@ declare global {
 const api = { startEngine, ready, probeStart, probeStop, generate, load, open, relayout, exportView, stats, record, webgl, measureSize, LAYOUTS };
 window.spike = api;
 
+const REPORT_KEY = "parallax-spike-rows-report";
+
 /** The Run button: every size in the box, smallest first, stopping at the first failure. */
 async function run(): Promise<void> {
   const output = document.querySelector<HTMLTextAreaElement>("#report");
@@ -381,8 +383,15 @@ async function run(): Promise<void> {
     sizes: [] as SizeReport[]
   };
   const show = (): void => {
+    const text = JSON.stringify(report, null, 1);
     if (output !== null) {
-      output.value = JSON.stringify(report, null, 1);
+      output.value = text;
+    }
+    // Kept so that a tab that runs out of memory and crashes shows the report so far when reloaded.
+    try {
+      localStorage.setItem(REPORT_KEY, text);
+    } catch {
+      // Without storage, only this tab holds the report.
     }
   };
   for (const rows of sizes) {
@@ -397,6 +406,16 @@ async function run(): Promise<void> {
   }
   report["finishedAt"] = new Date().toISOString();
   show();
+}
+
+try {
+  const kept = localStorage.getItem(REPORT_KEY);
+  const box = document.querySelector<HTMLTextAreaElement>("#report");
+  if (kept !== null && box !== null) {
+    box.value = kept;
+  }
+} catch {
+  // Nothing kept.
 }
 
 document.querySelector("#run")?.addEventListener("click", () => {
