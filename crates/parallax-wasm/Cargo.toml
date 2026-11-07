@@ -12,13 +12,23 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 arrow-array.workspace = true
+# Spike 0.3: `loadTableInPlace` decodes the stream without copying it.
+arrow-buffer.workspace = true
 js-sys = "0.3.107"
 parallax-engine.workspace = true
+parallax-export.workspace = true
 parallax-protocol.workspace = true
 parallax-session.workspace = true
 prost = "0.14"
 serde_json.workspace = true
 wasm-bindgen = "=0.2.130"
+arrow-ipc.workspace = true
+parallax-datagen = { path = "../parallax-datagen", optional = true }
+
+[features]
+# Spike 0.3 only: `generatePositions`, for the measurement page. The published
+# engine never enables it.
+datagen = ["dep:parallax-datagen"]
 
 [dev-dependencies]
 # Path only, so that publishing drops it: the generator depends on the engine.
@@ -28,3 +38,7 @@ wasm-bindgen-test = "0.3.80"
 
 [lints]
 workspace = true
+
+[[example]]
+name = "spike_native"
+required-features = ["datagen"]

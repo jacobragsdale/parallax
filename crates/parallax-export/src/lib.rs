@@ -539,6 +539,21 @@ fn read_at<T: ReadTable + ?Sized>(source: &T, version: u64) -> Result<T::Guard<'
 /// The longest text the Notes sheet puts in one cell, below Excel's limit.
 const NOTE_CELL: usize = 30_000;
 
+/// A sheet that streams its rows to a temporary file, so that a large export
+/// needs little memory.
+#[cfg(not(target_arch = "wasm32"))]
+fn streamed_sheet(workbook: &mut Workbook) -> Result<&mut Worksheet, XlsxError> {
+    workbook.add_worksheet_with_constant_memory()
+}
+
+/// WebAssembly in the browser has no file system for rust_xlsxwriter's temporary
+/// files, so the sheet is held in memory, about 100 bytes a cell.
+#[cfg(target_arch = "wasm32")]
+#[allow(clippy::unnecessary_wraps)]
+fn streamed_sheet(workbook: &mut Workbook) -> Result<&mut Worksheet, XlsxError> {
+    Ok(workbook.add_worksheet())
+}
+
 /// Writes the layout's view of a table as an Excel workbook.
 ///
 /// # Errors
@@ -578,7 +593,7 @@ pub fn write_xlsx<T: ReadTable + ?Sized, W: Write + Seek + Send>(
     let sheet = if outlined {
         workbook.add_worksheet()
     } else {
-        workbook.add_worksheet_with_constant_memory()?
+        streamed_sheet(&mut workbook)?
     };
     sheet.set_name("View")?;
     let header = Format::new()
